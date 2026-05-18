@@ -26,6 +26,90 @@ def _centavos(v: float) -> int:
     return round(float(v) * 100)
 
 
+def detectar_excesso_sankhya(
+    banco: pd.DataFrame,
+    sistema: pd.DataFrame,
+) -> pd.DataFrame:
+    """Detecta quando o Sankhya tem MAIS lançamentos do que o banco (v3).
+
+    A base da verdade é o EXTRATO BANCÁRIO.
+    Para cada (conta, valor, data, histórico normalizado) — se o Sankhya tem N
+    lançamentos e o banco tem M < N, sinaliza os (N - M) lançamentos excedentes
+    do Sankhya como possíveis lançamentos a mais.
+
+    Exemplo: 3 PIX de R$100 no banco, 4 PIX de R$100 no Sankhya → 1 excedente.
+    """
+    if sistema.empty:
+        return pd.DataFrame()
+
+    s = sistema.copy()
+    s["_hist_norm"] = s["historico"].apply(_normalizar_historico)
+    s["_cent"] = s["valor"].apply(_centavos)
+
+    if not banco.empty:
+        b = banco.copy()
+        b["_hist_norm"] = b["historico"].apply(_normalizar_historico)
+        b["_cent"] = b["valor"].apply(_centavos)
+        contagem_banco = (
+            b.groupby(["conta", "_cent", "data", "_hist_norm"])
+            .size()
+            .reset_index(name="qtd_banco")
+        )
+    else:
+        contagem_banco = pd.DataFrame(
+            columns=["conta", "_cent", "data", "_hist_norm", "qtd_banco"]
+        )
+
+    contagem_sis = (
+        s.groupby(["conta", "_cent", "data", "_hist_norm"])
+        .size()
+        .reset_index(name="qtd_sistema")
+    )
+
+    # Junta as duas contagens
+    juntos = contagem_sis.merge(
+        contagem_banco,
+        on=["conta", "_cent", "data", "_hist_norm"],
+        how="left",
+    )
+    juntos["qtd_banco"] = juntos["qtd_banco"].fillna(0).astype(int)
+    juntos["excedente"] = juntos["qtd_sistema"] - juntos["qtd_banco"]
+    juntos = juntos[juntos["excedente"] > 0]
+
+    if juntos.empty:
+        return pd.DataFrame()
+
+    # Recupera as linhas excedentes do Sankhya
+    resultados = []
+    for _, grupo in juntos.iterrows():
+        cond = (
+            (s["conta"] == grupo["conta"])
+            & (s["_cent"] == grupo["_cent"])
+            & (s["data"] == grupo["data"])
+            & (s["_hist_norm"] == grupo["_hist_norm"])
+        )
+        linhas = s[cond].head(int(grupo["excedente"]))
+        for _, linha in linhas.iterrows():
+            resultados.append({
+                "data": linha["data"],
+                "conta": linha["conta"],
+                "historico": linha["historico"],
+                "documento": linha.get("documento", ""),
+                "valor": linha["valor"],
+                "qtd_sankhya": int(grupo["qtd_sistema"]),
+                "qtd_banco": int(grupo["qtd_banco"]),
+                "excedente_total": int(grupo["excedente"]),
+                "motivo": (
+                    f"Sankhya tem {int(grupo['qtd_sistema'])} lançamento(s) com este perfil; "
+                    f"banco tem apenas {int(grupo['qtd_banco'])}"
+                ),
+            })
+
+    if not resultados:
+        return pd.DataFrame()
+    return pd.DataFrame(resultados).reset_index(drop=True)
+
+
 def detectar_divergencia_valor(
     pendentes_banco: pd.DataFrame,
     pendentes_sistema: pd.DataFrame,

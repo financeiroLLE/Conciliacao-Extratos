@@ -1,13 +1,11 @@
-"""Orquestrador da conciliação — versão 2.
+"""Orquestrador da conciliação — versão 3.
 
-Mudanças sobre v1:
-- Total Extrato Bancário EXCLUI linhas de saldo, aplicação e resgate.
-- KPIs separam Receitas e Despesas (absolutos, não compensados).
-- "Falta Lançar" usa coluna 'Conciliado=Não' do Sankhya quando ela existir e tiver
-  valores válidos; senão usa a regra antiga (pendentes pós-match).
-- Possíveis duplicidades (3 de 4 campos) em DataFrame separado.
-- Aplicações e Resgates ficam disponíveis em DataFrame próprio.
-- Saldo final calculado quando a conta está 100% conciliada.
+Mudanças sobre v2:
+- "Total Movimentado no Banco" (renomeado de "Total Extrato Bancário") agora INCLUI
+  aplicações e resgates. Só EXCLUI linhas de SALDO.
+- Auditoria nova: detecta excesso de lançamentos no Sankhya em relação ao banco.
+- Cards "Receitas Absolutas" e "Despesas Absolutas" foram removidos do dashboard.
+- Cards de "Aplicações" e "Resgates" foram unificados em um único card "Investimentos".
 """
 
 from __future__ import annotations
@@ -23,6 +21,7 @@ from .matching import (
     detectar_duplicidades,
     detectar_possiveis_duplicidades,
     detectar_nao_pertence,
+    detectar_excesso_sankhya,
     match_exato,
     sugerir_matches_fuzzy,
 )
@@ -42,6 +41,7 @@ class ResultadoConciliacao:
     divergencias: pd.DataFrame
     duplicidades: pd.DataFrame
     possiveis_duplicidades: pd.DataFrame
+    excesso_sankhya: pd.DataFrame  # v3: lançamentos a mais no Sankhya
     nao_pertence: pd.DataFrame
     sugestoes_fuzzy: pd.DataFrame
     aplicacoes_resgates: pd.DataFrame
@@ -99,6 +99,9 @@ class ResultadoConciliacao:
     def possiveis_duplicidades_da_conta(self, conta: str) -> pd.DataFrame:
         return _filtrar_conta(self.possiveis_duplicidades, conta)
 
+    def excesso_sankhya_da_conta(self, conta: str) -> pd.DataFrame:
+        return _filtrar_conta(self.excesso_sankhya, conta)
+
     def falta_lancar_da_conta(self, conta: str) -> pd.DataFrame:
         if self.usa_conciliado_sankhya:
             return _filtrar_conta(self.falta_lancar_sankhya, conta)
@@ -124,8 +127,9 @@ class ResultadoConciliacao:
             except Exception:
                 pass
 
-        mov_real = banco[banco["categoria_mov"] == "movimentacao"]
-        mov_liquida = float(mov_real["valor"].sum()) if not mov_real.empty else 0.0
+        # v3: movimentação líquida considera TUDO que é movimentado (movimentacao+aplic+resgate)
+        movimentado = banco[banco["categoria_mov"] != "saldo"]
+        mov_liquida = float(movimentado["valor"].sum()) if not movimentado.empty else 0.0
 
         return {
             "conta": conta,
@@ -170,11 +174,15 @@ def _soma_abs(df: pd.DataFrame, col: str = "valor") -> float:
     return float(df[col].abs().sum())
 
 
-def _movimentacao_real(df: pd.DataFrame) -> pd.DataFrame:
-    """Filtra só linhas com categoria_mov == 'movimentacao'."""
+def _eh_movimentado(df: pd.DataFrame) -> pd.DataFrame:
+    """Filtra linhas que contam como movimentação financeira (v3).
+
+    REGRA v3: inclui movimentação normal + aplicações + resgates + investimentos.
+    SÓ exclui linhas de SALDO (saldo inicial/final/bloqueado/aplic auto etc).
+    """
     if df.empty or "categoria_mov" not in df.columns:
         return df
-    return df[df["categoria_mov"] == "movimentacao"]
+    return df[df["categoria_mov"] != "saldo"]
 
 
 def _calcular_kpis(
@@ -187,8 +195,8 @@ def _calcular_kpis(
     falta_lancar_sankhya: pd.DataFrame,
     usa_conciliado_sankhya: bool,
 ) -> dict[str, Any]:
-    banco_mov = _movimentacao_real(banco_completo)
-    sistema_mov = _movimentacao_real(sistema_completo)
+    banco_mov = _eh_movimentado(banco_completo)
+    sistema_mov = _eh_movimentado(sistema_completo)
 
     total_banco = _soma_abs(banco_mov)
     total_sistema = _soma_abs(sistema_mov)
@@ -217,7 +225,7 @@ def _calcular_kpis(
         despesas_conciliadas = float(c[c["banco_valor"] < 0]["banco_valor"].abs().sum())
 
     # Falta Conciliar (pendentes do banco, só movimentação)
-    pb_mov = _movimentacao_real(pendentes_banco)
+    pb_mov = _eh_movimentado(pendentes_banco)
     falta_conciliar = _soma_abs(pb_mov)
     if not pb_mov.empty:
         falta_conciliar_receitas = float(pb_mov[pb_mov["valor"] > 0]["valor"].sum())
@@ -227,10 +235,10 @@ def _calcular_kpis(
 
     # Falta Lançar (Sankhya Conciliado=Não OU pendentes do match)
     if usa_conciliado_sankhya and not falta_lancar_sankhya.empty:
-        fl_mov = _movimentacao_real(falta_lancar_sankhya)
+        fl_mov = _eh_movimentado(falta_lancar_sankhya)
         falta_lancar = _soma_abs(fl_mov)
     else:
-        ps_mov = _movimentacao_real(pendentes_sistema)
+        ps_mov = _eh_movimentado(pendentes_sistema)
         falta_lancar = _soma_abs(ps_mov)
 
     valor_divergencia = (
@@ -241,6 +249,9 @@ def _calcular_kpis(
     percentual = 100.0 * total_conciliado / total_banco if total_banco > 0 else 0.0
 
     return {
+        # v3: renomeado de "Total Extrato Bancário" → "Total Movimentado no Banco".
+        # Mantém o nome antigo como alias por retrocompatibilidade.
+        "total_movimentado_banco": total_banco,
         "total_extrato_bancario": total_banco,
         "total_extrato_sistema": total_sistema,
         "total_conciliado": total_conciliado,
@@ -339,21 +350,24 @@ def executar_pipeline(
     sistema = adicionar_classificacao(sistema)
     sistema = adicionar_categoria_movimento(sistema)
 
-    # Match exato usa SÓ movimentações reais (evita casar saldo×saldo, aplicação×aplicação)
-    banco_mov = banco[banco["categoria_mov"] == "movimentacao"].copy() if not banco.empty else banco
-    sistema_mov = sistema[sistema["categoria_mov"] == "movimentacao"].copy() if not sistema.empty else sistema
+    # Match exato — v3: usa TUDO que é movimentado (movimentacao + aplic + resgate + investimento).
+    # Só exclui linhas de SALDO, que não são movimentação real.
+    banco_mov = _eh_movimentado(banco).copy() if not banco.empty else banco
+    sistema_mov = _eh_movimentado(sistema).copy() if not sistema.empty else sistema
 
     conciliados, pend_banco, pend_sistema = match_exato(
         banco_mov, sistema_mov, tolerancia_dias=tolerancia_dias
     )
 
     if not conciliados.empty:
-        conciliados["banco_categoria_mov"] = "movimentacao"
-        conciliados["sistema_categoria_mov"] = "movimentacao"
+        # Preserva a categoria_mov no resultado conciliado (pra dashboards)
+        # Não força mais "movimentacao" — o valor original já vem do match
+        pass
 
     divergencias = detectar_divergencia_valor(pend_banco, pend_sistema)
     duplicidades = detectar_duplicidades(banco_mov, sistema_mov)
     possiveis_dup = detectar_possiveis_duplicidades(banco_mov, sistema_mov)
+    excesso_sis = detectar_excesso_sankhya(banco_mov, sistema_mov)
     nao_pertence = detectar_nao_pertence(pend_banco, pend_sistema, tolerancia_dias)
     sugestoes = sugerir_matches_fuzzy(pend_banco, pend_sistema) if rodar_fuzzy else pd.DataFrame()
     aplicacoes_resgates = _extrair_aplicacoes_resgates(banco, sistema)
@@ -376,6 +390,7 @@ def executar_pipeline(
         divergencias=divergencias,
         duplicidades=duplicidades,
         possiveis_duplicidades=possiveis_dup,
+        excesso_sankhya=excesso_sis,
         nao_pertence=nao_pertence,
         sugestoes_fuzzy=sugestoes,
         aplicacoes_resgates=aplicacoes_resgates,

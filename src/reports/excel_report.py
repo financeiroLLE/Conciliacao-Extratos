@@ -322,6 +322,18 @@ def _aba_duplicidades(wb: Workbook, resultado: "ResultadoConciliacao"):
     _escrever_dataframe(ws, df)
 
 
+def _aba_excesso_sankhya(wb: Workbook, resultado: "ResultadoConciliacao"):
+    """v3: lançamentos excedentes no Sankhya em relação ao banco."""
+    ws = wb.create_sheet("Excesso no Sankhya")
+    df = getattr(resultado, "excesso_sankhya", pd.DataFrame())
+    if df.empty:
+        _escrever_dataframe(ws, df)
+        return
+    df = df.copy()
+    df.columns = [c.replace("_", " ").title() for c in df.columns]
+    _escrever_dataframe(ws, df)
+
+
 def _aba_sugestoes(wb: Workbook, resultado: "ResultadoConciliacao"):
     ws = wb.create_sheet("Sugestões Fuzzy")
     df = resultado.sugestoes_fuzzy.copy()
@@ -414,6 +426,7 @@ def gerar_relatorio_excel(
     _aba_natureza(wb, resultado, "Pagamento", "Pagamentos")
     _aba_natureza(wb, resultado, "Recebimento", "Recebimentos")
     _aba_duplicidades(wb, resultado)
+    _aba_excesso_sankhya(wb, resultado)
     _aba_sugestoes(wb, resultado)
     if pendencias_anteriores is None:
         pendencias_anteriores = pd.DataFrame()
@@ -474,6 +487,8 @@ def gerar_csvs_zip(resultado: "ResultadoConciliacao") -> bytes:
         _add(resultado.divergencias, "divergencias")
         _add(resultado.nao_pertence, "nao_pertence_a_conta")
         _add(resultado.duplicidades, "duplicidades")
+        _add(getattr(resultado, "excesso_sankhya", pd.DataFrame()), "excesso_sankhya")
+        _add(getattr(resultado, "possiveis_duplicidades", pd.DataFrame()), "possiveis_duplicidades")
         _add(resultado.sugestoes_fuzzy, "sugestoes_fuzzy")
         _add(resultado.banco_completo, "banco_completo")
         _add(resultado.sistema_completo, "sistema_completo")

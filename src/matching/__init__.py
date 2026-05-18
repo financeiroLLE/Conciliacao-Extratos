@@ -4,6 +4,7 @@ from .auditorias import (
     detectar_duplicidades,
     detectar_possiveis_duplicidades,
     detectar_nao_pertence,
+    detectar_excesso_sankhya,
 )
 from .fuzzy_match import sugerir_matches_fuzzy
 
@@ -13,5 +14,6 @@ __all__ = [
     "detectar_duplicidades",
     "detectar_possiveis_duplicidades",
     "detectar_nao_pertence",
+    "detectar_excesso_sankhya",
     "sugerir_matches_fuzzy",
 ]

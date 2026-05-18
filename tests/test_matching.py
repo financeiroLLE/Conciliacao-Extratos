@@ -235,8 +235,8 @@ def teste_adicionar_classificacao_em_df_vazio():
     print("✓ teste_adicionar_classificacao_em_df_vazio")
 
 
-def teste_total_bancario_exclui_saldo_e_aplicacao():
-    """Total Extrato Bancário deve ignorar saldo, aplicação e resgate."""
+def teste_total_movimentado_exclui_apenas_saldo():
+    """Total Movimentado no Banco (v3): exclui APENAS saldo. Aplic/resg ENTRAM."""
     banco = _df_banco([
         (_dt("04/05/2026"), "SALDO INICIAL", "", 5000.00, "C1"),
         (_dt("04/05/2026"), "PIX RECEBIDO", "", 1000.00, "C1"),
@@ -248,17 +248,20 @@ def teste_total_bancario_exclui_saldo_e_aplicacao():
     sistema = pd.DataFrame(columns=banco.columns)
     res = executar_pipeline(banco, sistema, rodar_fuzzy=False)
     kpis = res.kpis_globais()
-    # Só PIX 1000 + BOLETO 300 = 1300 (saldo, aplic, resgate fora)
-    assert kpis["total_extrato_bancario"] == 1300.00, \
-        f"esperado 1300, veio {kpis['total_extrato_bancario']}"
-    # Receitas: só PIX 1000. Despesas: só BOLETO 300.
-    assert kpis["receitas_banco"] == 1000.00
-    assert kpis["despesas_banco"] == 300.00
-    print("✓ teste_total_bancario_exclui_saldo_e_aplicacao")
+    # v3: PIX 1000 + APLIC 2000 + RESGATE 500 + BOLETO 300 = 3800 (só saldo fora)
+    assert kpis["total_movimentado_banco"] == 3800.00, \
+        f"esperado 3800, veio {kpis['total_movimentado_banco']}"
+    # Alias antigo deve continuar funcionando
+    assert kpis["total_extrato_bancario"] == 3800.00
+    # Receitas (v3): PIX 1000 + RESGATE 500 = 1500.
+    # Despesas: APLIC 2000 + BOLETO 300 = 2300.
+    assert kpis["receitas_banco"] == 1500.00
+    assert kpis["despesas_banco"] == 2300.00
+    print("✓ teste_total_movimentado_exclui_apenas_saldo")
 
 
-def teste_aplicacoes_resgates_isolados():
-    """Aplicações e resgates ficam num DataFrame próprio, fora do total."""
+def teste_aplicacoes_resgates_ainda_disponiveis_em_aba_propria():
+    """Mesmo entrando no total, aplic/resg continuam no DataFrame aplicacoes_resgates."""
     banco = _df_banco([
         (_dt("04/05/2026"), "APLICAÇÃO AUTOMÁTICA", "A1", -2000.00, "C1"),
         (_dt("04/05/2026"), "RESGATE FUNDO", "R1", 500.00, "C1"),
@@ -267,10 +270,46 @@ def teste_aplicacoes_resgates_isolados():
     sistema = pd.DataFrame(columns=banco.columns)
     res = executar_pipeline(banco, sistema, rodar_fuzzy=False)
     assert len(res.aplicacoes_resgates) == 2, \
-        f"esperado 2 aplic/resg, veio {len(res.aplicacoes_resgates)}"
+        f"esperado 2 aplic/resg na aba, veio {len(res.aplicacoes_resgates)}"
     tipos = set(res.aplicacoes_resgates["tipo_aplicacao"])
     assert "Aplicação" in tipos and "Resgate" in tipos
-    print("✓ teste_aplicacoes_resgates_isolados")
+    print("✓ teste_aplicacoes_resgates_ainda_disponiveis_em_aba_propria")
+
+
+def teste_excesso_no_sankhya():
+    """Quando Sankhya tem mais lançamentos que banco, sinaliza excedentes (v3)."""
+    banco = _df_banco([
+        (_dt("04/05/2026"), "PIX RECEBIDO", "", 100.00, "C1"),
+        (_dt("04/05/2026"), "PIX RECEBIDO", "", 100.00, "C1"),
+        (_dt("04/05/2026"), "PIX RECEBIDO", "", 100.00, "C1"),
+    ])
+    sistema = _df_banco([
+        (_dt("04/05/2026"), "PIX RECEBIDO", "", 100.00, "C1"),
+        (_dt("04/05/2026"), "PIX RECEBIDO", "", 100.00, "C1"),
+        (_dt("04/05/2026"), "PIX RECEBIDO", "", 100.00, "C1"),
+        (_dt("04/05/2026"), "PIX RECEBIDO", "", 100.00, "C1"),  # 4º — excedente
+    ])
+    res = executar_pipeline(banco, sistema, rodar_fuzzy=False)
+    assert len(res.excesso_sankhya) == 1, \
+        f"esperado 1 excedente, veio {len(res.excesso_sankhya)}"
+    assert res.excesso_sankhya.iloc[0]["qtd_sankhya"] == 4
+    assert res.excesso_sankhya.iloc[0]["qtd_banco"] == 3
+    print("✓ teste_excesso_no_sankhya")
+
+
+def teste_excesso_sankhya_vazio_quando_banco_maior():
+    """Banco com mais lançamentos do que Sankhya → NÃO há excedente do Sankhya."""
+    banco = _df_banco([
+        (_dt("04/05/2026"), "PIX", "", 100.00, "C1"),
+        (_dt("04/05/2026"), "PIX", "", 100.00, "C1"),
+        (_dt("04/05/2026"), "PIX", "", 100.00, "C1"),
+    ])
+    sistema = _df_banco([
+        (_dt("04/05/2026"), "PIX", "", 100.00, "C1"),
+    ])
+    res = executar_pipeline(banco, sistema, rodar_fuzzy=False)
+    assert res.excesso_sankhya.empty, "banco maior não gera excesso do Sankhya"
+    print("✓ teste_excesso_sankhya_vazio_quando_banco_maior")
 
 
 def teste_receitas_despesas_absolutos_nao_compensam():
