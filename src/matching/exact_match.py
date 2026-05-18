@@ -49,6 +49,13 @@ def match_exato(
     banco = banco.reset_index(drop=True).copy()
     sistema = sistema.reset_index(drop=True).copy()
 
+    # v3.6: força tipos consistentes pra evitar erros em datetime arithmetic e merges
+    for df in (banco, sistema):
+        if "data" in df.columns:
+            df["data"] = pd.to_datetime(df["data"], errors="coerce")
+        if "valor" in df.columns:
+            df["valor"] = pd.to_numeric(df["valor"], errors="coerce").fillna(0.0)
+
     banco["_idx"] = banco.index
     sistema["_idx"] = sistema.index
     banco["_valor_centavos"] = banco["valor"].apply(_normalizar_valor)

@@ -799,8 +799,13 @@ def pagina_dashboard():
     render_cards(cards3)
 
     st.divider()
-    section_title("CONTAS PROCESSADAS")
-    render_painel_bancos(resultado)
+
+    # v3.5: se uma conta foi selecionada, mostra detalhamento; senão, painel de bancos
+    if st.session_state.banco_conta_selecionada:
+        tela_detalhamento_banco(resultado, st.session_state.banco_conta_selecionada)
+    else:
+        section_title("CONTAS PROCESSADAS — CLIQUE PARA DETALHAR")
+        render_painel_bancos(resultado)
 
 
 # ============================================================
@@ -975,10 +980,36 @@ def tela_upload():
                     dfs_banco.append(df)
                 banco = pd.concat(dfs_banco, ignore_index=True) if dfs_banco else pd.DataFrame()
 
+                # v3.6: força tipos consistentes após concat de múltiplos extratos.
+                # Sem isso, se um extrato vier com 'data' como string e outro como datetime,
+                # o merge no pipeline quebra com 'merge on object and datetime64 columns'.
+                if not banco.empty:
+                    if "data" in banco.columns:
+                        banco["data"] = pd.to_datetime(banco["data"], errors="coerce")
+                    if "valor" in banco.columns:
+                        banco["valor"] = pd.to_numeric(banco["valor"], errors="coerce").fillna(0.0)
+                    # Remove linhas com data inválida (NaT) — não dá pra conciliar sem data
+                    linhas_antes = len(banco)
+                    banco = banco.dropna(subset=["data"]).reset_index(drop=True)
+                    linhas_descartadas = linhas_antes - len(banco)
+                    if linhas_descartadas > 0:
+                        st.warning(
+                            f"⚠️ {linhas_descartadas} linha(s) do extrato bancário "
+                            f"foram descartadas por terem data inválida ou vazia."
+                        )
+
                 sistema = carregar_relatorio_sistema(
                     arquivo_sistema,
                     coluna_conta=coluna_conta_sistema or None,
                 )
+
+                # v3.6: mesmo tratamento para o sistema
+                if not sistema.empty:
+                    if "data" in sistema.columns:
+                        sistema["data"] = pd.to_datetime(sistema["data"], errors="coerce")
+                    if "valor" in sistema.columns:
+                        sistema["valor"] = pd.to_numeric(sistema["valor"], errors="coerce").fillna(0.0)
+                    sistema = sistema.dropna(subset=["data"]).reset_index(drop=True)
 
                 if modo == "1 conta por vez" and not sistema.empty and (sistema["conta"] == "—").all():
                     sistema["conta"] = arquivos_banco[0][0]
@@ -1000,11 +1031,25 @@ def tela_upload():
                         )
                     elif (sistema["conta"] == "—").any():
                         qtd = int((sistema["conta"] == "—").sum())
-                        st.warning(
+                        msg = (
                             f"⚠️ {qtd} linha(s) do Sankhya estão sem identificador de "
-                            f"conta. Inclua a conta na planilha do Sankhya antes de "
-                            f"subir, ou troque para o modo '1 conta por vez'."
+                            f"conta."
                         )
+                        if coluna_conta_sistema:
+                            msg += (
+                                f" Você informou que a coluna da conta no Sankhya é "
+                                f"**'{coluna_conta_sistema}'** mas ela não foi encontrada "
+                                f"no arquivo ou veio vazia. Verifique o nome exato da "
+                                f"coluna no Sankhya (atenção a maiúsculas e acentos)."
+                            )
+                        else:
+                            msg += (
+                                " Inclua uma coluna 'Conta' na planilha do Sankhya antes "
+                                "de subir, ou informe o nome dela no campo "
+                                "'Extrato Sankhya — coluna da conta', ou troque para o "
+                                "modo '1 conta por vez'."
+                            )
+                        st.warning(msg)
 
                 pendencias = carregar_pendencias_anteriores(arquivo_pendencias)
 

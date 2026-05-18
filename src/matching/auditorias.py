@@ -56,25 +56,42 @@ def detectar_excesso_sankhya_pos_match(
 
     s = pend_sistema.copy()
     s["_cent"] = s["valor"].apply(_centavos)
+    # v3.6: força data como datetime pra evitar merge object×datetime64
+    s["data"] = pd.to_datetime(s["data"], errors="coerce")
+    s = s.dropna(subset=["data"])
+    if s.empty:
+        return pd.DataFrame()
 
     if not pend_banco.empty:
         b = pend_banco.copy()
         b["_cent"] = b["valor"].apply(_centavos)
+        b["data"] = pd.to_datetime(b["data"], errors="coerce")
+        b = b.dropna(subset=["data"])
         contagem_banco = (
             b.groupby(["conta", "_cent", "data"])
             .size()
             .reset_index(name="qtd_banco")
         )
     else:
-        contagem_banco = pd.DataFrame(
-            columns=["conta", "_cent", "data", "qtd_banco"]
-        )
+        # v3.6: DataFrame vazio precisa ter os MESMOS dtypes do não-vazio,
+        # senão o merge quebra com 'merge on object and datetime64 columns'.
+        contagem_banco = pd.DataFrame({
+            "conta": pd.Series([], dtype="object"),
+            "_cent": pd.Series([], dtype="int64"),
+            "data": pd.Series([], dtype="datetime64[ns]"),
+            "qtd_banco": pd.Series([], dtype="int64"),
+        })
 
     contagem_sis = (
         s.groupby(["conta", "_cent", "data"])
         .size()
         .reset_index(name="qtd_sistema")
     )
+
+    # v3.6: garante dtypes consistentes antes do merge (caso s tenha 'data' como object)
+    for col in ("conta", "_cent", "data"):
+        if col in contagem_sis.columns and col in contagem_banco.columns:
+            contagem_banco[col] = contagem_banco[col].astype(contagem_sis[col].dtype)
 
     juntos = contagem_sis.merge(
         contagem_banco,
@@ -133,6 +150,14 @@ def detectar_divergencia_valor(
     s = pendentes_sistema.copy()
     b["_hist_norm"] = b["historico"].apply(_normalizar_historico)
     s["_hist_norm"] = s["historico"].apply(_normalizar_historico)
+
+    # v3.6: força ambos lados pra datetime, evitando 'merge on object and datetime64'
+    b["data"] = pd.to_datetime(b["data"], errors="coerce")
+    s["data"] = pd.to_datetime(s["data"], errors="coerce")
+    b = b.dropna(subset=["data"])
+    s = s.dropna(subset=["data"])
+    if b.empty or s.empty:
+        return pd.DataFrame()
 
     merged = b.merge(
         s,

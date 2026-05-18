@@ -530,6 +530,28 @@ def teste_divergencia_consolidada_aceita_receita():
     print("✓ teste_divergencia_consolidada_aceita_receita")
 
 
+def teste_concat_multiplos_extratos_data_object():
+    """v3.6: Pipeline não pode quebrar com 'merge on object and datetime64'
+    quando vários extratos são concatenados e o tipo de 'data' fica object."""
+    # Banco com data como STRING (object) — simula concat onde uma das partes perdeu o dtype
+    banco = pd.DataFrame([
+        {"data": "2026-05-14", "historico": "PIX", "documento": "", "valor": -100.0, "conta": "C1", "origem": "banco"},
+        {"data": "2026-05-14", "historico": "TED", "documento": "", "valor": -200.0, "conta": "C2", "origem": "banco"},
+    ])
+    banco["data"] = banco["data"].astype("object")  # força object dtype
+
+    sistema = pd.DataFrame([
+        {"data": pd.Timestamp("2026-05-14"), "historico": "FORN A", "documento": "", "valor": -100.0, "conta": "C1", "origem": "sistema"},
+        {"data": pd.Timestamp("2026-05-14"), "historico": "FORN B", "documento": "", "valor": -200.0, "conta": "C2", "origem": "sistema"},
+        {"data": pd.Timestamp("2026-05-14"), "historico": "EXTRA",  "documento": "", "valor": 5000.0, "conta": "C1", "origem": "sistema"},  # excedente
+    ])
+
+    # Não deve quebrar
+    res = executar_pipeline(banco, sistema, rodar_fuzzy=False)
+    assert res is not None
+    print("✓ teste_concat_multiplos_extratos_data_object")
+
+
 def main():
     testes = [v for k, v in globals().items() if k.startswith("teste_")]
     falhas = []
