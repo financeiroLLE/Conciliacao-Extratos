@@ -1,64 +1,80 @@
-# 🏦 Conciliação Bancária — Grupo LLE
+# 🏦 Conciliação Bancária — Grupo LLE (v2)
 
-Sistema web para conciliar diariamente o **extrato bancário** com o **extrato do sistema Sankhya**, com dashboard executivo, detalhamento por banco, classificação por tipo de lançamento (Boleto/Pix/Tarifa/...) e auditoria append-only de execuções.
+Sistema web para conciliar diariamente o **extrato bancário** com o **extrato do sistema Sankhya**, com dashboard executivo, detalhamento por banco, classificação por tipo de lançamento, separação entre receitas e despesas absolutas, identificação de aplicações/resgates e auditoria append-only.
 
 **Stack:** Python + Pandas + Streamlit · **Hospedagem:** Streamlit Community Cloud (grátis) · **Identidade visual:** Manual da Marca Grupo LLE (Fev/2026)
 
 ---
 
-## ✨ Funcionalidades
+## 🆕 Novidades v2 (sobre v1)
+
+- **Total Extrato Bancário** exclui linhas de saldo, aplicação e resgate.
+- **Receitas Absolutas** e **Despesas Absolutas** separadas (não compensadas).
+- **Card "Falta Conciliar"** detalha receitas e despesas em letras menores.
+- **Card "Falta Lançar"** usa a coluna **Conciliado=Não** do Sankhya quando disponível (fallback automático para regra antiga).
+- **Possíveis Duplicidades** (3 de 4 campos batendo) — aba própria.
+- **Aplicações e Resgates** em aba dedicada.
+- **Saldo Final** com card destacado quando a conta está 100% conciliada.
+- **Logo com fundo transparente** + borda azul institucional na sidebar.
+- **Todos os botões legíveis sem hover**.
+- Múltiplas contas do mesmo banco (Itaú PISA, KING, APOIO, INOV, LLE) — cada identificador é uma conta separada.
+
+---
+
+## ✨ Funcionalidades principais
 
 ### Dashboard executivo
-7 cards principais calculados sobre o resultado real (sem mock):
-- Total Extrato Bancário · Total Extrato Sankhya · Total Conciliado
-- Falta Conciliar · Falta Lançar · Conciliado c/ Divergência
-- Percentual Conciliado
+- Total Bancário · Total Sankhya · Total Conciliado · % Conciliado
+- Falta Conciliar (com Receitas/Despesas) · Falta Lançar · Divergência · Total Absoluto
+- Receitas e Despesas absolutas (Banco e Sankhya)
+- Possíveis Duplicidades · Aplicações/Resgates · Duplicidades estritas · Não Pertence
 
 ### Tela única de resultado
-Após o upload e o "Executar conciliação", o sistema **abre direto a tela de resultado** com todos os KPIs, painel de bancos clicáveis e detalhamento por tipo de lançamento — sem segundo passo lateral.
+Após upload e "Executar conciliação", abre direto a tela completa com KPIs, painel de bancos clicáveis e detalhamento por tipo.
 
 ### Painel de bancos
-Cada conta processada vira um card clicável. Ao clicar em "Ver detalhamento", abre tela específica daquele banco com:
-- KPIs filtrados (Total Banco / Sankhya / Conciliado / % / Falta Conciliar / Falta Lançar / c/ Divergência / Total Lançamentos)
-- Botão de download do relatório só daquela conta
-- Abas internas: **Conciliadas** · **Pendentes** · **Não Pertence à Conta** · **Conciliadas com Divergência** (quando houver)
+Cada conta vira card clicável. Detalhamento mostra:
+- KPIs específicos da conta · Card de Saldo Final (quando 100%) · Download por banco
+- Abas: **Conciliadas · Pendentes · Falta Lançar (Sankhya) · Não Pertence · Conciliadas c/ Divergência · Possíveis Duplicidades · Aplicações e Resgates**
 
-### Subabas por tipo de lançamento
-Boleto · Pix · Tarifa · TED/DOC · Débito Automático · Cartão · Pagamentos · Recebimentos · Outros — com KPIs, tabela e downloads (Excel + CSV) para cada recorte.
+### Subabas por tipo
+Boleto · Pix · Tarifa · TED/DOC · Débito Automático · Cartão · Pagamentos · Recebimentos · Outros
 
 ### Reprocessamento e auditoria
-- Cada execução salva snapshot completo em `data/outputs/execucoes/{id}/` (inputs, parâmetros, resultado).
-- Índice append-only em `data/outputs/auditoria.jsonl` — **nunca é sobrescrito**.
-- Reprocessar mantém o histórico anterior + cria nova versão.
-- Página "Histórico" lista todas execuções com busca e download de snapshots.
+Cada execução salva snapshot em `data/outputs/execucoes/{id}/`. Índice append-only em `data/outputs/auditoria.jsonl`.
 
 ### Downloads
-- **Excel completo** (15 abas): Resumo Geral · Resumo por Banco · Conciliadas · Pendentes · Conciliadas com Divergência · Não Pertence à Conta · Boletos · Pix · Tarifas · Pagamentos · Recebimentos · Duplicidades · Sugestões Fuzzy · Pendências Consolidadas · Auditoria.
-- **Excel por banco** (mesmas abas, filtradas).
-- **Zip de CSVs** (uma tabela por arquivo).
-- **Download por recorte** (botão Excel + CSV em cada aba de detalhamento).
+- Excel multi-aba · Excel por banco · Zip de CSVs · Download por recorte
 
 ---
 
 ## 🔬 Regras de negócio
 
-### Match exato (conciliação automática)
-- **Valor: exatamente igual** — sem tolerância de centavos.
-- **Conta: igual**.
-- **Data: tolerância de ±N dias corridos** (default 2, configurável na sidebar). Cobre compensação por fim de semana e feriados curtos.
-- **1-pra-1**: cada lançamento do banco casa com no máximo um do sistema.
+### Total Extrato Bancário (v2)
+Exclui movimentos que não são transações reais: `SALDO`, `APLICAÇÃO`, `RESGATE`, `INVESTIMENTO`, `CDB/RDB/LCI/LCA/TESOURO`, `POUPANÇA AUTOMÁTICA`, `CRÉDITO RENDIMENTO`.
 
-### Divergência de valor
-Mesma data + histórico (normalizado: caixa alta + colapso de espaços) + conta, mas valores diferentes.
+### Match exato
+- Valor: **exatamente igual** (sem tolerância de centavos).
+- Conta: igual.
+- Data: tolerância de ±N dias corridos (default 2 — cobre fim de semana e feriado curto).
+- 1-pra-1.
 
-### Duplicidade (estrita)
-Só é sinalizada quando **data + histórico + valor + documento** são **todos** iguais. 5 boletos legítimos de R$ 1.000 com documentos diferentes **não** são duplicidade.
+### Falta Lançar — fonte automática
+- Se Sankhya tem coluna `Conciliado` preenchida (Sim/Não), usa as linhas com `Não`.
+- Senão usa pendentes pós-match. Card mostra a fonte usada.
 
-### Não Pertence à Conta
-Pendência em uma conta que tem candidato perfeito (mesmo valor + data próxima) em **outra conta**.
+### Duplicidades
+- **Estritas**: 4 de 4 campos iguais (data, histórico, valor, documento).
+- **Possíveis**: 3 de 4 — em aba própria, marcadas como "REVISAR MANUALMENTE".
 
-### Sugestões fuzzy
-Aba complementar para revisão manual — **não entra na conciliação automática**.
+### Receitas vs Despesas
+- Receitas Absolutas = soma dos valores > 0 (movimentações reais).
+- Despesas Absolutas = soma absoluta dos valores < 0, exibidas positivas.
+- Sem compensação entre elas.
+
+### Saldo Final
+- Aparece SÓ quando a conta atinge 100% conciliada.
+- Usa linhas SALDO INICIAL/FINAL do extrato; senão exibe movimentação líquida com aviso.
 
 ---
 
@@ -67,37 +83,23 @@ Aba complementar para revisão manual — **não entra na conciliação automát
 ```bash
 git clone https://github.com/SEU_USUARIO/conciliacao-bancaria.git
 cd conciliacao-bancaria
-
-python -m venv .venv
-source .venv/bin/activate   # Linux/Mac
-# .venv\Scripts\activate    # Windows
-
+python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 streamlit run app.py
 ```
 
 Acesse `http://localhost:8501`.
 
-### Gerar dados sintéticos para testar
-
+### Dados sintéticos para testar
 ```bash
 python tests/gerar_samples.py
 ```
 
-Cria 3 arquivos em `data/samples/` — use-os no app para validar o fluxo completo.
-
-### Rodar testes
-
+### Testes
 ```bash
-python tests/test_matching.py        # 16 testes unitários da lógica
-python tests/test_pipeline_smoke.py  # end-to-end com geração de Excel
+python tests/test_matching.py        # 26 testes
+python tests/test_pipeline_smoke.py  # end-to-end
 ```
-
----
-
-## ☁️ Deploy no Streamlit Community Cloud
-
-Veja [DEPLOY.md](DEPLOY.md).
 
 ---
 
@@ -105,65 +107,27 @@ Veja [DEPLOY.md](DEPLOY.md).
 
 ```
 conciliacao-bancaria/
-├── app.py                          # App Streamlit (UI azul/amarela)
-├── requirements.txt
-├── README.md / DEPLOY.md / LICENSE
-├── .gitignore
+├── app.py                          # App Streamlit
+├── requirements.txt · README.md · DEPLOY.md · LICENSE · .gitignore
 ├── .streamlit/config.toml          # Tema Grupo LLE
 ├── assets/
-│   └── logo-grupo-lle-branco.png   # Logo (texto branco, fundo escuro)
+│   ├── logo-grupo-lle-branco.png        # original (fundo preto)
+│   └── logo-grupo-lle-transparente.png  # processada (fundo transparente)
 ├── src/
-│   ├── parsers/                    # Leitura dos extratos (banco + ERP + pendências)
-│   ├── matching/                   # Match exato, fuzzy, auditorias
-│   ├── classificacao/              # Boleto/Pix/Tarifa/... por regex
+│   ├── parsers/                    # extrato banco · sistema ERP · pendências
+│   ├── matching/                   # match exato · auditorias · fuzzy
+│   ├── classificacao/              # tipo (Boleto/Pix/...) · movimento (mov/saldo/aplic/resgate)
 │   ├── reports/                    # Excel multi-aba + CSV zip
 │   ├── auditoria/                  # JSONL append-only + snapshots
-│   └── pipeline.py                 # Orquestrador (ResultadoConciliacao)
+│   └── pipeline.py                 # ResultadoConciliacao
 ├── tests/
-│   ├── test_matching.py
-│   ├── test_pipeline_smoke.py
-│   └── gerar_samples.py
-└── data/
-    ├── samples/                    # Dados sintéticos (ok no Git)
-    ├── uploads/                    # IGNORADO (dados reais)
-    └── outputs/                    # IGNORADO (relatórios + auditoria)
+└── data/{samples,uploads,outputs}
 ```
 
 ---
 
-## 📋 Formato dos arquivos de entrada
-
-### Extrato bancário (padronizado)
-
-| Data       | Histórico               | Documento | Valor (R$) |
-|------------|-------------------------|-----------|------------|
-| 04/05/2026 | PIX RECEBIDO CLIENTE A  |           |   1500,00  |
-| 04/05/2026 | TAR LIQ COB             | T1        |     -3,00  |
-
-- Valor já vem com **sinal**: negativo = saída, positivo = entrada.
-- Aceita 1 ou múltiplas abas (uma por dia).
-
-### Relatório do sistema (ERP Sankhya)
-
-Layout padrão: linha 1 título, linha 2 metadata, linha 3 cabeçalho, linha 4+ dados.
-
-Colunas obrigatórias: `Dt. Lançamento`, `Histórico`, `Vlr. Lançamento`, `Receita/Despesa`.
-Coluna de conta tem nome variável (passada por parâmetro ou detectada).
-Valor vem positivo + sinal vem da coluna `Receita/Despesa`.
-
----
-
 ## 🔒 Privacidade
-
-- `.gitignore` ignora `*.xls`, `*.xlsx`, `data/uploads/`, `data/outputs/`.
-- Apenas `data/samples/` (sintéticos) sobe pro Git.
-- Arquivos no app ficam em memória — não são persistidos no servidor.
-- Snapshots de auditoria ficam **localmente** em `data/outputs/execucoes/`.
-
-> Para acesso público a dados confidenciais no Streamlit Cloud, considere autenticação ou deploy privado.
-
----
+`.gitignore` ignora dados reais. Apenas samples sintéticos sobem. Arquivos no app ficam em memória.
 
 ## 📜 Licença
-
 MIT.
