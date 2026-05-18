@@ -1,5 +1,11 @@
-"""Geração de relatórios."""
+from .excel_report import (
+    gerar_relatorio_excel,
+    gerar_relatorio_excel_de_conta,
+    gerar_csvs_zip,
+)
 
-from .excel_report import gerar_relatorio_excel, salvar_relatorio
-
-__all__ = ["gerar_relatorio_excel", "salvar_relatorio"]
+__all__ = [
+    "gerar_relatorio_excel",
+    "gerar_relatorio_excel_de_conta",
+    "gerar_csvs_zip",
+]

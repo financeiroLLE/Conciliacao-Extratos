@@ -1,116 +1,125 @@
-"""
-Conciliação principal: match exato por (Data, Valor, Conta).
+"""Match exato entre extrato bancário e relatório do sistema.
 
-Esta é a chave de conciliação escolhida pelo usuário.
-
-Algoritmo:
-1. Para cada lançamento do banco, procura no sistema lançamentos com
-   MESMA DATA, MESMO VALOR e MESMA CONTA.
-2. Faz match 1-pra-1 (cada lançamento do banco casa com 1 do sistema).
-3. Se houver N lançamentos iguais nos dois lados, casa os N.
-4. Se houver desbalanceamento (3 no banco × 2 no sistema), 2 casam e
-   1 fica como pendência.
-
-Saídas:
-- conciliados: lançamentos que casaram
-- pendentes_banco: estão no banco mas não no sistema (FALTA BAIXAR)
-- pendentes_sistema: estão no sistema mas não no banco (LANÇAMENTO INDEVIDO)
+REGRAS (atualizadas conforme briefing de produto):
+- Valor: precisa ser EXATAMENTE igual (sem tolerância de centavos).
+- Data: aceita tolerância de ±N dias corridos (default 2 — cobre fim de semana e
+  feriados curtos). Quando há múltiplos candidatos dentro da janela, prefere o
+  de menor diferença absoluta de dias.
+- Conta: igual.
+- Matching é 1-pra-1: cada lançamento do banco casa com no máximo um do sistema.
 """
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 import pandas as pd
 
 
-def conciliar_exato(
+def _normalizar_valor(v: float) -> int:
+    """Converte valor em centavos inteiros para comparação exata sem float drift."""
+    return round(float(v) * 100)
+
+
+def match_exato(
     banco: pd.DataFrame,
     sistema: pd.DataFrame,
-) -> dict[str, pd.DataFrame]:
-    """Conciliação por (Data, Valor, Conta) com match 1-pra-1.
+    tolerancia_dias: int = 2,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Executa o match exato.
 
-    Parameters
-    ----------
-    banco : DataFrame normalizado do extrato bancário
-    sistema : DataFrame normalizado do relatório do sistema
+    Args:
+        banco: DataFrame canônico do extrato bancário.
+        sistema: DataFrame canônico do relatório do ERP.
+        tolerancia_dias: dias corridos de tolerância na data (default 2).
 
-    Returns
-    -------
-    dict com chaves:
-        - 'conciliados': DataFrame com pares casados
-        - 'pendentes_banco': lançamentos do banco sem contrapartida
-        - 'pendentes_sistema': lançamentos do sistema sem contrapartida
+    Returns:
+        Tupla (conciliados, pendentes_banco, pendentes_sistema):
+        - conciliados: DataFrame com pares casados (colunas com prefixo banco_ e sistema_).
+        - pendentes_banco: linhas do banco sem casamento.
+        - pendentes_sistema: linhas do sistema sem casamento.
     """
     if banco.empty and sistema.empty:
-        return {
-            "conciliados": pd.DataFrame(),
-            "pendentes_banco": banco.copy(),
-            "pendentes_sistema": sistema.copy(),
-        }
+        return (
+            pd.DataFrame(),
+            banco.copy() if not banco.empty else pd.DataFrame(),
+            sistema.copy() if not sistema.empty else pd.DataFrame(),
+        )
 
-    # Cria a chave de conciliação
-    banco = banco.copy()
-    sistema = sistema.copy()
+    banco = banco.reset_index(drop=True).copy()
+    sistema = sistema.reset_index(drop=True).copy()
 
-    banco["_chave"] = (
-        banco["data"].dt.strftime("%Y-%m-%d")
-        + "|"
-        + banco["valor"].round(2).astype(str)
-        + "|"
-        + banco["conta"].astype(str)
+    banco["_idx"] = banco.index
+    sistema["_idx"] = sistema.index
+    banco["_valor_centavos"] = banco["valor"].apply(_normalizar_valor)
+    sistema["_valor_centavos"] = sistema["valor"].apply(_normalizar_valor)
+
+    consumidos_sistema: set[int] = set()
+    pares: list[tuple[int, int, int]] = []  # (idx_banco, idx_sistema, dias_diff)
+
+    # Para cada linha do banco, busca o melhor candidato no sistema dentro da tolerância
+    # Agrupa o sistema por (valor_centavos, conta) para acelerar.
+    sistema_grupo = sistema.groupby(["_valor_centavos", "conta"])
+
+    for _, linha_b in banco.iterrows():
+        chave = (linha_b["_valor_centavos"], linha_b["conta"])
+        if chave not in sistema_grupo.groups:
+            continue
+        idxs = sistema_grupo.groups[chave]
+        candidatos = sistema.loc[idxs]
+        candidatos = candidatos[~candidatos["_idx"].isin(consumidos_sistema)]
+        if candidatos.empty:
+            continue
+
+        # Diferença de dias
+        diffs = (candidatos["data"] - linha_b["data"]).abs().dt.days
+        dentro_janela = candidatos[diffs <= tolerancia_dias].copy()
+        if dentro_janela.empty:
+            continue
+
+        dentro_janela["_diff"] = (
+            (dentro_janela["data"] - linha_b["data"]).abs().dt.days
+        )
+        # Menor diferença de dias primeiro; em empate, mantém ordem original
+        dentro_janela = dentro_janela.sort_values(by=["_diff", "_idx"])
+        escolhido = dentro_janela.iloc[0]
+        idx_s = int(escolhido["_idx"])
+        consumidos_sistema.add(idx_s)
+        pares.append((int(linha_b["_idx"]), idx_s, int(escolhido["_diff"])))
+
+    # Montagem dos DataFrames de saída
+    if pares:
+        idxs_banco = [p[0] for p in pares]
+        idxs_sistema = [p[1] for p in pares]
+        diffs_dias = [p[2] for p in pares]
+        b = banco.loc[idxs_banco].reset_index(drop=True).drop(
+            columns=["_idx", "_valor_centavos"]
+        )
+        s = sistema.loc[idxs_sistema].reset_index(drop=True).drop(
+            columns=["_idx", "_valor_centavos"]
+        )
+        b = b.add_prefix("banco_")
+        s = s.add_prefix("sistema_")
+        conciliados = pd.concat([b, s], axis=1)
+        conciliados["dias_diferenca"] = diffs_dias
+        conciliados["status"] = "Conciliada"
+        conciliados["motivo"] = conciliados["dias_diferenca"].apply(
+            lambda d: "Match exato" if d == 0
+            else f"Match com tolerância de data ({d} dia(s))"
+        )
+    else:
+        conciliados = pd.DataFrame()
+
+    idxs_b_consumidos = {p[0] for p in pares}
+    pendentes_banco = (
+        banco[~banco["_idx"].isin(idxs_b_consumidos)]
+        .drop(columns=["_idx", "_valor_centavos"])
+        .reset_index(drop=True)
     )
-    sistema["_chave"] = (
-        sistema["data"].dt.strftime("%Y-%m-%d")
-        + "|"
-        + sistema["valor"].round(2).astype(str)
-        + "|"
-        + sistema["conta"].astype(str)
+    pendentes_sistema = (
+        sistema[~sistema["_idx"].isin(consumidos_sistema)]
+        .drop(columns=["_idx", "_valor_centavos"])
+        .reset_index(drop=True)
     )
 
-    # Cria índice posicional dentro de cada chave para fazer match 1-pra-1
-    banco["_ordem"] = banco.groupby("_chave").cumcount()
-    sistema["_ordem"] = sistema.groupby("_chave").cumcount()
-
-    # Merge interno: casa banco × sistema pela chave + ordem
-    merged = banco.merge(
-        sistema,
-        on=["_chave", "_ordem"],
-        how="outer",
-        suffixes=("_banco", "_sistema"),
-        indicator=True,
-    )
-
-    conciliados = merged[merged["_merge"] == "both"].copy()
-    so_banco = merged[merged["_merge"] == "left_only"].copy()
-    so_sistema = merged[merged["_merge"] == "right_only"].copy()
-
-    # Monta DataFrames de saída
-    conciliados_out = pd.DataFrame(
-        {
-            "data": conciliados["data_banco"],
-            "valor": conciliados["valor_banco"],
-            "conta": conciliados["conta_banco"],
-            "historico_banco": conciliados["historico_banco"],
-            "historico_sistema": conciliados["historico_sistema"],
-            "documento_banco": conciliados.get("documento", ""),
-            "num_unico_bancario": conciliados.get("num_unico_bancario", ""),
-            "num_documento_sistema": conciliados.get("num_documento", ""),
-            "usuario_sistema": conciliados.get("usuario", ""),
-            "tipo_movimento": conciliados.get("tipo_movimento", ""),
-            "_row_id_banco": conciliados["_row_id_banco"],
-            "_row_id_sistema": conciliados["_row_id_sistema"],
-        }
-    ).reset_index(drop=True)
-
-    pendentes_banco = banco[banco["_row_id"].isin(so_banco["_row_id_banco"])].drop(
-        columns=["_chave", "_ordem"]
-    ).reset_index(drop=True)
-
-    pendentes_sistema = sistema[
-        sistema["_row_id"].isin(so_sistema["_row_id_sistema"])
-    ].drop(columns=["_chave", "_ordem"]).reset_index(drop=True)
-
-    return {
-        "conciliados": conciliados_out,
-        "pendentes_banco": pendentes_banco,
-        "pendentes_sistema": pendentes_sistema,
-    }
+    return conciliados, pendentes_banco, pendentes_sistema

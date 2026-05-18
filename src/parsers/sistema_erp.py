@@ -1,152 +1,177 @@
-"""
-Parser do relatório do SISTEMA (ERP) — formato "Conciliação Bancária".
+"""Leitura do relatório de Conciliação Bancária exportado do ERP (Sankhya).
 
-Este parser foi calibrado com base no arquivo de teste real. Características:
+Layout típico:
+- Linha 1: título "Conciliação Bancária"
+- Linha 2: emissão/usuário/total de registros
+- Linha 3: cabeçalho
+- Linha 4+: dados
 
-- A linha 1 do Excel é o título "Conciliação Bancária"
-- A linha 2 traz Emissão / Total de registros / Usuário
-- A linha 3 é o cabeçalho real
-- A última linha do arquivo é um total agregado (sem data, sem histórico)
-
-Colunas relevantes para conciliação:
-    Dt. Lançamento, Histórico, Vlr. Lançamento, Receita/Despesa,
-    Núm. Único Bancário, Núm. Documento, Conciliado, Tipo de Movimento, Usuário
-
-Sobre o sinal do valor:
-    No sistema, o valor vem POSITIVO e o sinal é dado pela coluna
-    Receita/Despesa. Para conciliar contra o extrato (que tem sinal),
-    multiplicamos por -1 quando for Despesa.
+Colunas obrigatórias: Dt. Lançamento, Histórico, Vlr. Lançamento, Receita/Despesa.
+Coluna de conta tem nome variável (passada por parâmetro ou auto-detectada).
 """
 
 from __future__ import annotations
 
-from pathlib import Path
+import re
+from typing import Any
 
 import pandas as pd
 
-# A coluna que identifica a CONTA bancária no sistema.
-# O usuário disse que existe — o nome exato deve ser ajustado quando
-# os dados reais forem usados. Por padrão, tentamos uma lista de nomes
-# comuns; se nenhum for encontrado, exigimos que o usuário escolha.
-CANDIDATOS_COLUNA_CONTA = [
-    "Conta Bancária",
-    "Conta Bancaria",
-    "Conta",
-    "Banco",
-    "Conta/Banco",
-    "Agência/Conta",
-    "Agencia/Conta",
+from .extrato_banco import _normalizar_nome_coluna, _parse_valor_brl, _parse_data_robusto
+
+
+COLUNAS_ESPERADAS_SISTEMA = [
+    "data", "historico", "documento", "valor", "conta",
+    "tipo_movimento", "conciliado", "usuario", "num_unico_bancario",
 ]
 
 
-def detectar_coluna_conta(df: pd.DataFrame) -> str | None:
-    """Tenta detectar automaticamente qual coluna identifica a conta."""
-    for cand in CANDIDATOS_COLUNA_CONTA:
-        if cand in df.columns:
-            return cand
+def _detectar_linha_cabecalho(df: pd.DataFrame) -> int:
+    """Procura a linha que contém 'Dt. Lançamento' ou 'Data Lançamento'."""
+    for i in range(min(10, len(df))):
+        valores = [str(v).strip().lower() for v in df.iloc[i].tolist() if pd.notna(v)]
+        joined = " | ".join(valores)
+        if "dt. lançamento" in joined or "dt lançamento" in joined \
+           or "data lançamento" in joined or "dt. lancamento" in joined:
+            return i
+    return 0
+
+
+def _detectar_coluna_conta(colunas: list[str]) -> str | None:
+    """Tenta achar a coluna que identifica a conta bancária."""
+    candidatos = [
+        "contabancaria", "contabancária",
+        "conta", "agenciaconta", "agconta",
+        "bancoconta", "ccbancaria",
+    ]
+    for col in colunas:
+        norm = _normalizar_nome_coluna(col)
+        if norm in candidatos:
+            return col
+    # heurística: nome contém "conta" e não é "contábil"
+    for col in colunas:
+        norm = _normalizar_nome_coluna(col)
+        if "conta" in norm and "contabil" not in norm:
+            return col
     return None
 
 
 def carregar_relatorio_sistema(
-    arquivo: str | Path | "IO",
+    arquivo: Any,
     coluna_conta: str | None = None,
-    filtrar_conta: str | None = None,
 ) -> pd.DataFrame:
-    """Lê o relatório do sistema (ERP) e retorna DataFrame normalizado.
+    """Lê o relatório do ERP e retorna DataFrame canônico.
 
-    Parameters
-    ----------
-    arquivo : caminho ou objeto file-like
-    coluna_conta : nome da coluna que identifica a conta no sistema.
-        Se None, tenta detectar automaticamente.
-    filtrar_conta : se informado, filtra apenas lançamentos dessa conta.
+    Args:
+        arquivo: file-like (Streamlit UploadedFile) ou path.
+        coluna_conta: nome exato da coluna de conta no ERP. Se None, auto-detecta.
 
-    Returns
-    -------
-    DataFrame com colunas: data, historico, valor, conta, num_unico_bancario,
-                            num_documento, conciliado, tipo_movimento, usuario,
-                            origem='sistema', _row_id
+    Retorna DataFrame com colunas canônicas (ver COLUNAS_ESPERADAS_SISTEMA).
     """
-    # Detecta extensão para escolher engine
-    nome = str(getattr(arquivo, "name", arquivo)).lower()
-    engine = "xlrd" if nome.endswith(".xls") else None
+    if hasattr(arquivo, "read"):
+        nome = getattr(arquivo, "name", "")
+        engine = "xlrd" if nome.lower().endswith(".xls") else "openpyxl"
+        try:
+            arquivo.seek(0)
+        except Exception:
+            pass
+        raw = pd.read_excel(arquivo, sheet_name=0, engine=engine, header=None, dtype=str)
+    else:
+        engine = "xlrd" if str(arquivo).lower().endswith(".xls") else "openpyxl"
+        raw = pd.read_excel(arquivo, sheet_name=0, engine=engine, header=None, dtype=str)
 
-    # Header está na linha 3 (índice 2)
-    df = pd.read_excel(arquivo, header=2, engine=engine)
+    if raw.empty:
+        return pd.DataFrame(columns=COLUNAS_ESPERADAS_SISTEMA)
 
-    # Verifica colunas obrigatórias
-    obrigatorias = [
-        "Dt. Lançamento",
-        "Histórico",
-        "Vlr. Lançamento",
-        "Receita/Despesa",
-    ]
-    faltando = [c for c in obrigatorias if c not in df.columns]
-    if faltando:
+    linha_header = _detectar_linha_cabecalho(raw)
+    header = [str(v).strip() if pd.notna(v) else f"col_{i}"
+              for i, v in enumerate(raw.iloc[linha_header].tolist())]
+    df = raw.iloc[linha_header + 1:].copy()
+    df.columns = header
+    df = df.dropna(how="all").reset_index(drop=True)
+
+    # Mapeamento de colunas conhecidas
+    mapa: dict[str, str] = {}
+    aliases = {
+        "data": ["dtlancamento", "datalancamento", "data"],
+        "historico": ["historico", "descricao"],
+        "valor": ["vlrlancamento", "valorlancamento", "valor"],
+        "receita_despesa": ["receitadespesa", "tipo"],
+        "documento": ["numdocumento", "numerodocumento", "documento", "doc"],
+        "num_unico_bancario": ["numunicobancario", "numunico"],
+        "conciliado": ["conciliado"],
+        "tipo_movimento": ["tipodemovimento", "tipomovimento"],
+        "usuario": ["usuario"],
+    }
+    for col_real in df.columns:
+        norm = _normalizar_nome_coluna(str(col_real))
+        for canonico, lista in aliases.items():
+            if norm in lista and canonico not in mapa:
+                mapa[canonico] = col_real
+                break
+
+    if "data" not in mapa or "valor" not in mapa:
         raise ValueError(
-            f"Relatório do sistema não tem as colunas obrigatórias: {faltando}. "
-            f"Colunas presentes: {df.columns.tolist()}"
+            "Relatório do sistema sem colunas obrigatórias. "
+            "Esperado: Dt. Lançamento e Vlr. Lançamento. "
+            f"Colunas detectadas: {list(df.columns)[:10]}"
         )
 
-    # Coluna de conta
-    if coluna_conta is None:
-        coluna_conta = detectar_coluna_conta(df)
-
-    # Remove linha de total no final (sem data)
-    df = df[df["Dt. Lançamento"].notna()].copy()
+    # Detectar coluna de conta
+    col_conta_real: str | None = None
+    if coluna_conta:
+        # match exato (com strip e case-insensitive)
+        alvo = coluna_conta.strip().lower()
+        for c in df.columns:
+            if str(c).strip().lower() == alvo:
+                col_conta_real = c
+                break
+    if not col_conta_real:
+        col_conta_real = _detectar_coluna_conta([str(c) for c in df.columns])
 
     out = pd.DataFrame()
-    # IMPORTANTE: usar dayfirst=True (formato brasileiro DD/MM/AAAA).
-    # Sem isso, "04/05/2026" seria interpretado como 5 de abril.
-    out["data"] = pd.to_datetime(
-        df["Dt. Lançamento"], dayfirst=True, errors="coerce"
-    ).dt.normalize()
-    out["historico"] = df["Histórico"].astype(str).str.strip()
+    # CRÍTICO: dayfirst=True (datas brasileiras), com fallback para ISO
+    out["data"] = _parse_data_robusto(df[mapa["data"]])
+    out["historico"] = (
+        df[mapa["historico"]].fillna("").astype(str).str.strip()
+        if "historico" in mapa else ""
+    )
+    out["documento"] = (
+        df[mapa["documento"]].fillna("").astype(str).str.strip()
+        if "documento" in mapa else ""
+    )
+    valor_abs = df[mapa["valor"]].apply(_parse_valor_brl)
 
-    # Aplica sinal: Despesa vira negativo
-    valor_abs = pd.to_numeric(df["Vlr. Lançamento"], errors="coerce").round(2)
-    sinal = df["Receita/Despesa"].astype(str).str.strip().str.lower().map(
-        lambda x: -1 if x == "despesa" else 1
-    )
-    out["valor"] = (valor_abs * sinal).round(2)
+    # Aplicar sinal: no ERP o valor vem positivo + coluna Receita/Despesa
+    if "receita_despesa" in mapa:
+        tipo = df[mapa["receita_despesa"]].fillna("").astype(str).str.strip().str.upper()
+        sinal = tipo.apply(lambda x: -1.0 if x.startswith("D") else 1.0)
+        out["valor"] = valor_abs * sinal
+    else:
+        out["valor"] = valor_abs
 
-    out["num_unico_bancario"] = (
-        df["Núm. Único Bancário"].astype(str).str.strip()
-        if "Núm. Único Bancário" in df.columns
-        else ""
-    )
-    out["num_documento"] = (
-        df["Núm. Documento"].astype(str).str.strip()
-        if "Núm. Documento" in df.columns
-        else ""
-    )
-    out["conciliado"] = (
-        df["Conciliado"].astype(str).str.strip()
-        if "Conciliado" in df.columns
-        else "Sim"
+    out["conta"] = (
+        df[col_conta_real].fillna("—").astype(str).str.strip()
+        if col_conta_real else "—"
     )
     out["tipo_movimento"] = (
-        df["Tipo de Movimento"].astype(str).str.strip()
-        if "Tipo de Movimento" in df.columns
-        else ""
+        df[mapa["tipo_movimento"]].fillna("").astype(str).str.strip()
+        if "tipo_movimento" in mapa else ""
+    )
+    out["conciliado"] = (
+        df[mapa["conciliado"]].fillna("").astype(str).str.strip()
+        if "conciliado" in mapa else ""
     )
     out["usuario"] = (
-        df["Usuário"].astype(str).str.strip()
-        if "Usuário" in df.columns
-        else ""
+        df[mapa["usuario"]].fillna("").astype(str).str.strip()
+        if "usuario" in mapa else ""
+    )
+    out["num_unico_bancario"] = (
+        df[mapa["num_unico_bancario"]].fillna("").astype(str).str.strip()
+        if "num_unico_bancario" in mapa else ""
     )
 
-    if coluna_conta and coluna_conta in df.columns:
-        out["conta"] = df[coluna_conta].astype(str).str.strip()
-    else:
-        # Sem coluna de conta: assume conta única (será sobrescrita externamente)
-        out["conta"] = "—"
-
+    out = out.dropna(subset=["data"]).reset_index(drop=True)
+    out = out[out["valor"] != 0].reset_index(drop=True)
     out["origem"] = "sistema"
-    out = out.dropna(subset=["data", "valor"]).reset_index(drop=True)
-    out["_row_id"] = [f"SIS-{i:06d}" for i in range(len(out))]
-
-    if filtrar_conta is not None:
-        out = out[out["conta"] == filtrar_conta].reset_index(drop=True)
-
     return out

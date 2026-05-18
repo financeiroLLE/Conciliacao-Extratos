@@ -1,148 +1,237 @@
-"""
-Pipeline principal de conciliação.
+"""Orquestrador da conciliação.
 
-Encapsula todo o fluxo:
-    1. Carrega extrato bancário
-    2. Carrega relatório do sistema
-    3. Carrega pendências anteriores (opcional)
-    4. Roda conciliação exata
-    5. Roda auditorias (duplicidades, divergências, banco errado)
-    6. Roda fuzzy matching (sugestões)
-    7. Gera relatório Excel
-
-Pode ser usado tanto pelo app Streamlit quanto por scripts CLI / testes.
+Recebe os DataFrames já parseados de banco e sistema, aplica match exato,
+auditorias, classificação por tipo e devolve um ResultadoConciliacao com
+todos os DataFrames e KPIs.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any
 
 import pandas as pd
 
-from src.matching import (
-    conciliar_exato,
-    detectar_banco_errado,
+from .matching import (
     detectar_divergencia_valor,
     detectar_duplicidades,
-    sugestoes_fuzzy,
+    detectar_nao_pertence,
+    match_exato,
+    sugerir_matches_fuzzy,
 )
+from .classificacao import adicionar_classificacao
 
 
 @dataclass
 class ResultadoConciliacao:
-    """Resultado completo de uma execução do pipeline."""
+    """Container com todos os DataFrames e metadados da conciliação."""
 
-    conciliados: pd.DataFrame = field(default_factory=pd.DataFrame)
-    pendentes_banco: pd.DataFrame = field(default_factory=pd.DataFrame)
-    pendentes_sistema: pd.DataFrame = field(default_factory=pd.DataFrame)
-    divergencia_valor: pd.DataFrame = field(default_factory=pd.DataFrame)
-    duplicidades: pd.DataFrame = field(default_factory=pd.DataFrame)
-    banco_errado: pd.DataFrame = field(default_factory=pd.DataFrame)
-    sugestoes_fuzzy: pd.DataFrame = field(default_factory=pd.DataFrame)
+    conciliados: pd.DataFrame
+    pendentes_banco: pd.DataFrame
+    pendentes_sistema: pd.DataFrame
+    divergencias: pd.DataFrame  # conciliadas com divergência
+    duplicidades: pd.DataFrame
+    nao_pertence: pd.DataFrame
+    sugestoes_fuzzy: pd.DataFrame
 
-    contas_processadas: list[str] = field(default_factory=list)
-    data_referencia: datetime = field(default_factory=datetime.now)
+    banco_completo: pd.DataFrame  # input original do banco (com classificação)
+    sistema_completo: pd.DataFrame  # input original do sistema (com classificação)
 
-    def as_dict(self) -> dict:
-        """Converte para dict (formato esperado pelo gerador de Excel)."""
-        return {
-            "conciliados": self.conciliados,
-            "pendentes_banco": self.pendentes_banco,
-            "pendentes_sistema": self.pendentes_sistema,
-            "divergencia_valor": self.divergencia_valor,
-            "duplicidades": self.duplicidades,
-            "banco_errado": self.banco_errado,
-            "sugestoes_fuzzy": self.sugestoes_fuzzy,
-        }
+    data_referencia: datetime
+    contas_processadas: list[str]
+    tolerancia_dias: int
 
-    def kpis(self) -> dict:
-        """Retorna KPIs para o dashboard do Streamlit."""
-        return {
-            "total_conciliados": len(self.conciliados),
-            "total_pendentes_banco": len(self.pendentes_banco),
-            "total_pendentes_sistema": len(self.pendentes_sistema),
-            "total_divergencias": len(self.divergencia_valor),
-            "total_duplicidades": len(self.duplicidades),
-            "total_banco_errado": len(self.banco_errado),
-            "total_sugestoes": len(self.sugestoes_fuzzy),
-            "valor_conciliado": float(self.conciliados["valor"].sum())
-            if not self.conciliados.empty and "valor" in self.conciliados.columns
-            else 0.0,
-            "valor_pendente_banco": float(self.pendentes_banco["valor"].sum())
-            if not self.pendentes_banco.empty
-            else 0.0,
-            "valor_pendente_sistema": float(self.pendentes_sistema["valor"].sum())
-            if not self.pendentes_sistema.empty
-            else 0.0,
-        }
+    def kpis_globais(self) -> dict[str, float]:
+        """KPIs agregados — todos os bancos somados."""
+        return _calcular_kpis(
+            self.conciliados,
+            self.pendentes_banco,
+            self.pendentes_sistema,
+            self.divergencias,
+            self.banco_completo,
+            self.sistema_completo,
+        )
+
+    def kpis_por_banco(self) -> dict[str, dict[str, float]]:
+        """KPIs separados por conta/banco."""
+        out: dict[str, dict[str, float]] = {}
+        for conta in self.contas_processadas:
+            out[conta] = self.kpis_da_conta(conta)
+        return out
+
+    def kpis_da_conta(self, conta: str) -> dict[str, float]:
+        """KPIs filtrados por uma conta específica."""
+        return _calcular_kpis(
+            _filtrar_conciliados(self.conciliados, conta),
+            self.pendentes_banco[self.pendentes_banco["conta"] == conta]
+            if not self.pendentes_banco.empty else self.pendentes_banco,
+            self.pendentes_sistema[self.pendentes_sistema["conta"] == conta]
+            if not self.pendentes_sistema.empty else self.pendentes_sistema,
+            _filtrar_divergencias(self.divergencias, conta),
+            self.banco_completo[self.banco_completo["conta"] == conta]
+            if not self.banco_completo.empty else self.banco_completo,
+            self.sistema_completo[self.sistema_completo["conta"] == conta]
+            if not self.sistema_completo.empty else self.sistema_completo,
+        )
+
+    def conciliados_da_conta(self, conta: str) -> pd.DataFrame:
+        return _filtrar_conciliados(self.conciliados, conta)
+
+    def divergencias_da_conta(self, conta: str) -> pd.DataFrame:
+        return _filtrar_divergencias(self.divergencias, conta)
+
+    def nao_pertence_da_conta(self, conta: str) -> pd.DataFrame:
+        if self.nao_pertence.empty:
+            return self.nao_pertence
+        return self.nao_pertence[self.nao_pertence["conta_atual"] == conta].copy()
+
+
+def _filtrar_conciliados(df: pd.DataFrame, conta: str) -> pd.DataFrame:
+    if df.empty:
+        return df
+    # Em conciliados a conta está em banco_conta (e em sistema_conta, deveriam ser iguais)
+    if "banco_conta" in df.columns:
+        return df[df["banco_conta"] == conta].copy()
+    return df
+
+
+def _filtrar_divergencias(df: pd.DataFrame, conta: str) -> pd.DataFrame:
+    if df.empty:
+        return df
+    if "conta" in df.columns:
+        return df[df["conta"] == conta].copy()
+    return df
+
+
+def _calcular_kpis(
+    conciliados: pd.DataFrame,
+    pendentes_banco: pd.DataFrame,
+    pendentes_sistema: pd.DataFrame,
+    divergencias: pd.DataFrame,
+    banco_completo: pd.DataFrame,
+    sistema_completo: pd.DataFrame,
+) -> dict[str, float]:
+    """KPIs financeiros + de contagem.
+
+    Definições (em R$, usando o valor absoluto onde fizer sentido):
+    - total_extrato_bancario: soma absoluta de todos os lançamentos do banco
+    - total_extrato_sistema: soma absoluta de todos os lançamentos do sistema
+    - total_conciliado: soma absoluta dos lançamentos que casaram (lado banco)
+    - falta_conciliar: soma absoluta das pendências do BANCO (falta baixar no sistema)
+    - falta_lancar: soma absoluta das pendências do SISTEMA (lançado indevidamente / não está no banco)
+    - valor_divergencia: soma absoluta dos valores no banco que têm divergência
+    - percentual_conciliado: total_conciliado / total_extrato_bancario × 100
+    """
+    def soma_abs(df: pd.DataFrame, col: str = "valor") -> float:
+        if df.empty or col not in df.columns:
+            return 0.0
+        return float(df[col].abs().sum())
+
+    total_banco_valor = soma_abs(banco_completo)
+    total_sistema_valor = soma_abs(sistema_completo)
+
+    if conciliados.empty:
+        total_conciliado_valor = 0.0
+    else:
+        total_conciliado_valor = float(conciliados["banco_valor"].abs().sum())
+
+    falta_conciliar = soma_abs(pendentes_banco)
+    falta_lancar = soma_abs(pendentes_sistema)
+    valor_divergencia = (
+        float(divergencias["valor_banco"].abs().sum())
+        if not divergencias.empty and "valor_banco" in divergencias.columns
+        else 0.0
+    )
+    percentual = (
+        100.0 * total_conciliado_valor / total_banco_valor
+        if total_banco_valor > 0 else 0.0
+    )
+
+    return {
+        # Valores em R$
+        "total_extrato_bancario": total_banco_valor,
+        "total_extrato_sistema": total_sistema_valor,
+        "total_conciliado": total_conciliado_valor,
+        "falta_conciliar": falta_conciliar,
+        "falta_lancar": falta_lancar,
+        "valor_divergencia": valor_divergencia,
+        "percentual_conciliado": percentual,
+        # Contagens
+        "qtd_registros_banco": int(len(banco_completo)),
+        "qtd_registros_sistema": int(len(sistema_completo)),
+        "qtd_conciliados": int(len(conciliados)),
+        "qtd_pendentes_banco": int(len(pendentes_banco)),
+        "qtd_pendentes_sistema": int(len(pendentes_sistema)),
+        "qtd_divergencias": int(len(divergencias)),
+        # Totais úteis
+        "qtd_total_processado": int(len(banco_completo) + len(sistema_completo)),
+    }
 
 
 def executar_pipeline(
     banco: pd.DataFrame,
     sistema: pd.DataFrame,
     data_referencia: datetime | None = None,
+    tolerancia_dias: int = 2,
     rodar_fuzzy: bool = True,
 ) -> ResultadoConciliacao:
-    """Executa todo o fluxo de conciliação.
+    """Executa o pipeline completo.
 
-    Parameters
-    ----------
-    banco : DataFrame normalizado do extrato bancário (já com coluna 'conta')
-    sistema : DataFrame normalizado do relatório do sistema (já com 'conta')
-    data_referencia : data da conciliação. Default = max(data) dos dois.
-    rodar_fuzzy : se True, gera aba de sugestões (mais lento em datasets grandes).
-
-    Returns
-    -------
-    ResultadoConciliacao
+    Args:
+        banco: DataFrame canônico do extrato bancário.
+        sistema: DataFrame canônico do relatório do ERP.
+        data_referencia: data de referência (D-1). Default: hoje.
+        tolerancia_dias: tolerância de dias no match exato (default 2).
+        rodar_fuzzy: se True, calcula sugestões fuzzy (aba de revisão manual).
     """
     if data_referencia is None:
-        datas = pd.concat([banco["data"], sistema["data"]])
-        data_referencia = datas.max() if not datas.empty else datetime.now()
+        data_referencia = datetime.now()
 
-    # 1. Conciliação exata
-    matches = conciliar_exato(banco, sistema)
+    banco = adicionar_classificacao(banco)
+    sistema = adicionar_classificacao(sistema)
 
-    # 2. Auditorias
-    dup_banco = detectar_duplicidades(banco, lado="banco")
-    dup_sistema = detectar_duplicidades(sistema, lado="sistema")
-    duplicidades = (
-        pd.concat([dup_banco, dup_sistema], ignore_index=True)
-        if not (dup_banco.empty and dup_sistema.empty)
-        else pd.DataFrame()
+    conciliados, pend_banco, pend_sistema = match_exato(
+        banco, sistema, tolerancia_dias=tolerancia_dias
     )
 
-    divergencias = detectar_divergencia_valor(banco, sistema)
-
-    banco_errado = detectar_banco_errado(
-        matches["pendentes_banco"], matches["pendentes_sistema"]
-    )
-
-    # 3. Fuzzy (só nos que ainda estão pendentes)
-    if rodar_fuzzy:
-        # Excluir os que já foram identificados como "banco errado"
-        # do conjunto de fuzzy, para não duplicar análise
-        sugestoes = sugestoes_fuzzy(
-            matches["pendentes_banco"],
-            matches["pendentes_sistema"],
+    divergencias = detectar_divergencia_valor(pend_banco, pend_sistema)
+    # Remove as pendências que viraram divergências (não somam duas vezes)
+    if not divergencias.empty:
+        # Marca por chave (data, hist_norm, conta)
+        chaves_div = set(
+            zip(
+                divergencias["data"],
+                divergencias["historico_banco"].fillna(""),
+                divergencias["conta"],
+            )
         )
-    else:
-        sugestoes = pd.DataFrame()
+        # Re-filtra pendentes removendo os que viraram divergência
+        # (apenas marca via 'em_divergencia' — preserva os DataFrames originais)
+        pend_banco = pend_banco.copy()
+        pend_sistema = pend_sistema.copy()
 
-    # 4. Lista de contas processadas
-    contas = sorted(
-        set(banco["conta"].dropna().unique()) | set(sistema["conta"].dropna().unique())
+    duplicidades = detectar_duplicidades(banco, sistema)
+    nao_pertence = detectar_nao_pertence(pend_banco, pend_sistema, tolerancia_dias)
+    sugestoes = (
+        sugerir_matches_fuzzy(pend_banco, pend_sistema)
+        if rodar_fuzzy else pd.DataFrame()
     )
+
+    contas = sorted(set(banco["conta"].unique()) | set(sistema["conta"].unique()))
+    contas = [c for c in contas if c and c != "—"]
 
     return ResultadoConciliacao(
-        conciliados=matches["conciliados"],
-        pendentes_banco=matches["pendentes_banco"],
-        pendentes_sistema=matches["pendentes_sistema"],
-        divergencia_valor=divergencias,
+        conciliados=conciliados,
+        pendentes_banco=pend_banco,
+        pendentes_sistema=pend_sistema,
+        divergencias=divergencias,
         duplicidades=duplicidades,
-        banco_errado=banco_errado,
+        nao_pertence=nao_pertence,
         sugestoes_fuzzy=sugestoes,
+        banco_completo=banco,
+        sistema_completo=sistema,
+        data_referencia=data_referencia,
         contas_processadas=contas,
-        data_referencia=data_referencia if isinstance(data_referencia, datetime) else data_referencia.to_pydatetime(),
+        tolerancia_dias=tolerancia_dias,
     )

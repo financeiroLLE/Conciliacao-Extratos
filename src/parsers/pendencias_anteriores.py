@@ -1,76 +1,56 @@
-"""
-Parser do relatório de PENDÊNCIAS gerado em dias anteriores.
+"""Leitura da aba 'Pendências Consolidadas' do relatório gerado em dias anteriores.
 
-Como o sistema não usa banco de dados, o usuário sobe o Excel de
-pendências do dia anterior para que pendências antigas sejam
-reconciliadas com os novos lançamentos do dia.
+Essa aba é o "estado" persistente do sistema — sobe-se no próximo dia
+para acompanhar há quantos dias cada pendência está em aberto.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import Any
 
 import pandas as pd
 
 
-def carregar_pendencias_anteriores(
-    arquivo: str | Path | "IO" | None,
-) -> pd.DataFrame:
-    """Lê a aba 'Pendências Consolidadas' do relatório de pendências anterior.
+def carregar_pendencias_anteriores(arquivo: Any) -> pd.DataFrame:
+    """Lê a aba 'Pendências Consolidadas' do relatório de dias anteriores.
 
-    Retorna DataFrame vazio se arquivo for None ou se a aba não existir.
+    Retorna DataFrame vazio se o arquivo for None.
     """
     if arquivo is None:
-        return pd.DataFrame(
-            columns=[
-                "data",
-                "historico",
-                "valor",
-                "conta",
-                "origem",
-                "tipo_pendencia",
-                "data_primeira_deteccao",
-                "dias_pendente",
-            ]
-        )
+        return pd.DataFrame()
 
-    try:
-        df = pd.read_excel(arquivo, sheet_name="Pendências Consolidadas")
-    except (ValueError, KeyError):
-        # Aba não existe
-        return pd.DataFrame(
-            columns=[
-                "data",
-                "historico",
-                "valor",
-                "conta",
-                "origem",
-                "tipo_pendencia",
-                "data_primeira_deteccao",
-                "dias_pendente",
-            ]
-        )
+    if hasattr(arquivo, "read"):
+        try:
+            arquivo.seek(0)
+        except Exception:
+            pass
+        sheets = pd.read_excel(arquivo, sheet_name=None, engine="openpyxl")
+    else:
+        sheets = pd.read_excel(arquivo, sheet_name=None, engine="openpyxl")
 
-    # Mapeamento de nomes amigáveis para nomes internos
-    rename_map = {
-        "Data": "data",
-        "Histórico": "historico",
-        "Valor": "valor",
-        "Conta": "conta",
-        "Origem": "origem",
-        "Tipo de Pendência": "tipo_pendencia",
-        "Data 1ª Detecção": "data_primeira_deteccao",
-        "Dias Pendente": "dias_pendente",
-    }
-    df = df.rename(columns=rename_map)
+    # Procura aba com nome "Pendências Consolidadas" (case-insensitive)
+    aba_alvo = None
+    for nome in sheets:
+        if "pendênc" in nome.lower() and "consolid" in nome.lower():
+            aba_alvo = nome
+            break
+        if "pendenc" in nome.lower() and "consolid" in nome.lower():
+            aba_alvo = nome
+            break
 
-    if "data" in df.columns:
-        df["data"] = pd.to_datetime(df["data"], errors="coerce").dt.normalize()
-    if "data_primeira_deteccao" in df.columns:
-        df["data_primeira_deteccao"] = pd.to_datetime(
-            df["data_primeira_deteccao"], errors="coerce"
-        ).dt.normalize()
-    if "valor" in df.columns:
-        df["valor"] = pd.to_numeric(df["valor"], errors="coerce").round(2)
+    if not aba_alvo:
+        return pd.DataFrame()
 
-    return df.dropna(subset=["data", "valor"]).reset_index(drop=True)
+    df = sheets[aba_alvo]
+    if df.empty:
+        return pd.DataFrame()
+
+    # Normalização leve dos nomes
+    df.columns = [str(c).strip() for c in df.columns]
+
+    # Converte coluna de data se existir
+    for col in df.columns:
+        if "data" in col.lower():
+            df[col] = pd.to_datetime(df[col], dayfirst=True, errors="coerce")
+
+    return df.reset_index(drop=True)

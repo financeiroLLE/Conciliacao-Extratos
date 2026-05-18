@@ -1,17 +1,15 @@
-"""Lógica de conciliação e auditoria."""
-
+from .exact_match import match_exato
 from .auditorias import (
-    detectar_banco_errado,
     detectar_divergencia_valor,
     detectar_duplicidades,
+    detectar_nao_pertence,
 )
-from .exact_match import conciliar_exato
-from .fuzzy_match import sugestoes_fuzzy
+from .fuzzy_match import sugerir_matches_fuzzy
 
 __all__ = [
-    "conciliar_exato",
-    "sugestoes_fuzzy",
-    "detectar_duplicidades",
+    "match_exato",
     "detectar_divergencia_valor",
-    "detectar_banco_errado",
+    "detectar_duplicidades",
+    "detectar_nao_pertence",
+    "sugerir_matches_fuzzy",
 ]

@@ -1,299 +1,490 @@
-"""
-Geração do relatório final em Excel.
+"""Geração dos relatórios de saída em Excel e CSV.
 
-Estrutura do arquivo de saída (9 abas):
+Excel: workbook único com 13+ abas (Resumo, Por Banco, Conciliadas, Pendentes,
+Divergências, Não Pertence, Boletos, Pix, Tarifas, Pagamentos, Recebimentos,
+Sugestões, Auditoria, Pendências Consolidadas).
 
-1. Resumo Executivo     — visão gerencial com totais e KPIs
-2. Conciliados          — pares que casaram
-3. Pendências Banco     — falta baixar no sistema
-4. Pendências Sistema   — lançamento indevido / falta no banco
-5. Divergência Valor    — mesma data/histórico, valores diferentes
-6. Duplicidades         — registros repetidos
-7. Banco Errado         — baixado em conta diferente
-8. Sugestões Fuzzy      — para revisão manual
-9. Pendências Consolidadas — INPUT do próximo dia (chave do fluxo)
+CSV: cada aba como um .csv separado, todos empacotados em um zip.
 """
 
 from __future__ import annotations
 
+import io
+import zipfile
 from datetime import datetime
-from io import BytesIO
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pandas as pd
 from openpyxl import Workbook
-from openpyxl.styles import Alignment, Font, PatternFill
+from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
-from openpyxl.utils.dataframe import dataframe_to_rows
+
+if TYPE_CHECKING:
+    from ..pipeline import ResultadoConciliacao
 
 
-HEADER_FILL = PatternFill("solid", start_color="1F4E78")
-HEADER_FONT = Font(bold=True, color="FFFFFF", name="Arial", size=11)
-TITLE_FONT = Font(bold=True, size=14, name="Arial")
-ARIAL = Font(name="Arial", size=10)
+# Cores do manual de marca Grupo LLE
+COR_AZUL_ESCURO = "041747"
+COR_AMARELO = "FAC318"
+COR_AZUL = "0071FE"
+COR_VERDE = "0F8C3B"
+COR_BRANCO = "FFFFFF"
+COR_CINZA_CLARO = "F4F6FA"
+
+FONTE_HEADER = Font(name="Arial", bold=True, color=COR_BRANCO, size=11)
+FONTE_BODY = Font(name="Arial", size=10)
+FILL_HEADER = PatternFill("solid", fgColor=COR_AZUL_ESCURO)
+FILL_DESTAQUE = PatternFill("solid", fgColor=COR_AMARELO)
+BORDA_FINA = Side(border_style="thin", color="D0D0D0")
+BORDA = Border(left=BORDA_FINA, right=BORDA_FINA, top=BORDA_FINA, bottom=BORDA_FINA)
+
+FORMATO_BRL = 'R$ #,##0.00;[Red]-R$ #,##0.00;"-"'
+FORMATO_DATA = "DD/MM/YYYY"
+FORMATO_PCT = '0.0%'
 
 
-def _formatar_cabecalho(ws, num_colunas: int, linha: int = 1):
-    """Aplica formatação padrão de cabeçalho."""
-    for col_idx in range(1, num_colunas + 1):
-        c = ws.cell(row=linha, column=col_idx)
-        c.fill = HEADER_FILL
-        c.font = HEADER_FONT
-        c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
-    ws.row_dimensions[linha].height = 30
+def _aplicar_estilo_header(ws, n_colunas: int, linha: int = 1):
+    for col in range(1, n_colunas + 1):
+        cell = ws.cell(row=linha, column=col)
+        cell.font = FONTE_HEADER
+        cell.fill = FILL_HEADER
+        cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        cell.border = BORDA
+    ws.row_dimensions[linha].height = 28
 
 
-def _escrever_df(ws, df: pd.DataFrame, comeco_linha: int = 1):
-    """Escreve DataFrame na worksheet, com formatação."""
+def _ajustar_larguras(ws, df: pd.DataFrame, max_width: int = 40):
+    for i, col in enumerate(df.columns, start=1):
+        # tamanho baseado no header e nos primeiros valores
+        valores = [str(col)] + [str(v) for v in df[col].head(50).tolist()]
+        largura = min(max(len(v) for v in valores) + 2, max_width)
+        ws.column_dimensions[get_column_letter(i)].width = max(largura, 12)
+
+
+def _escrever_dataframe(ws, df: pd.DataFrame, inicio_linha: int = 1):
+    """Escreve um DataFrame em uma worksheet, com estilo de header e formato BRL/data."""
     if df.empty:
-        ws.cell(row=comeco_linha, column=1, value="(nenhum registro encontrado)").font = ARIAL
+        ws.cell(row=inicio_linha, column=1, value="(nenhum registro)").font = Font(
+            italic=True, color="808080"
+        )
+        return inicio_linha + 1
+
+    # Header
+    for i, col in enumerate(df.columns, start=1):
+        ws.cell(row=inicio_linha, column=i, value=str(col))
+    _aplicar_estilo_header(ws, len(df.columns), linha=inicio_linha)
+
+    # Body
+    COLS_MOEDA_SUFIXOS = ("valor", "diferenca", "total banco", "total sistema",
+                          "total conciliado", "falta conciliar", "falta lancar",
+                          "conciliado c/ divergência", "conciliado com divergência")
+    COLS_PCT_SUFIXOS = ("percentual conciliado", "percentual_conciliado")
+
+    def _is_col_moeda(nome: str) -> bool:
+        n = nome.lower()
+        # Bate quando "valor" aparece como token, não dentro de outras palavras
+        return any(n == s or n.startswith(s + " ") or n.endswith(" " + s) or s in n.split(" ")
+                   for s in COLS_MOEDA_SUFIXOS)
+
+    def _is_col_pct(nome: str) -> bool:
+        return nome.lower() in COLS_PCT_SUFIXOS
+
+    for row_idx, (_, row) in enumerate(df.iterrows(), start=inicio_linha + 1):
+        for col_idx, col_name in enumerate(df.columns, start=1):
+            val = row[col_name]
+            cell = ws.cell(row=row_idx, column=col_idx)
+            if pd.isna(val):
+                cell.value = None
+            elif isinstance(val, pd.Timestamp) or isinstance(val, datetime):
+                cell.value = val.to_pydatetime() if hasattr(val, "to_pydatetime") else val
+                cell.number_format = FORMATO_DATA
+            elif _is_col_moeda(str(col_name)) and isinstance(val, (int, float)):
+                cell.value = float(val)
+                cell.number_format = FORMATO_BRL
+            elif _is_col_pct(str(col_name)) and isinstance(val, (int, float)):
+                cell.value = float(val) / 100.0
+                cell.number_format = FORMATO_PCT
+            else:
+                cell.value = val
+            cell.font = FONTE_BODY
+            cell.border = BORDA
+            # zebra
+            if row_idx % 2 == 0:
+                cell.fill = PatternFill("solid", fgColor=COR_CINZA_CLARO)
+
+    _ajustar_larguras(ws, df)
+    ws.freeze_panes = ws.cell(row=inicio_linha + 1, column=1)
+    return row_idx + 1
+
+
+def _aba_resumo_geral(wb: Workbook, resultado: "ResultadoConciliacao"):
+    ws = wb.create_sheet("Resumo Geral")
+    kpis = resultado.kpis_globais()
+
+    ws.cell(row=1, column=1, value="CONCILIAÇÃO BANCÁRIA — RESUMO GERAL").font = Font(
+        name="Arial", bold=True, size=16, color=COR_AZUL_ESCURO
+    )
+    ws.cell(row=2, column=1, value=f"Data de referência: "
+            f"{resultado.data_referencia.strftime('%d/%m/%Y')}").font = FONTE_BODY
+    ws.cell(row=3, column=1, value=f"Tolerância de data: ±{resultado.tolerancia_dias} dia(s)").font = FONTE_BODY
+    ws.cell(row=4, column=1, value=f"Contas processadas: {', '.join(resultado.contas_processadas)}").font = FONTE_BODY
+
+    linhas = [
+        ("INDICADOR", "VALOR", "header"),
+        ("Total Extrato Bancário", kpis["total_extrato_bancario"], "moeda"),
+        ("Total Extrato Sistema/Sankhya", kpis["total_extrato_sistema"], "moeda"),
+        ("Total Conciliado", kpis["total_conciliado"], "moeda"),
+        ("Falta Conciliar (no Sistema)", kpis["falta_conciliar"], "moeda"),
+        ("Falta Lançar (no Banco)", kpis["falta_lancar"], "moeda"),
+        ("Valor Conciliado com Divergência", kpis["valor_divergencia"], "moeda"),
+        ("Percentual Conciliado", kpis["percentual_conciliado"] / 100.0, "pct"),
+        ("", "", "vazio"),
+        ("Qtde Registros Banco", kpis["qtd_registros_banco"], "int"),
+        ("Qtde Registros Sistema", kpis["qtd_registros_sistema"], "int"),
+        ("Qtde Conciliados", kpis["qtd_conciliados"], "int"),
+        ("Qtde Pendentes Banco", kpis["qtd_pendentes_banco"], "int"),
+        ("Qtde Pendentes Sistema", kpis["qtd_pendentes_sistema"], "int"),
+        ("Qtde Divergências", kpis["qtd_divergencias"], "int"),
+    ]
+    linha_atual = 6
+    for label, valor, kind in linhas:
+        c1 = ws.cell(row=linha_atual, column=1, value=label)
+        c2 = ws.cell(row=linha_atual, column=2, value=valor)
+        if kind == "header":
+            c1.font = FONTE_HEADER
+            c1.fill = FILL_HEADER
+            c2.font = FONTE_HEADER
+            c2.fill = FILL_HEADER
+        elif kind == "moeda":
+            c1.font = Font(name="Arial", bold=True, size=11, color=COR_AZUL_ESCURO)
+            c2.number_format = FORMATO_BRL
+            c2.font = FONTE_BODY
+        elif kind == "pct":
+            c1.font = Font(name="Arial", bold=True, size=11, color=COR_AZUL_ESCURO)
+            c2.number_format = FORMATO_PCT
+            c2.font = FONTE_BODY
+            c2.fill = FILL_DESTAQUE
+        elif kind == "int":
+            c1.font = FONTE_BODY
+            c2.number_format = "#,##0"
+            c2.font = FONTE_BODY
+        linha_atual += 1
+
+    ws.column_dimensions["A"].width = 38
+    ws.column_dimensions["B"].width = 22
+
+
+def _aba_resumo_por_banco(wb: Workbook, resultado: "ResultadoConciliacao"):
+    ws = wb.create_sheet("Resumo por Banco")
+    kpis_pb = resultado.kpis_por_banco()
+    if not kpis_pb:
+        ws.cell(row=1, column=1, value="(nenhuma conta processada)").font = Font(italic=True)
         return
 
-    rows = list(dataframe_to_rows(df, index=False, header=True))
-    for r_idx, row in enumerate(rows, start=comeco_linha):
-        for c_idx, val in enumerate(row, start=1):
-            cell = ws.cell(row=r_idx, column=c_idx, value=val)
-            cell.font = ARIAL
-            if isinstance(val, (int, float)) and r_idx > comeco_linha:
-                if "valor" in str(df.columns[c_idx - 1]).lower() or "diferen" in str(df.columns[c_idx - 1]).lower():
-                    cell.number_format = 'R$ #,##0.00;[Red]-R$ #,##0.00'
+    rows = []
+    for conta, k in kpis_pb.items():
+        rows.append({
+            "Conta": conta,
+            "Total Banco": k["total_extrato_bancario"],
+            "Total Sistema": k["total_extrato_sistema"],
+            "Total Conciliado": k["total_conciliado"],
+            "Falta Conciliar": k["falta_conciliar"],
+            "Falta Lançar": k["falta_lancar"],
+            "Conciliado c/ Divergência": k["valor_divergencia"],
+            "Percentual Conciliado": k["percentual_conciliado"],
+            "Qtde Banco": k["qtd_registros_banco"],
+            "Qtde Sistema": k["qtd_registros_sistema"],
+            "Qtde Conciliados": k["qtd_conciliados"],
+            "Qtde Pendentes Banco": k["qtd_pendentes_banco"],
+            "Qtde Pendentes Sistema": k["qtd_pendentes_sistema"],
+        })
+    df = pd.DataFrame(rows)
+    _escrever_dataframe(ws, df)
 
-    _formatar_cabecalho(ws, len(df.columns), linha=comeco_linha)
 
-    # Ajuste de largura: simples, baseado no tamanho do header
-    for c_idx, col_name in enumerate(df.columns, start=1):
-        max_len = max(
-            [len(str(col_name))]
-            + [len(str(v)) for v in df.iloc[:, c_idx - 1].head(50).tolist() if pd.notna(v)]
-        )
-        ws.column_dimensions[get_column_letter(c_idx)].width = min(max(max_len + 2, 12), 50)
+def _aba_conciliadas(wb: Workbook, resultado: "ResultadoConciliacao"):
+    ws = wb.create_sheet("Conciliadas")
+    if resultado.conciliados.empty:
+        _escrever_dataframe(ws, pd.DataFrame())
+        return
+    cols = [
+        "banco_data", "banco_conta", "banco_historico", "banco_documento", "banco_valor",
+        "sistema_data", "sistema_historico", "sistema_documento", "sistema_valor",
+        "dias_diferenca", "status", "motivo",
+    ]
+    cols_existentes = [c for c in cols if c in resultado.conciliados.columns]
+    df = resultado.conciliados[cols_existentes].copy()
+    df.columns = [c.replace("_", " ").title() for c in df.columns]
+    _escrever_dataframe(ws, df)
 
-    ws.freeze_panes = ws.cell(row=comeco_linha + 1, column=1)
 
-
-def _consolidar_pendencias(
-    resultados: dict,
-    pendencias_anteriores: pd.DataFrame,
-    data_referencia: datetime,
-) -> pd.DataFrame:
-    """Monta a aba 'Pendências Consolidadas' — input do próximo dia.
-
-    Combina:
-    - Pendências detectadas hoje (banco e sistema)
-    - Pendências anteriores que AINDA não foram resolvidas
-    """
-    blocos = []
-
-    pb = resultados.get("pendentes_banco", pd.DataFrame())
+def _aba_pendentes(wb: Workbook, resultado: "ResultadoConciliacao"):
+    ws = wb.create_sheet("Pendentes de Conciliação")
+    pb = resultado.pendentes_banco.copy()
+    ps = resultado.pendentes_sistema.copy()
     if not pb.empty:
-        blocos.append(
-            pd.DataFrame(
-                {
-                    "data": pb["data"],
-                    "historico": pb["historico"],
-                    "valor": pb["valor"],
-                    "conta": pb["conta"],
-                    "origem": "banco",
-                    "tipo_pendencia": "Falta baixar no sistema",
-                    "data_primeira_deteccao": data_referencia,
-                    "dias_pendente": 0,
-                }
-            )
-        )
-
-    ps = resultados.get("pendentes_sistema", pd.DataFrame())
+        pb["origem"] = "Banco (falta lançar no Sistema)"
     if not ps.empty:
-        blocos.append(
-            pd.DataFrame(
-                {
-                    "data": ps["data"],
-                    "historico": ps["historico"],
-                    "valor": ps["valor"],
-                    "conta": ps["conta"],
-                    "origem": "sistema",
-                    "tipo_pendencia": "Falta no banco / Lançamento indevido",
-                    "data_primeira_deteccao": data_referencia,
-                    "dias_pendente": 0,
-                }
-            )
-        )
+        ps["origem"] = "Sistema (falta no Banco)"
+    df = pd.concat([pb, ps], ignore_index=True)
+    if df.empty:
+        _escrever_dataframe(ws, df)
+        return
+    cols = ["origem", "data", "conta", "historico", "documento", "valor", "tipo", "natureza"]
+    cols = [c for c in cols if c in df.columns]
+    df = df[cols]
+    df.columns = [c.title() for c in df.columns]
+    _escrever_dataframe(ws, df)
 
-    # Pendências anteriores que ainda estão pendentes
-    if not pendencias_anteriores.empty:
-        ainda_pendentes = pendencias_anteriores.copy()
-        ainda_pendentes["dias_pendente"] = (
-            (data_referencia - ainda_pendentes["data_primeira_deteccao"]).dt.days
-        )
-        blocos.append(ainda_pendentes)
 
-    if not blocos:
-        return pd.DataFrame(
-            columns=[
-                "data",
-                "historico",
-                "valor",
-                "conta",
-                "origem",
-                "tipo_pendencia",
-                "data_primeira_deteccao",
-                "dias_pendente",
-            ]
-        )
+def _aba_divergencias(wb: Workbook, resultado: "ResultadoConciliacao"):
+    ws = wb.create_sheet("Conciliadas com Divergência")
+    if resultado.divergencias.empty:
+        _escrever_dataframe(ws, pd.DataFrame())
+        return
+    df = resultado.divergencias.copy()
+    cols = [
+        "data", "conta", "historico_banco", "valor_banco", "historico_sistema",
+        "valor_sistema", "diferenca", "status", "motivo",
+    ]
+    cols = [c for c in cols if c in df.columns]
+    df = df[cols]
+    df.columns = [c.replace("_", " ").title() for c in df.columns]
+    _escrever_dataframe(ws, df)
 
-    return (
-        pd.concat(blocos, ignore_index=True)
-        .sort_values(["dias_pendente", "data"], ascending=[False, True])
-        .reset_index(drop=True)
-    )
+
+def _aba_nao_pertence(wb: Workbook, resultado: "ResultadoConciliacao"):
+    ws = wb.create_sheet("Não Pertence à Conta")
+    df = resultado.nao_pertence.copy()
+    if df.empty:
+        _escrever_dataframe(ws, df)
+        return
+    df.columns = [c.replace("_", " ").title() for c in df.columns]
+    _escrever_dataframe(ws, df)
+
+
+def _aba_por_tipo(wb: Workbook, resultado: "ResultadoConciliacao", tipo: str, nome_aba: str):
+    """Cria uma aba com os lançamentos de um tipo específico (Boleto, Pix, etc)."""
+    ws = wb.create_sheet(nome_aba)
+    frames = []
+    if not resultado.banco_completo.empty:
+        df_b = resultado.banco_completo[resultado.banco_completo["tipo"] == tipo].copy()
+        if not df_b.empty:
+            df_b["origem"] = "Banco"
+            frames.append(df_b)
+    if not resultado.sistema_completo.empty:
+        df_s = resultado.sistema_completo[resultado.sistema_completo["tipo"] == tipo].copy()
+        if not df_s.empty:
+            df_s["origem"] = "Sistema"
+            frames.append(df_s)
+    if not frames:
+        _escrever_dataframe(ws, pd.DataFrame())
+        return
+    df = pd.concat(frames, ignore_index=True)
+    cols = ["origem", "data", "conta", "historico", "documento", "valor", "natureza"]
+    cols = [c for c in cols if c in df.columns]
+    df = df[cols]
+    df.columns = [c.title() for c in df.columns]
+    _escrever_dataframe(ws, df)
+
+
+def _aba_natureza(wb: Workbook, resultado: "ResultadoConciliacao", natureza: str, nome_aba: str):
+    ws = wb.create_sheet(nome_aba)
+    frames = []
+    if not resultado.banco_completo.empty:
+        df_b = resultado.banco_completo[resultado.banco_completo["natureza"] == natureza].copy()
+        if not df_b.empty:
+            df_b["origem"] = "Banco"
+            frames.append(df_b)
+    if not resultado.sistema_completo.empty:
+        df_s = resultado.sistema_completo[resultado.sistema_completo["natureza"] == natureza].copy()
+        if not df_s.empty:
+            df_s["origem"] = "Sistema"
+            frames.append(df_s)
+    if not frames:
+        _escrever_dataframe(ws, pd.DataFrame())
+        return
+    df = pd.concat(frames, ignore_index=True)
+    cols = ["origem", "data", "conta", "historico", "documento", "valor", "tipo"]
+    cols = [c for c in cols if c in df.columns]
+    df = df[cols]
+    df.columns = [c.title() for c in df.columns]
+    _escrever_dataframe(ws, df)
+
+
+def _aba_duplicidades(wb: Workbook, resultado: "ResultadoConciliacao"):
+    ws = wb.create_sheet("Duplicidades")
+    df = resultado.duplicidades.copy()
+    if df.empty:
+        _escrever_dataframe(ws, df)
+        return
+    df.columns = [c.title() for c in df.columns]
+    _escrever_dataframe(ws, df)
+
+
+def _aba_sugestoes(wb: Workbook, resultado: "ResultadoConciliacao"):
+    ws = wb.create_sheet("Sugestões Fuzzy")
+    df = resultado.sugestoes_fuzzy.copy()
+    if df.empty:
+        _escrever_dataframe(ws, df)
+        return
+    df.columns = [c.replace("_", " ").title() for c in df.columns]
+    _escrever_dataframe(ws, df)
+
+
+def _aba_pendencias_consolidadas(wb: Workbook, resultado: "ResultadoConciliacao",
+                                   pendencias_anteriores: pd.DataFrame):
+    """Aba que serve como INPUT do próximo dia."""
+    ws = wb.create_sheet("Pendências Consolidadas")
+    # Pendências atuais + anteriores
+    frames = []
+    if not resultado.pendentes_banco.empty:
+        df_b = resultado.pendentes_banco.copy()
+        df_b["origem"] = "Banco"
+        df_b["dias_pendente"] = (resultado.data_referencia - df_b["data"]).dt.days
+        frames.append(df_b)
+    if not resultado.pendentes_sistema.empty:
+        df_s = resultado.pendentes_sistema.copy()
+        df_s["origem"] = "Sistema"
+        df_s["dias_pendente"] = (resultado.data_referencia - df_s["data"]).dt.days
+        frames.append(df_s)
+    if pendencias_anteriores is not None and not pendencias_anteriores.empty:
+        df_a = pendencias_anteriores.copy()
+        if "origem" not in df_a.columns:
+            df_a["origem"] = "Anterior"
+        frames.append(df_a)
+    if not frames:
+        _escrever_dataframe(ws, pd.DataFrame())
+        return
+    df = pd.concat(frames, ignore_index=True)
+    cols_preferidas = [
+        "origem", "data", "conta", "historico", "documento", "valor",
+        "tipo", "natureza", "dias_pendente",
+    ]
+    cols_existentes = [c for c in cols_preferidas if c in df.columns]
+    df = df[cols_existentes]
+    df.columns = [c.replace("_", " ").title() for c in df.columns]
+    _escrever_dataframe(ws, df)
+
+
+def _aba_auditoria(wb: Workbook, resultado: "ResultadoConciliacao", execucao: dict | None):
+    ws = wb.create_sheet("Auditoria")
+    rows = [
+        {"Campo": "Data de execução", "Valor": datetime.now().strftime("%d/%m/%Y %H:%M:%S")},
+        {"Campo": "Data de referência", "Valor": resultado.data_referencia.strftime("%d/%m/%Y")},
+        {"Campo": "Contas processadas", "Valor": ", ".join(resultado.contas_processadas)},
+        {"Campo": "Qtde contas", "Valor": len(resultado.contas_processadas)},
+        {"Campo": "Tolerância de data (dias)", "Valor": resultado.tolerancia_dias},
+        {"Campo": "Linhas banco", "Valor": len(resultado.banco_completo)},
+        {"Campo": "Linhas sistema", "Valor": len(resultado.sistema_completo)},
+        {"Campo": "Conciliados", "Valor": len(resultado.conciliados)},
+        {"Campo": "Pendentes banco", "Valor": len(resultado.pendentes_banco)},
+        {"Campo": "Pendentes sistema", "Valor": len(resultado.pendentes_sistema)},
+        {"Campo": "Divergências", "Valor": len(resultado.divergencias)},
+        {"Campo": "Duplicidades (grupos)", "Valor": len(resultado.duplicidades)},
+        {"Campo": "Não pertence à conta", "Valor": len(resultado.nao_pertence)},
+    ]
+    if execucao:
+        rows.append({"Campo": "ID Execução", "Valor": execucao.get("id", "")})
+        rows.append({"Campo": "Versão", "Valor": execucao.get("versao", "")})
+        rows.append({"Campo": "Status", "Valor": execucao.get("status", "processado")})
+    df = pd.DataFrame(rows)
+    _escrever_dataframe(ws, df)
 
 
 def gerar_relatorio_excel(
-    resultados: dict,
-    contas_processadas: list[str],
-    data_referencia: datetime,
+    resultado: "ResultadoConciliacao",
     pendencias_anteriores: pd.DataFrame | None = None,
+    execucao: dict | None = None,
 ) -> bytes:
-    """Gera o relatório Excel completo.
-
-    Parameters
-    ----------
-    resultados : dict com chaves:
-        conciliados, pendentes_banco, pendentes_sistema,
-        divergencia_valor, duplicidades, banco_errado, sugestoes_fuzzy
-    contas_processadas : lista de contas que foram conciliadas
-    data_referencia : data da conciliação (data do extrato)
-    pendencias_anteriores : DataFrame de pendências carregado do dia anterior
-
-    Returns
-    -------
-    bytes do arquivo .xlsx
-    """
-    if pendencias_anteriores is None:
-        pendencias_anteriores = pd.DataFrame()
-
+    """Gera o relatório Excel multi-aba e retorna os bytes do arquivo."""
     wb = Workbook()
+    # Remove a aba default
     wb.remove(wb.active)
 
-    # ========== Aba 1: Resumo Executivo ==========
-    ws = wb.create_sheet("Resumo Executivo")
-    ws["A1"] = "RELATÓRIO DE CONCILIAÇÃO BANCÁRIA"
-    ws["A1"].font = TITLE_FONT
-    ws.merge_cells("A1:D1")
+    _aba_resumo_geral(wb, resultado)
+    _aba_resumo_por_banco(wb, resultado)
+    _aba_conciliadas(wb, resultado)
+    _aba_pendentes(wb, resultado)
+    _aba_divergencias(wb, resultado)
+    _aba_nao_pertence(wb, resultado)
+    _aba_por_tipo(wb, resultado, "Boleto", "Boletos")
+    _aba_por_tipo(wb, resultado, "Pix", "Pix")
+    _aba_por_tipo(wb, resultado, "Tarifa", "Tarifas")
+    _aba_natureza(wb, resultado, "Pagamento", "Pagamentos")
+    _aba_natureza(wb, resultado, "Recebimento", "Recebimentos")
+    _aba_duplicidades(wb, resultado)
+    _aba_sugestoes(wb, resultado)
+    if pendencias_anteriores is None:
+        pendencias_anteriores = pd.DataFrame()
+    _aba_pendencias_consolidadas(wb, resultado, pendencias_anteriores)
+    _aba_auditoria(wb, resultado, execucao)
 
-    ws["A3"] = "Data de referência:"
-    ws["B3"] = data_referencia.strftime("%d/%m/%Y")
-    ws["A4"] = "Gerado em:"
-    ws["B4"] = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-    ws["A5"] = "Contas processadas:"
-    ws["B5"] = ", ".join(contas_processadas) if contas_processadas else "(todas)"
-    for cell in ["A3", "A4", "A5", "B3", "B4", "B5"]:
-        ws[cell].font = ARIAL
-    for cell in ["A3", "A4", "A5"]:
-        ws[cell].font = Font(name="Arial", size=10, bold=True)
-
-    # Tabela de KPIs
-    linha = 7
-    ws.cell(row=linha, column=1, value="Indicador").font = HEADER_FONT
-    ws.cell(row=linha, column=2, value="Quantidade").font = HEADER_FONT
-    ws.cell(row=linha, column=3, value="Valor Total (R$)").font = HEADER_FONT
-    for col in [1, 2, 3]:
-        ws.cell(row=linha, column=col).fill = HEADER_FILL
-        ws.cell(row=linha, column=col).alignment = Alignment(horizontal="center")
-
-    kpis = [
-        ("✅ Lançamentos conciliados", "conciliados", "valor"),
-        ("❌ Pendências no banco (falta baixar)", "pendentes_banco", "valor"),
-        ("❌ Pendências no sistema (indevidos)", "pendentes_sistema", "valor"),
-        ("⚠️ Divergências de valor", "divergencia_valor", "valor_banco"),
-        ("🔁 Duplicidades", "duplicidades", "valor"),
-        ("🏦 Banco errado (suspeitos)", "banco_errado", "valor"),
-        ("💡 Sugestões fuzzy", "sugestoes_fuzzy", "valor_banco"),
-    ]
-
-    for idx, (label, key, col_valor) in enumerate(kpis):
-        linha = 8 + idx
-        df = resultados.get(key, pd.DataFrame())
-        qtd = len(df)
-        total = df[col_valor].sum() if (not df.empty and col_valor in df.columns) else 0
-        ws.cell(row=linha, column=1, value=label).font = ARIAL
-        ws.cell(row=linha, column=2, value=qtd).font = ARIAL
-        c_val = ws.cell(row=linha, column=3, value=float(total))
-        c_val.font = ARIAL
-        c_val.number_format = 'R$ #,##0.00;[Red]-R$ #,##0.00'
-
-    ws.column_dimensions["A"].width = 45
-    ws.column_dimensions["B"].width = 15
-    ws.column_dimensions["C"].width = 22
-
-    # ========== Demais abas (dados detalhados) ==========
-    abas_dados = [
-        ("Conciliados", "conciliados"),
-        ("Pendências Banco", "pendentes_banco"),
-        ("Pendências Sistema", "pendentes_sistema"),
-        ("Divergência Valor", "divergencia_valor"),
-        ("Duplicidades", "duplicidades"),
-        ("Banco Errado", "banco_errado"),
-        ("Sugestões Fuzzy", "sugestoes_fuzzy"),
-    ]
-
-    for nome_aba, chave in abas_dados:
-        ws = wb.create_sheet(nome_aba)
-        df = resultados.get(chave, pd.DataFrame())
-        # Remove colunas internas (_row_id, etc.) só para exibição
-        if not df.empty:
-            df_show = df.drop(
-                columns=[c for c in df.columns if c.startswith("_")],
-                errors="ignore",
-            )
-            # Formata datas
-            for c in df_show.columns:
-                if pd.api.types.is_datetime64_any_dtype(df_show[c]):
-                    df_show[c] = df_show[c].dt.strftime("%d/%m/%Y")
-            _escrever_df(ws, df_show)
-        else:
-            _escrever_df(ws, df)
-
-    # ========== Aba 9: Pendências Consolidadas (INPUT do dia seguinte) ==========
-    ws = wb.create_sheet("Pendências Consolidadas")
-    consolidado = _consolidar_pendencias(resultados, pendencias_anteriores, data_referencia)
-
-    if not consolidado.empty:
-        consolidado_show = consolidado.copy()
-        consolidado_show.columns = [
-            "Data",
-            "Histórico",
-            "Valor",
-            "Conta",
-            "Origem",
-            "Tipo de Pendência",
-            "Data 1ª Detecção",
-            "Dias Pendente",
-        ]
-        for c in ["Data", "Data 1ª Detecção"]:
-            if c in consolidado_show.columns:
-                consolidado_show[c] = pd.to_datetime(consolidado_show[c]).dt.strftime("%d/%m/%Y")
-        _escrever_df(ws, consolidado_show)
-    else:
-        _escrever_df(ws, consolidado)
-
-    # Salva em memória
-    buffer = BytesIO()
-    wb.save(buffer)
-    buffer.seek(0)
-    return buffer.getvalue()
+    buf = io.BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    return buf.getvalue()
 
 
-def salvar_relatorio(
-    resultados: dict,
-    contas_processadas: list[str],
-    data_referencia: datetime,
-    caminho: str | Path,
-    pendencias_anteriores: pd.DataFrame | None = None,
-) -> Path:
-    """Versão que salva em disco (útil para testes/CLI)."""
-    bytes_xlsx = gerar_relatorio_excel(
-        resultados, contas_processadas, data_referencia, pendencias_anteriores
+def gerar_relatorio_excel_de_conta(
+    resultado: "ResultadoConciliacao",
+    conta: str,
+) -> bytes:
+    """Versão filtrada por uma única conta (mesmas abas, dados só dessa conta)."""
+    # Cria um sub-resultado filtrado
+    from copy import copy
+    sub = copy(resultado)
+    sub.banco_completo = (
+        resultado.banco_completo[resultado.banco_completo["conta"] == conta].copy()
+        if not resultado.banco_completo.empty else resultado.banco_completo
     )
-    caminho = Path(caminho)
-    caminho.write_bytes(bytes_xlsx)
-    return caminho
+    sub.sistema_completo = (
+        resultado.sistema_completo[resultado.sistema_completo["conta"] == conta].copy()
+        if not resultado.sistema_completo.empty else resultado.sistema_completo
+    )
+    sub.conciliados = resultado.conciliados_da_conta(conta)
+    sub.pendentes_banco = (
+        resultado.pendentes_banco[resultado.pendentes_banco["conta"] == conta].copy()
+        if not resultado.pendentes_banco.empty else resultado.pendentes_banco
+    )
+    sub.pendentes_sistema = (
+        resultado.pendentes_sistema[resultado.pendentes_sistema["conta"] == conta].copy()
+        if not resultado.pendentes_sistema.empty else resultado.pendentes_sistema
+    )
+    sub.divergencias = resultado.divergencias_da_conta(conta)
+    sub.nao_pertence = resultado.nao_pertence_da_conta(conta)
+    sub.contas_processadas = [conta]
+    return gerar_relatorio_excel(sub)
+
+
+def gerar_csvs_zip(resultado: "ResultadoConciliacao") -> bytes:
+    """Gera um zip com todos os DataFrames principais em CSV separado."""
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        def _add(df: pd.DataFrame, nome: str):
+            if df is None or df.empty:
+                zf.writestr(f"{nome}.csv", "")
+                return
+            csv_str = df.to_csv(index=False, sep=";", encoding="utf-8-sig", decimal=",")
+            zf.writestr(f"{nome}.csv", csv_str)
+
+        _add(resultado.conciliados, "conciliadas")
+        _add(resultado.pendentes_banco, "pendentes_banco")
+        _add(resultado.pendentes_sistema, "pendentes_sistema")
+        _add(resultado.divergencias, "divergencias")
+        _add(resultado.nao_pertence, "nao_pertence_a_conta")
+        _add(resultado.duplicidades, "duplicidades")
+        _add(resultado.sugestoes_fuzzy, "sugestoes_fuzzy")
+        _add(resultado.banco_completo, "banco_completo")
+        _add(resultado.sistema_completo, "sistema_completo")
+
+        # KPIs como CSV
+        kpis_rows = []
+        for conta, k in resultado.kpis_por_banco().items():
+            row = {"conta": conta, **k}
+            kpis_rows.append(row)
+        if kpis_rows:
+            _add(pd.DataFrame(kpis_rows), "kpis_por_banco")
+
+    buf.seek(0)
+    return buf.getvalue()

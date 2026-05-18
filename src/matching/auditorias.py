@@ -1,151 +1,161 @@
-"""
-Auditorias adicionais que rodam em cima dos dados normalizados.
+"""Auditorias complementares ao match exato.
 
-Tipos implementados (todos solicitados pelo usuário):
-
-1. DUPLICIDADES — mesmo (data, valor, histórico, conta) aparecendo +1x
-   no MESMO LADO (banco ou sistema). Detecta lançamentos contábeis
-   duplicados que podem distorcer o caixa.
-
-2. DIVERGÊNCIA DE VALOR — mesma (data, histórico-similar, conta) mas
-   com valores DIFERENTES entre banco e sistema. Útil para pegar erros
-   de digitação ou diferenças de centavos.
-
-3. BANCO BAIXADO NO BANCO ERRADO — mesmo (data, valor) aparece no
-   banco da conta A e no sistema da conta B. Indica que a equipe
-   lançou na conta errada.
+- **Divergência de valor**: mesma data + histórico (após normalização) + conta,
+  mas valores diferentes — só dispara quando a chave coincide e o valor não.
+- **Duplicidades**: SÓ quando data + histórico + valor + documento são todos
+  iguais entre múltiplos lançamentos. Valores iguais sozinhos NÃO são duplicidade.
+- **Não pertence à conta**: lançamento existe na ponta "errada" — está em uma conta,
+  mas tem candidato perfeito (data + valor) em OUTRA conta.
 """
 
 from __future__ import annotations
 
+import re
+
 import pandas as pd
 
 
-def detectar_duplicidades(df: pd.DataFrame, lado: str) -> pd.DataFrame:
-    """Encontra registros duplicados em (data, valor, historico, conta).
+def _normalizar_historico(s: str) -> str:
+    """Caixa alta + colapsa espaços em branco."""
+    if not isinstance(s, str):
+        return ""
+    return re.sub(r"\s+", " ", s.strip().upper())
 
-    Parameters
-    ----------
-    df : DataFrame de banco ou sistema
-    lado : 'banco' ou 'sistema' (apenas para rotular)
 
-    Returns
-    -------
-    DataFrame com as linhas duplicadas (todas as ocorrências), incluindo
-    coluna '_qtd_duplicatas'.
-    """
-    if df.empty:
-        return df.assign(_qtd_duplicatas=pd.Series(dtype=int), _lado=lado)
-
-    chaves = ["data", "valor", "historico", "conta"]
-    grupos = df.groupby(chaves).size().reset_index(name="_qtd_duplicatas")
-    duplicados = grupos[grupos["_qtd_duplicatas"] > 1]
-
-    if duplicados.empty:
-        return df.iloc[0:0].assign(_qtd_duplicatas=0, _lado=lado)
-
-    result = df.merge(duplicados, on=chaves, how="inner")
-    result["_lado"] = lado
-    return result.sort_values(chaves).reset_index(drop=True)
+def _centavos(v: float) -> int:
+    return round(float(v) * 100)
 
 
 def detectar_divergencia_valor(
-    banco: pd.DataFrame,
-    sistema: pd.DataFrame,
-    tolerancia_centavos: float = 0.01,
+    pendentes_banco: pd.DataFrame,
+    pendentes_sistema: pd.DataFrame,
 ) -> pd.DataFrame:
-    """Encontra lançamentos com mesma data + conta + histórico similar mas
-    valores diferentes entre banco e sistema.
+    """Pares que têm mesma data + histórico (normalizado) + conta mas valores diferentes.
 
-    Usa similaridade de histórico com substring match simples (primeiros
-    20 caracteres). É deliberadamente conservador — diferenças entre
-    "PIX ENVIADO GRUPO LLE" e "LLE FERRAGENS" NÃO viram divergência.
+    Rodado SOBRE PENDÊNCIAS (linhas que não casaram no match exato).
     """
-    if banco.empty or sistema.empty:
+    if pendentes_banco.empty or pendentes_sistema.empty:
         return pd.DataFrame()
 
-    # Considera apenas histórico bem parecido (mesmos primeiros 15 caracteres)
-    b = banco.copy()
-    s = sistema.copy()
-    b["_hist_prefix"] = b["historico"].str.upper().str.slice(0, 15)
-    s["_hist_prefix"] = s["historico"].str.upper().str.slice(0, 15)
+    b = pendentes_banco.copy()
+    s = pendentes_sistema.copy()
+    b["_hist_norm"] = b["historico"].apply(_normalizar_historico)
+    s["_hist_norm"] = s["historico"].apply(_normalizar_historico)
 
     merged = b.merge(
         s,
-        on=["data", "conta", "_hist_prefix"],
+        left_on=["data", "_hist_norm", "conta"],
+        right_on=["data", "_hist_norm", "conta"],
         suffixes=("_banco", "_sistema"),
+        how="inner",
     )
-
+    # Só interessa se o valor for diferente
+    merged = merged[merged["valor_banco"] != merged["valor_sistema"]].copy()
     if merged.empty:
         return pd.DataFrame()
 
-    diferentes = merged[
-        (merged["valor_banco"] - merged["valor_sistema"]).abs() > tolerancia_centavos
-    ].copy()
-
-    if diferentes.empty:
-        return pd.DataFrame()
-
-    diferentes["diferenca"] = (
-        diferentes["valor_banco"] - diferentes["valor_sistema"]
-    ).round(2)
-
-    return diferentes[
-        [
-            "data",
-            "conta",
-            "historico_banco",
-            "valor_banco",
-            "historico_sistema",
-            "valor_sistema",
-            "diferenca",
-        ]
-    ].reset_index(drop=True)
+    merged["diferenca"] = merged["valor_banco"] - merged["valor_sistema"]
+    merged["status"] = "Conciliada com Divergência"
+    merged["motivo"] = "Mesma data/histórico/conta com valores diferentes"
+    return merged.drop(columns=["_hist_norm"]).reset_index(drop=True)
 
 
-def detectar_banco_errado(
+def detectar_duplicidades(
     banco: pd.DataFrame,
     sistema: pd.DataFrame,
 ) -> pd.DataFrame:
-    """Detecta lançamentos baixados na conta errada.
+    """Duplicidades ESTRITAS: data + histórico + valor + documento todos iguais.
 
-    Lógica:
-    - Para cada lançamento PENDENTE no banco (conta A), procura no
-      sistema lançamentos com mesma (data, valor) mas conta DIFERENTE.
-    - Se encontrar, é forte indício de que o operador baixou na conta
-      errada.
+    Para cada lado, agrupa por (data, histórico normalizado, valor, documento) e
+    sinaliza quando o mesmo grupo aparece MAIS DE UMA VEZ.
 
-    Recebe os DataFrames JÁ FILTRADOS por pendência (idealmente os
-    resultados de conciliar_exato).
+    Returns:
+        DataFrame com colunas: origem, data, historico, documento, valor, ocorrencias.
+        Linha por grupo duplicado (não por lançamento individual).
     """
-    if banco.empty or sistema.empty:
+    resultados = []
+    for nome, df in [("banco", banco), ("sistema", sistema)]:
+        if df.empty:
+            continue
+        d = df.copy()
+        d["_hist_norm"] = d["historico"].apply(_normalizar_historico)
+        d["_doc_norm"] = d["documento"].fillna("").astype(str).str.strip().str.upper()
+        # Apenas lançamentos COM documento (sem documento ≠ duplicidade — é tarifa avulsa, etc)
+        d_com_doc = d[d["_doc_norm"].str.len() > 0]
+        if d_com_doc.empty:
+            continue
+        agrupado = d_com_doc.groupby(
+            ["data", "_hist_norm", "valor", "_doc_norm", "conta"]
+        ).size().reset_index(name="ocorrencias")
+        duplicados = agrupado[agrupado["ocorrencias"] > 1].copy()
+        if duplicados.empty:
+            continue
+        duplicados["origem"] = nome
+        duplicados = duplicados.rename(
+            columns={"_hist_norm": "historico", "_doc_norm": "documento"}
+        )
+        resultados.append(duplicados)
+
+    if not resultados:
         return pd.DataFrame()
+    return pd.concat(resultados, ignore_index=True)[
+        ["origem", "data", "conta", "historico", "documento", "valor", "ocorrencias"]
+    ]
 
-    merged = banco.merge(
-        sistema,
-        on=["data", "valor"],
-        suffixes=("_banco", "_sistema"),
-    )
 
-    suspeitos = merged[merged["conta_banco"] != merged["conta_sistema"]].copy()
+def detectar_nao_pertence(
+    pendentes_banco: pd.DataFrame,
+    pendentes_sistema: pd.DataFrame,
+    tolerancia_dias: int = 2,
+) -> pd.DataFrame:
+    """Pendências que parecem ter sido lançadas na conta ERRADA.
 
-    if suspeitos.empty:
+    Para cada pendência em uma conta, busca um candidato com mesma data±tolerância
+    e mesmo valor em OUTRA conta na ponta oposta.
+
+    Returns:
+        DataFrame com colunas: origem, data, conta_atual, conta_sugerida, historico,
+        documento, valor.
+    """
+    suspeitos = []
+
+    for origem, lado, oposto in [
+        ("banco", pendentes_banco, pendentes_sistema),
+        ("sistema", pendentes_sistema, pendentes_banco),
+    ]:
+        if lado.empty or oposto.empty:
+            continue
+        oposto = oposto.copy()
+        oposto["_centavos"] = oposto["valor"].apply(_centavos)
+        op_por_valor = oposto.groupby("_centavos")
+
+        for _, linha in lado.iterrows():
+            cent = _centavos(linha["valor"])
+            if cent not in op_por_valor.groups:
+                continue
+            candidatos = oposto.loc[op_por_valor.groups[cent]]
+            # Mesma data ± tolerância, mas conta DIFERENTE
+            candidatos = candidatos[
+                (candidatos["conta"] != linha["conta"])
+                & ((candidatos["data"] - linha["data"]).abs().dt.days <= tolerancia_dias)
+            ]
+            if candidatos.empty:
+                continue
+            # Escolhe a melhor (menor diff de dia)
+            candidatos = candidatos.copy()
+            candidatos["_diff"] = (candidatos["data"] - linha["data"]).abs().dt.days
+            melhor = candidatos.sort_values("_diff").iloc[0]
+            suspeitos.append({
+                "origem": origem,
+                "data": linha["data"],
+                "conta_atual": linha["conta"],
+                "conta_sugerida": melhor["conta"],
+                "historico": linha["historico"],
+                "documento": linha.get("documento", ""),
+                "valor": linha["valor"],
+                "dias_diff": int(melhor["_diff"]),
+            })
+
+    if not suspeitos:
         return pd.DataFrame()
-
-    return suspeitos[
-        [
-            "data",
-            "valor",
-            "conta_banco",
-            "historico_banco",
-            "conta_sistema",
-            "historico_sistema",
-            "usuario",
-        ]
-    ].rename(
-        columns={
-            "conta_banco": "conta_correta_banco",
-            "conta_sistema": "conta_baixada_sistema",
-            "usuario": "usuario_que_baixou",
-        }
-    ).reset_index(drop=True)
+    return pd.DataFrame(suspeitos)

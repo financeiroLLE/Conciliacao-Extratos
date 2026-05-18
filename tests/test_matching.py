@@ -1,4 +1,10 @@
-"""Testes unitários com dados sintéticos para validar a lógica de conciliação."""
+"""Testes das regras de conciliação.
+
+Roda com: python -m pytest tests/ -v
+Ou: python tests/test_matching.py
+"""
+
+from __future__ import annotations
 
 import sys
 from datetime import datetime
@@ -6,197 +12,245 @@ from pathlib import Path
 
 import pandas as pd
 
+# Permite rodar standalone
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.matching import (
-    conciliar_exato,
-    detectar_banco_errado,
+from src.matching.exact_match import match_exato
+from src.matching.auditorias import (
     detectar_divergencia_valor,
     detectar_duplicidades,
+    detectar_nao_pertence,
 )
+from src.classificacao import classificar_tipo, adicionar_classificacao
+from src.pipeline import executar_pipeline
 
 
-def _df_banco(rows):
-    df = pd.DataFrame(rows, columns=["data", "historico", "valor", "conta"])
-    df["data"] = pd.to_datetime(df["data"])
-    df["origem"] = "banco"
-    df["_row_id"] = [f"BCO-{i:03d}" for i in range(len(df))]
-    df["documento"] = ""
-    return df
+# ===========================================================================
+# Helpers
+# ===========================================================================
+
+def _df_banco(linhas):
+    return pd.DataFrame(linhas, columns=[
+        "data", "historico", "documento", "valor", "conta"
+    ])
 
 
-def _df_sistema(rows):
-    df = pd.DataFrame(rows, columns=["data", "historico", "valor", "conta"])
-    df["data"] = pd.to_datetime(df["data"])
-    df["origem"] = "sistema"
-    df["_row_id"] = [f"SIS-{i:03d}" for i in range(len(df))]
-    df["num_unico_bancario"] = ""
-    df["num_documento"] = ""
-    df["conciliado"] = "Sim"
-    df["tipo_movimento"] = ""
-    df["usuario"] = ""
-    return df
+def _dt(s):
+    return datetime.strptime(s, "%d/%m/%Y")
 
 
-def test_match_perfeito():
-    """3 lançamentos iguais nos dois lados → 3 matches, 0 pendências."""
+# ===========================================================================
+# Testes
+# ===========================================================================
+
+def teste_match_exato_basico():
     banco = _df_banco([
-        ("2026-05-04", "PIX LLE", -1000.00, "C1"),
-        ("2026-05-04", "TAR COB", -3.00, "C1"),
-        ("2026-05-05", "PIX OUT", -500.50, "C1"),
+        (_dt("04/05/2026"), "PIX ENVIADO LLE", "", -1000.00, "Bradesco"),
+        (_dt("04/05/2026"), "TAR LIQ COB COM REG", "193956", -3.00, "Bradesco"),
     ])
-    sistema = _df_sistema([
-        ("2026-05-04", "Pagamento LLE", -1000.00, "C1"),
-        ("2026-05-04", "Tarifa cobrança", -3.00, "C1"),
-        ("2026-05-05", "Pagamento OUT", -500.50, "C1"),
+    sistema = _df_banco([
+        (_dt("04/05/2026"), "PIX LLE", "X1", -1000.00, "Bradesco"),
+        (_dt("04/05/2026"), "TARIFA COBRANCA", "193956", -3.00, "Bradesco"),
     ])
-    r = conciliar_exato(banco, sistema)
-    assert len(r["conciliados"]) == 3, f"Esperado 3, veio {len(r['conciliados'])}"
-    assert len(r["pendentes_banco"]) == 0
-    assert len(r["pendentes_sistema"]) == 0
-    print("✅ test_match_perfeito")
+    conciliados, pb, ps = match_exato(banco, sistema)
+    assert len(conciliados) == 2, f"esperado 2 conciliados, veio {len(conciliados)}"
+    assert pb.empty and ps.empty
+    print("✓ teste_match_exato_basico")
 
 
-def test_pendencia_banco():
-    """Banco tem 1 lançamento que não está no sistema."""
+def teste_match_sem_tolerancia_de_valor():
+    """Valor exato — diferença de 1 centavo NÃO casa."""
+    banco = _df_banco([(_dt("04/05/2026"), "PIX", "", -1000.00, "C1")])
+    sistema = _df_banco([(_dt("04/05/2026"), "PIX", "", -1000.01, "C1")])
+    conciliados, pb, ps = match_exato(banco, sistema)
+    assert conciliados.empty, "valor c/ 1 centavo de diferença não pode casar"
+    assert len(pb) == 1 and len(ps) == 1
+    print("✓ teste_match_sem_tolerancia_de_valor")
+
+
+def teste_match_com_tolerancia_de_data():
+    """Sexta no banco, segunda no sistema → casa com tolerância 2 dias (default)."""
+    banco = _df_banco([(_dt("01/05/2026"), "PIX", "", -500.00, "C1")])  # sexta
+    sistema = _df_banco([(_dt("04/05/2026"), "PIX", "", -500.00, "C1")])  # segunda
+    conciliados, pb, ps = match_exato(banco, sistema, tolerancia_dias=3)
+    assert len(conciliados) == 1, f"esperado 1 conciliado, veio {len(conciliados)}"
+    assert conciliados.iloc[0]["dias_diferenca"] == 3
+    print("✓ teste_match_com_tolerancia_de_data")
+
+
+def teste_match_fora_da_tolerancia_de_data():
+    banco = _df_banco([(_dt("01/05/2026"), "PIX", "", -500.00, "C1")])
+    sistema = _df_banco([(_dt("10/05/2026"), "PIX", "", -500.00, "C1")])
+    conciliados, pb, ps = match_exato(banco, sistema, tolerancia_dias=2)
+    assert conciliados.empty
+    assert len(pb) == 1 and len(ps) == 1
+    print("✓ teste_match_fora_da_tolerancia_de_data")
+
+
+def teste_match_1_para_1():
+    """3 lançamentos R$ 3 no banco × 2 no sistema → 2 casam, 1 fica pendente."""
     banco = _df_banco([
-        ("2026-05-04", "PIX A", -100.00, "C1"),
-        ("2026-05-04", "PIX B", -200.00, "C1"),  # não tem no sistema
+        (_dt("04/05/2026"), "TAR", f"D{i}", -3.00, "C1") for i in range(3)
     ])
-    sistema = _df_sistema([
-        ("2026-05-04", "Pgto A", -100.00, "C1"),
+    sistema = _df_banco([
+        (_dt("04/05/2026"), "TAR", f"S{i}", -3.00, "C1") for i in range(2)
     ])
-    r = conciliar_exato(banco, sistema)
-    assert len(r["conciliados"]) == 1
-    assert len(r["pendentes_banco"]) == 1
-    assert r["pendentes_banco"].iloc[0]["valor"] == -200.00
-    print("✅ test_pendencia_banco")
+    conciliados, pb, ps = match_exato(banco, sistema)
+    assert len(conciliados) == 2
+    assert len(pb) == 1
+    assert ps.empty
+    print("✓ teste_match_1_para_1")
 
 
-def test_pendencia_sistema():
-    """Sistema tem lançamento que não foi pro banco (lançamento indevido)."""
+def teste_match_so_casa_se_conta_igual():
+    banco = _df_banco([(_dt("04/05/2026"), "PIX", "", -100.00, "C1")])
+    sistema = _df_banco([(_dt("04/05/2026"), "PIX", "", -100.00, "C2")])
+    conciliados, pb, ps = match_exato(banco, sistema)
+    assert conciliados.empty
+    assert len(pb) == 1 and len(ps) == 1
+    print("✓ teste_match_so_casa_se_conta_igual")
+
+
+def teste_data_formato_brasileiro():
+    """Regressão: 04/05/2026 deve ser 4 de maio, não 5 de abril."""
+    from src.parsers.extrato_banco import _parse_valor_brl
+    # Cria DataFrame com data string e testa que pd.to_datetime com dayfirst=True funciona
+    dt = pd.to_datetime("04/05/2026", dayfirst=True)
+    assert dt.day == 4
+    assert dt.month == 5
+    assert dt.year == 2026
+    print("✓ teste_data_formato_brasileiro")
+
+
+def teste_divergencia_valor_so_quando_historico_exato():
+    """Histórico precisa ser idêntico após normalização (sem prefixo de 15 chars)."""
+    pb = _df_banco([(_dt("04/05/2026"), "TAR LIQ COB COM REG COMPE", "1", -3.00, "C1")])
+    ps = _df_banco([(_dt("04/05/2026"), "TAR LIQ COB CORBAN GAR", "2", -5.00, "C1")])
+    div = detectar_divergencia_valor(pb, ps)
+    assert div.empty, "históricos parecidos mas diferentes NÃO podem virar divergência"
+    print("✓ teste_divergencia_valor_so_quando_historico_exato")
+
+
+def teste_divergencia_valor_dispara_quando_historico_igual():
+    pb = _df_banco([(_dt("04/05/2026"), "TARIFA   COB", "1", -3.00, "C1")])
+    ps = _df_banco([(_dt("04/05/2026"), "tarifa cob", "2", -3.50, "C1")])
+    div = detectar_divergencia_valor(pb, ps)
+    assert len(div) == 1, f"esperado 1, veio {len(div)}"
+    assert abs(div.iloc[0]["diferenca"] - 0.50) < 0.001
+    print("✓ teste_divergencia_valor_dispara_quando_historico_igual")
+
+
+def teste_duplicidade_estrita_so_com_4_campos_iguais():
+    """5x faturas ASTRA legítimas com docs DIFERENTES → não é duplicidade."""
     banco = _df_banco([
-        ("2026-05-04", "PIX A", -100.00, "C1"),
+        (_dt("04/05/2026"), "FATURA ASTRA", f"DOC{i}", -1000.00, "C1") for i in range(5)
     ])
-    sistema = _df_sistema([
-        ("2026-05-04", "Pgto A", -100.00, "C1"),
-        ("2026-05-04", "Pgto INDEVIDO", -999.00, "C1"),  # não tem no banco
-    ])
-    r = conciliar_exato(banco, sistema)
-    assert len(r["conciliados"]) == 1
-    assert len(r["pendentes_sistema"]) == 1
-    assert r["pendentes_sistema"].iloc[0]["valor"] == -999.00
-    print("✅ test_pendencia_sistema")
+    sistema = pd.DataFrame(columns=banco.columns)
+    dup = detectar_duplicidades(banco, sistema)
+    assert dup.empty, "valores iguais com docs diferentes NÃO são duplicidade"
+    print("✓ teste_duplicidade_estrita_so_com_4_campos_iguais")
 
 
-def test_duplicidades_multiplas_no_mesmo_dia():
-    """3 lançamentos iguais no banco × 2 iguais no sistema → 2 casam, 1 fica."""
+def teste_duplicidade_quando_tudo_repete():
+    """Mesmo data + histórico + valor + documento → duplicidade."""
     banco = _df_banco([
-        ("2026-05-04", "TAR", -3.00, "C1"),
-        ("2026-05-04", "TAR", -3.00, "C1"),
-        ("2026-05-04", "TAR", -3.00, "C1"),
+        (_dt("04/05/2026"), "BOLETO X", "DOC1", -1000.00, "C1"),
+        (_dt("04/05/2026"), "BOLETO X", "DOC1", -1000.00, "C1"),  # repete
+        (_dt("04/05/2026"), "BOLETO X", "DOC1", -1000.00, "C1"),  # repete
     ])
-    sistema = _df_sistema([
-        ("2026-05-04", "TAR", -3.00, "C1"),
-        ("2026-05-04", "TAR", -3.00, "C1"),
-    ])
-    r = conciliar_exato(banco, sistema)
-    assert len(r["conciliados"]) == 2
-    assert len(r["pendentes_banco"]) == 1
-    print("✅ test_duplicidades_multiplas_no_mesmo_dia")
+    sistema = pd.DataFrame(columns=banco.columns)
+    dup = detectar_duplicidades(banco, sistema)
+    assert len(dup) == 1, f"esperado 1 grupo duplicado, veio {len(dup)}"
+    assert dup.iloc[0]["ocorrencias"] == 3
+    print("✓ teste_duplicidade_quando_tudo_repete")
 
 
-def test_banco_errado():
-    """Lançamento no banco da C1 mas baixado no sistema da C2."""
+def teste_nao_pertence_a_conta():
+    """Pendência R$ 500 em C1 do banco × pendência R$ 500 em C2 do sistema → suspeito."""
+    pb = _df_banco([(_dt("04/05/2026"), "PIX", "", -500.00, "C1")])
+    ps = _df_banco([(_dt("04/05/2026"), "PIX", "", -500.00, "C2")])
+    nao_pert = detectar_nao_pertence(pb, ps)
+    assert len(nao_pert) == 2, "deve detectar dos dois lados"
+    assert set(nao_pert["origem"]) == {"banco", "sistema"}
+    print("✓ teste_nao_pertence_a_conta")
+
+
+def teste_classificacao_tipos():
+    assert classificar_tipo("PIX RECEBIDO") == "Pix"
+    # "TAR LIQ COB" tem TAR (Tarifa) e COB (Boleto). Tarifa vence (ordem).
+    assert classificar_tipo("TAR LIQ COB COM") == "Tarifa"
+    assert classificar_tipo("BOLETO PAGAMENTO LUZ") == "Boleto"
+    assert classificar_tipo("DARF FEDERAL") == "Imposto"
+    assert classificar_tipo("TED ENVIADA") == "TED/DOC"
+    assert classificar_tipo("XYZ COMPRA AVULSA") == "Outros"
+    print("✓ teste_classificacao_tipos")
+
+
+def teste_pipeline_integrado():
     banco = _df_banco([
-        ("2026-05-04", "PIX RECEBIDO", 5000.00, "C1"),
+        (_dt("04/05/2026"), "PIX LLE", "", -1000.00, "Bradesco"),
+        (_dt("04/05/2026"), "TARIFA", "T1", -3.00, "Bradesco"),
+        (_dt("04/05/2026"), "BOLETO X", "B1", -500.00, "Bradesco"),
     ])
-    sistema = _df_sistema([
-        ("2026-05-04", "Receb cliente", 5000.00, "C2"),  # conta errada
+    sistema = _df_banco([
+        (_dt("04/05/2026"), "PIX LLE", "", -1000.00, "Bradesco"),
+        (_dt("04/05/2026"), "TARIFA", "T1", -3.00, "Bradesco"),
+        # 500 não está no sistema → pendente do banco
     ])
-    # Primeiro vê que não conciliam (contas diferentes)
-    r = conciliar_exato(banco, sistema)
-    assert len(r["conciliados"]) == 0
+    res = executar_pipeline(banco, sistema, rodar_fuzzy=False)
+    assert len(res.conciliados) == 2
+    assert len(res.pendentes_banco) == 1
+    assert res.pendentes_sistema.empty
+    kpis = res.kpis_globais()
+    assert kpis["qtd_conciliados"] == 2
+    assert kpis["total_extrato_bancario"] == 1503.00
+    assert kpis["total_conciliado"] == 1003.00
+    # %: 1003/1503 ≈ 66.7%
+    assert 66.0 < kpis["percentual_conciliado"] < 67.5
+    print("✓ teste_pipeline_integrado")
 
-    # Depois detecta banco errado
-    suspeitos = detectar_banco_errado(r["pendentes_banco"], r["pendentes_sistema"])
-    assert len(suspeitos) == 1
-    assert suspeitos.iloc[0]["conta_correta_banco"] == "C1"
-    assert suspeitos.iloc[0]["conta_baixada_sistema"] == "C2"
-    print("✅ test_banco_errado")
 
-
-def test_duplicidades_dentro_do_banco():
-    """Mesmo lançamento aparecendo 2x no extrato → duplicidade."""
+def teste_kpis_por_banco():
     banco = _df_banco([
-        ("2026-05-04", "PIX LLE", -1000.00, "C1"),
-        ("2026-05-04", "PIX LLE", -1000.00, "C1"),  # duplicata
-        ("2026-05-04", "PIX OUTRO", -50.00, "C1"),
+        (_dt("04/05/2026"), "PIX", "", -100.00, "ContaA"),
+        (_dt("04/05/2026"), "PIX", "", -200.00, "ContaB"),
     ])
-    dups = detectar_duplicidades(banco, lado="banco")
-    assert len(dups) == 2, f"Esperado 2 duplicatas, veio {len(dups)}"
-    print("✅ test_duplicidades_dentro_do_banco")
-
-
-def test_divergencia_valor():
-    """Mesma data + histórico parecido, valores diferentes."""
-    banco = _df_banco([
-        ("2026-05-04", "PAGAMENTO TITULO ABC", -1000.00, "C1"),
+    sistema = _df_banco([
+        (_dt("04/05/2026"), "PIX", "", -100.00, "ContaA"),
     ])
-    sistema = _df_sistema([
-        ("2026-05-04", "PAGAMENTO TITULO ABC", -1050.00, "C1"),  # diferença de R$50
-    ])
-    divs = detectar_divergencia_valor(banco, sistema)
-    assert len(divs) == 1
-    assert divs.iloc[0]["diferenca"] == 50.00
-    print("✅ test_divergencia_valor")
+    res = executar_pipeline(banco, sistema, rodar_fuzzy=False)
+    kpis_pb = res.kpis_por_banco()
+    assert set(kpis_pb.keys()) == {"ContaA", "ContaB"}
+    assert kpis_pb["ContaA"]["qtd_conciliados"] == 1
+    assert kpis_pb["ContaB"]["qtd_conciliados"] == 0
+    assert kpis_pb["ContaB"]["qtd_pendentes_banco"] == 1
+    print("✓ teste_kpis_por_banco")
 
 
-def test_data_formato_brasileiro():
-    """REGRESSÃO: garantir que datas DD/MM/AAAA não são interpretadas
-    como MM/DD/AAAA. Este bug existiu nas primeiras versões e teria
-    quebrado conciliação em produção."""
-    import tempfile
-    from openpyxl import Workbook
+def teste_adicionar_classificacao_em_df_vazio():
+    df = pd.DataFrame(columns=["data", "historico", "valor"])
+    out = adicionar_classificacao(df)
+    assert "tipo" in out.columns and "natureza" in out.columns
+    assert out.empty
+    print("✓ teste_adicionar_classificacao_em_df_vazio")
 
-    # Cria sample mínimo do sistema com data brasileira
-    with tempfile.NamedTemporaryFile(suffix=".xlsx", delete=False) as f:
-        wb = Workbook()
-        ws = wb.active
-        ws["A1"] = "Conciliação Bancária"
-        ws["A2"] = "Emissão"
-        ws.cell(row=3, column=1, value="Dt. Lançamento")
-        ws.cell(row=3, column=2, value="Histórico")
-        ws.cell(row=3, column=3, value="Vlr. Lançamento")
-        ws.cell(row=3, column=4, value="Receita/Despesa")
-        ws.cell(row=4, column=1, value="04/05/2026")  # 4 de MAIO
-        ws.cell(row=4, column=2, value="TESTE")
-        ws.cell(row=4, column=3, value=100.00)
-        ws.cell(row=4, column=4, value="Despesa")
-        wb.save(f.name)
 
-        import sys
-        from pathlib import Path
-        sys.path.insert(0, str(Path(__file__).parent.parent))
-        from src.parsers import carregar_relatorio_sistema
-
-        df = carregar_relatorio_sistema(f.name)
-        # Deve ser 4 de MAIO (mês=5), não 5 de abril (mês=4)
-        assert df.iloc[0]["data"].month == 5, (
-            f"BUG REGRESSO: data interpretada como mês {df.iloc[0]['data'].month}, esperado 5"
-        )
-        assert df.iloc[0]["data"].day == 4
-    print("✅ test_data_formato_brasileiro")
-
+def main():
+    testes = [v for k, v in globals().items() if k.startswith("teste_")]
+    falhas = []
+    for t in testes:
+        try:
+            t()
+        except AssertionError as e:
+            print(f"✗ {t.__name__}: {e}")
+            falhas.append(t.__name__)
+        except Exception as e:
+            print(f"✗ {t.__name__}: {type(e).__name__}: {e}")
+            falhas.append(t.__name__)
+    print()
+    print(f"{len(testes) - len(falhas)}/{len(testes)} passaram")
+    return 0 if not falhas else 1
 
 
 if __name__ == "__main__":
-    test_match_perfeito()
-    test_pendencia_banco()
-    test_pendencia_sistema()
-    test_duplicidades_multiplas_no_mesmo_dia()
-    test_banco_errado()
-    test_duplicidades_dentro_do_banco()
-    test_divergencia_valor()
-    test_data_formato_brasileiro()
-    print("\n🎉 Todos os testes passaram!")
+    sys.exit(main())

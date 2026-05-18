@@ -1,4 +1,6 @@
-"""Teste de fumaça do pipeline com os arquivos reais do usuário."""
+"""Teste end-to-end: gera samples, roda pipeline, gera Excel multi-aba."""
+
+from __future__ import annotations
 
 import sys
 from datetime import datetime
@@ -8,62 +10,63 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from src.parsers import carregar_extrato_banco, carregar_relatorio_sistema
 from src.pipeline import executar_pipeline
-from src.reports import salvar_relatorio
+from src.reports import gerar_relatorio_excel, gerar_csvs_zip
 
 
 def main():
-    print("=" * 70)
-    print("TESTE DE FUMAÇA — Pipeline com arquivos reais")
-    print("=" * 70)
+    # Garante que samples existem
+    from tests.gerar_samples import main as gerar
+    gerar()
 
-    # 1. Carrega extrato bancário
-    print("\n[1/4] Carregando extrato bancário...")
-    banco = carregar_extrato_banco(
-        "/mnt/user-data/uploads/05_Maio_COPIA.xlsx",
-        conta="CC-12345",  # nome fictício da conta
+    SAMPLES = Path("data/samples")
+
+    print("\n=== Lendo extratos ===")
+    banco_a = carregar_extrato_banco(
+        SAMPLES / "Bradesco-CC-12345.xlsx", conta="Bradesco-CC-12345"
     )
-    print(f"    Linhas: {len(banco)}")
-    print(f"    Datas: {banco['data'].min().date()} a {banco['data'].max().date()}")
-    print(f"    Valor total: R$ {banco['valor'].sum():,.2f}")
-    print(f"    Amostra:")
-    print(banco.head(3).to_string())
-
-    # 2. Carrega sistema
-    # Usa a versão convertida (xlsx) porque é mais robusta
-    print("\n[2/4] Carregando relatório do sistema...")
-    sistema = carregar_relatorio_sistema("/home/claude/Conciliacao_BancariaTESTE.xlsx")
-    # Como o arquivo de teste não tem coluna de conta, atribuímos manualmente
-    sistema["conta"] = "CC-12345"
-    print(f"    Linhas: {len(sistema)}")
-    print(f"    Datas: {sistema['data'].min().date()} a {sistema['data'].max().date()}")
-    print(f"    Valor total: R$ {sistema['valor'].sum():,.2f}")
-    print(f"    Amostra:")
-    print(sistema.head(3).to_string())
-
-    # 3. Roda pipeline
-    print("\n[3/4] Executando pipeline...")
-    resultado = executar_pipeline(banco, sistema, rodar_fuzzy=True)
-    kpis = resultado.kpis()
-    print(f"    ✅ Conciliados: {kpis['total_conciliados']}")
-    print(f"    ❌ Pendências banco: {kpis['total_pendentes_banco']}")
-    print(f"    ❌ Pendências sistema: {kpis['total_pendentes_sistema']}")
-    print(f"    ⚠️  Divergências: {kpis['total_divergencias']}")
-    print(f"    🔁 Duplicidades: {kpis['total_duplicidades']}")
-    print(f"    🏦 Banco errado: {kpis['total_banco_errado']}")
-    print(f"    💡 Sugestões fuzzy: {kpis['total_sugestoes']}")
-
-    # 4. Gera Excel
-    print("\n[4/4] Gerando Excel...")
-    caminho = salvar_relatorio(
-        resultado.as_dict(),
-        contas_processadas=resultado.contas_processadas,
-        data_referencia=resultado.data_referencia,
-        caminho="/home/claude/relatorio_teste.xlsx",
+    banco_b = carregar_extrato_banco(
+        SAMPLES / "Itau-CC-67890.xlsx", conta="Itau-CC-67890"
     )
-    print(f"    Salvo em: {caminho}")
-    print(f"    Tamanho: {caminho.stat().st_size / 1024:.1f} KB")
+    import pandas as pd
+    banco = pd.concat([banco_a, banco_b], ignore_index=True)
+    print(f"Banco: {len(banco)} linhas em {banco['conta'].nunique()} contas")
 
-    print("\n✅ Pipeline executado com sucesso!")
+    sistema = carregar_relatorio_sistema(SAMPLES / "relatorio_sistema_exemplo.xlsx")
+    print(f"Sistema: {len(sistema)} linhas em {sistema['conta'].nunique()} contas")
+
+    print("\n=== Rodando pipeline ===")
+    resultado = executar_pipeline(
+        banco, sistema, data_referencia=datetime(2026, 5, 5)
+    )
+
+    kpis = resultado.kpis_globais()
+    print(f"\nKPIs globais:")
+    for k, v in kpis.items():
+        if isinstance(v, float):
+            print(f"  {k}: {v:.2f}")
+        else:
+            print(f"  {k}: {v}")
+
+    print(f"\nKPIs por banco:")
+    for conta, k in resultado.kpis_por_banco().items():
+        print(f"\n  [{conta}]")
+        print(f"    conciliados: {k['qtd_conciliados']} / pendentes_b: {k['qtd_pendentes_banco']} / pendentes_s: {k['qtd_pendentes_sistema']}")
+        print(f"    % conciliado: {k['percentual_conciliado']:.1f}%")
+
+    print("\n=== Gerando relatório Excel ===")
+    xlsx_bytes = gerar_relatorio_excel(resultado)
+    out = Path("data/outputs/teste_smoke.xlsx")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_bytes(xlsx_bytes)
+    print(f"Excel: {out} ({len(xlsx_bytes) / 1024:.1f} KB)")
+
+    print("\n=== Gerando CSVs zip ===")
+    zip_bytes = gerar_csvs_zip(resultado)
+    out_zip = Path("data/outputs/teste_smoke_csvs.zip")
+    out_zip.write_bytes(zip_bytes)
+    print(f"Zip CSV: {out_zip} ({len(zip_bytes) / 1024:.1f} KB)")
+
+    print("\n✓ Smoke test concluído")
 
 
 if __name__ == "__main__":

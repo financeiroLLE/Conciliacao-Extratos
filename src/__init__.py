@@ -1,3 +1,5 @@
-"""Sistema de Conciliação Bancária Automatizada."""
+"""Sistema de Conciliação Bancária — Grupo LLE."""
 
-__version__ = "0.1.0"
+from .pipeline import ResultadoConciliacao, executar_pipeline
+
+__all__ = ["ResultadoConciliacao", "executar_pipeline"]
