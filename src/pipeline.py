@@ -66,6 +66,7 @@ class ResultadoConciliacao:
             self.sistema_completo,
             self.falta_lancar_sankhya,
             self.usa_conciliado_sankhya,
+            self.excesso_sankhya,
         )
 
     def kpis_por_banco(self) -> dict[str, dict[str, Any]]:
@@ -81,7 +82,59 @@ class ResultadoConciliacao:
             _filtrar_conta(self.sistema_completo, conta),
             _filtrar_conta(self.falta_lancar_sankhya, conta) if self.usa_conciliado_sankhya else pd.DataFrame(),
             self.usa_conciliado_sankhya,
+            _filtrar_conta(self.excesso_sankhya, conta),
         )
+
+    def divergencias_sankhya_banco(self, conta: str | None = None) -> pd.DataFrame:
+        """v3.4: Visão consolidada de divergências entre Sankhya e Banco.
+
+        Une 3 origens:
+        - 'Sem par no banco': lançamentos do Sankhya com Conciliado=Não ou pendentes pós-match
+        - 'Excesso no Sankhya': Sankhya tem N>M lançamentos com mesma data+valor+conta
+        - 'Valor diferente': mesma chave (data+hist+conta), valor diferente
+
+        Deduplica por (data, valor, hist, conta) — uma linha pode aparecer em vários grupos.
+        """
+        frames = []
+
+        # 1) Sem par no banco
+        if self.usa_conciliado_sankhya and not self.falta_lancar_sankhya.empty:
+            df = _eh_movimentado(self.falta_lancar_sankhya)
+        else:
+            df = _eh_movimentado(self.pendentes_sistema)
+        if not df.empty:
+            d = df[["data", "valor", "historico", "conta"]].copy()
+            d["documento"] = df.get("documento", "")
+            d["origem_divergencia"] = "Sem par no banco"
+            frames.append(d)
+
+        # 2) Excesso no Sankhya
+        if not self.excesso_sankhya.empty:
+            d = self.excesso_sankhya[["data", "valor", "historico", "conta"]].copy()
+            d["documento"] = self.excesso_sankhya.get("documento", "")
+            d["origem_divergencia"] = "Excesso no Sankhya"
+            frames.append(d)
+
+        # 3) Valor diferente
+        if not self.divergencias.empty and "valor_sistema" in self.divergencias.columns:
+            d = self.divergencias[["data", "valor_sistema", "historico_sistema"]].copy()
+            d.columns = ["data", "valor", "historico"]
+            d["conta"] = self.divergencias.get("conta", "")
+            d["documento"] = self.divergencias.get("documento_sistema", "")
+            d["origem_divergencia"] = "Valor diferente"
+            frames.append(d)
+
+        if not frames:
+            return pd.DataFrame(columns=[
+                "data", "valor", "historico", "documento", "conta", "origem_divergencia"
+            ])
+        out = pd.concat(frames, ignore_index=True)
+        out = out.drop_duplicates(subset=["data", "valor", "historico", "conta"])
+        out = out.reset_index(drop=True)
+
+        if conta is not None:
+            out = out[out["conta"] == conta].copy()
+        return out
 
     def conciliados_da_conta(self, conta: str) -> pd.DataFrame:
         return _filtrar_conciliados(self.conciliados, conta)
@@ -195,6 +248,7 @@ def _calcular_kpis(
     sistema_completo: pd.DataFrame,
     falta_lancar_sankhya: pd.DataFrame,
     usa_conciliado_sankhya: bool,
+    excesso_sankhya: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
     banco_mov = _eh_movimentado(banco_completo)
     sistema_mov = _eh_movimentado(sistema_completo)
@@ -234,17 +288,51 @@ def _calcular_kpis(
     else:
         falta_conciliar_receitas = falta_conciliar_despesas = 0.0
 
-    # Falta Lançar (Sankhya Conciliado=Não OU pendentes do match)
+    # v3.4: DIVERGÊNCIA (Sankhya × Banco) — consolida 3 origens:
+    #   1. Sankhya com Conciliado=Não OU pendentes pós-match (Sankhya sem par no banco)
+    #   2. Excesso no Sankhya (mesma data+valor+conta, Sankhya tem mais que o banco)
+    #   3. Divergência de valor (mesma chave, valor diferente)
+    # As 3 podem se sobrepor, então deduplicamos pelo conjunto (data, valor, hist, conta).
     if usa_conciliado_sankhya and not falta_lancar_sankhya.empty:
-        fl_mov = _eh_movimentado(falta_lancar_sankhya)
+        sem_par_banco = _eh_movimentado(falta_lancar_sankhya)
     else:
-        fl_mov = _eh_movimentado(pendentes_sistema)
-    falta_lancar = _soma_abs(fl_mov)
-    if not fl_mov.empty:
-        falta_lancar_receitas = float(fl_mov[fl_mov["valor"] > 0]["valor"].sum())
-        falta_lancar_despesas = float(fl_mov[fl_mov["valor"] < 0]["valor"].abs().sum())
+        sem_par_banco = _eh_movimentado(pendentes_sistema)
+
+    # Junta com excesso e divergências de valor
+    frames_diverg = []
+    if not sem_par_banco.empty:
+        d = sem_par_banco[["data", "valor", "historico", "conta"]].copy()
+        d["origem_divergencia"] = "Sem par no banco"
+        frames_diverg.append(d)
+    if excesso_sankhya is not None and not excesso_sankhya.empty:
+        d = excesso_sankhya[["data", "valor", "historico", "conta"]].copy()
+        d["origem_divergencia"] = "Excesso no Sankhya"
+        frames_diverg.append(d)
+    if not divergencias.empty and "valor_sistema" in divergencias.columns:
+        d = divergencias[["data", "valor_sistema", "historico_sistema"]].copy()
+        d.columns = ["data", "valor", "historico"]
+        d["conta"] = divergencias.get("conta", "")
+        d["origem_divergencia"] = "Valor diferente"
+        frames_diverg.append(d)
+
+    if frames_diverg:
+        divergencia_total_df = pd.concat(frames_diverg, ignore_index=True)
+        # Dedup por (data, valor, hist, conta) — uma linha pode estar em 2 grupos
+        divergencia_total_df = divergencia_total_df.drop_duplicates(
+            subset=["data", "valor", "historico", "conta"]
+        )
+    else:
+        divergencia_total_df = pd.DataFrame(
+            columns=["data", "valor", "historico", "conta", "origem_divergencia"]
+        )
+
+    falta_lancar = float(divergencia_total_df["valor"].abs().sum()) if not divergencia_total_df.empty else 0.0
+    if not divergencia_total_df.empty:
+        falta_lancar_receitas = float(divergencia_total_df[divergencia_total_df["valor"] > 0]["valor"].sum())
+        falta_lancar_despesas = float(divergencia_total_df[divergencia_total_df["valor"] < 0]["valor"].abs().sum())
     else:
         falta_lancar_receitas = falta_lancar_despesas = 0.0
+    qtd_divergencia_total = int(len(divergencia_total_df))
 
     valor_divergencia = (
         float(divergencias["valor_banco"].abs().sum())
@@ -263,6 +351,13 @@ def _calcular_kpis(
         "falta_conciliar": falta_conciliar,
         "falta_conciliar_receitas": falta_conciliar_receitas,
         "falta_conciliar_despesas": falta_conciliar_despesas,
+        # v3.4: 'Divergência (Sankhya × Banco)' agrega 3 origens.
+        # Aliases novos:
+        "divergencia_sankhya_banco": falta_lancar,
+        "divergencia_sankhya_banco_receitas": falta_lancar_receitas,
+        "divergencia_sankhya_banco_despesas": falta_lancar_despesas,
+        "qtd_divergencia_sankhya_banco": qtd_divergencia_total,
+        # Aliases antigos (Falta Lançar) mantidos por retrocompat:
         "falta_lancar": falta_lancar,
         "falta_lancar_receitas": falta_lancar_receitas,
         "falta_lancar_despesas": falta_lancar_despesas,

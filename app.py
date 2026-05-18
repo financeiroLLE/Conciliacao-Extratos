@@ -775,11 +775,16 @@ def pagina_dashboard():
     cards2 = [
         card_kpi_html("Falta Conciliar", fmt_brl(kpis["falta_conciliar"]),
                       sub_falta_conciliar, classe="destaque-vermelho"),
-        card_kpi_html("Falta Lançar", fmt_brl(kpis["falta_lancar"]),
-                      sub_falta_lancar, classe="destaque-vermelho"),
-        card_kpi("Qtd c/ Divergência", fmt_int(kpis["qtd_divergencias"]),
-                 "lançamentos com divergência de valor",
-                 classe="destaque-amarelo" if kpis["qtd_divergencias"] > 0 else ""),
+        card_kpi_html("Divergência (Sankhya × Banco)",
+                      fmt_brl(kpis["divergencia_sankhya_banco"]),
+                      _card_falta_conciliar_vertical(
+                          kpis["divergencia_sankhya_banco_receitas"],
+                          kpis["divergencia_sankhya_banco_despesas"],
+                      ),
+                      classe="destaque-vermelho"),
+        card_kpi("Qtd Divergências", fmt_int(kpis["qtd_divergencia_sankhya_banco"]),
+                 "lançamentos do Sankhya sem par no banco",
+                 classe="destaque-amarelo" if kpis["qtd_divergencia_sankhya_banco"] > 0 else ""),
         investimentos_html,
     ]
     render_cards(cards2)
@@ -1151,11 +1156,16 @@ def tela_resultado():
     cards2 = [
         card_kpi_html("Falta Conciliar", fmt_brl(kpis["falta_conciliar"]),
                       sub_falta_conciliar, classe="destaque-vermelho"),
-        card_kpi_html("Falta Lançar", fmt_brl(kpis["falta_lancar"]),
-                      sub_falta_lancar, classe="destaque-vermelho"),
-        card_kpi("Qtd c/ Divergência", fmt_int(kpis["qtd_divergencias"]),
-                 "lançamentos com divergência de valor",
-                 classe="destaque-amarelo" if kpis["qtd_divergencias"] > 0 else ""),
+        card_kpi_html("Divergência (Sankhya × Banco)",
+                      fmt_brl(kpis["divergencia_sankhya_banco"]),
+                      _card_falta_conciliar_vertical(
+                          kpis["divergencia_sankhya_banco_receitas"],
+                          kpis["divergencia_sankhya_banco_despesas"],
+                      ),
+                      classe="destaque-vermelho"),
+        card_kpi("Qtd Divergências", fmt_int(kpis["qtd_divergencia_sankhya_banco"]),
+                 "lançamentos do Sankhya sem par no banco",
+                 classe="destaque-amarelo" if kpis["qtd_divergencia_sankhya_banco"] > 0 else ""),
         investimentos_html,
     ]
     render_cards(cards2)
@@ -1227,14 +1237,16 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
     cards2 = [
         card_kpi_html("Falta Conciliar", fmt_brl(k["falta_conciliar"]),
                       sub_fc, classe="destaque-vermelho"),
-        card_kpi_html("Falta Lançar", fmt_brl(k["falta_lancar"]),
+        card_kpi_html("Divergência (Sankhya × Banco)",
+                      fmt_brl(k["divergencia_sankhya_banco"]),
                       _card_falta_conciliar_vertical(
-                          k["falta_lancar_receitas"], k["falta_lancar_despesas"]
+                          k["divergencia_sankhya_banco_receitas"],
+                          k["divergencia_sankhya_banco_despesas"],
                       ),
                       classe="destaque-vermelho"),
-        card_kpi("Qtd c/ Divergência", fmt_int(k["qtd_divergencias"]),
-                 "lançamentos com divergência",
-                 classe="destaque-amarelo" if k["qtd_divergencias"] > 0 else ""),
+        card_kpi("Qtd Divergências", fmt_int(k["qtd_divergencia_sankhya_banco"]),
+                 "lançamentos do Sankhya sem par no banco",
+                 classe="destaque-amarelo" if k["qtd_divergencia_sankhya_banco"] > 0 else ""),
         investimentos_conta_html,
     ]
     render_cards(cards2)
@@ -1265,12 +1277,13 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
     aplic_conta = resultado.aplicacoes_resgates_da_conta(conta)
     poss_dup_conta = resultado.possiveis_duplicidades_da_conta(conta)
     excesso_conta = resultado.excesso_sankhya_da_conta(conta)
-    falta_lancar_conta = resultado.falta_lancar_da_conta(conta)
+    diverg_consolidada = resultado.divergencias_sankhya_banco(conta)
 
-    tabs_nomes = ["✅ Conciliadas", "⏳ Pendentes", "📤 Falta Lançar (Sankhya)",
+    tabs_nomes = ["✅ Conciliadas", "⏳ Pendentes",
+                  "⚠️ Divergências (Sankhya × Banco)",
                   "🏦 Não Pertence à Conta"]
     if not div_conta.empty:
-        tabs_nomes.append("⚠️ Conciliadas c/ Divergência")
+        tabs_nomes.append("💲 Diferença de Valor")
     if not poss_dup_conta.empty:
         tabs_nomes.append("🔍 Possíveis Duplicidades")
     if not excesso_conta.empty:
@@ -1287,7 +1300,7 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
         render_tab_pendentes(resultado, conta)
     idx += 1
     with tabs[idx]:
-        render_tab_falta_lancar(falta_lancar_conta, conta, k["fonte_falta_lancar"])
+        render_tab_divergencia_consolidada(diverg_consolidada, conta)
     idx += 1
     with tabs[idx]:
         render_tab_nao_pertence(resultado.nao_pertence_da_conta(conta), conta)
@@ -1523,18 +1536,42 @@ def render_tab_excesso_sankhya(df: pd.DataFrame, conta: str):
     _exibir_df(out, f"excesso_sankhya_{conta}")
 
 
+def render_tab_divergencia_consolidada(df: pd.DataFrame, conta: str):
+    """v3.4: Aba 'Divergências (Sankhya × Banco)' — visão consolidada."""
+    st.info(
+        "📌 **DIVERGÊNCIA = tudo o que o Sankhya tem a mais que o extrato bancário.** "
+        "O banco é a base da verdade. Inclui 3 origens:\n\n"
+        "- **Sem par no banco**: lançamentos do Sankhya que não casaram com nenhuma linha do banco "
+        "(marcados como `Conciliado=Não` ou pendentes pós-match).\n"
+        "- **Excesso no Sankhya**: mesma data+valor+conta aparece mais vezes no Sankhya do que no banco.\n"
+        "- **Valor diferente**: mesma chave (data+histórico+conta) com valor diferente entre Sankhya e Banco."
+    )
+    if df.empty:
+        st.success("🎉 Sem divergências — Sankhya está alinhado com o banco!")
+        return
+
+    # Resumo por origem
+    if "origem_divergencia" in df.columns:
+        resumo = df.groupby("origem_divergencia").agg(
+            quantidade=("valor", "count"),
+            total=("valor", lambda s: s.abs().sum()),
+        ).reset_index()
+        resumo.columns = ["Origem da Divergência", "Quantidade", "Valor Total"]
+        resumo["Valor Total"] = resumo["Valor Total"].apply(fmt_brl)
+        st.markdown("**Resumo por origem:**")
+        st.dataframe(resumo, use_container_width=True, hide_index=True)
+        st.write("")
+
+    cols = ["origem_divergencia", "data", "historico", "documento", "valor", "conta"]
+    cols = [c for c in cols if c in df.columns]
+    out = df[cols].copy()
+    out.columns = [c.replace("_", " ").title() for c in out.columns]
+    _exibir_df(out, f"divergencias_sankhya_banco_{conta}")
+
+
+# Mantido por retrocompat: redireciona para a nova visão consolidada
 def render_tab_falta_lancar(df: pd.DataFrame, conta: str, fonte: str):
-    """Aba 'Falta Lançar' com a fonte do dado claro."""
-    if fonte == "sankhya_conciliado_nao":
-        st.info(
-            "📌 Lançamentos do **Sankhya com `Conciliado=Não`** "
-            "(coluna do ERP). São registros que o sistema indica como ainda não conciliados."
-        )
-    else:
-        st.info(
-            "📌 Lançamentos do **Sankhya sem correspondência no banco** "
-            "(pendência após o match automático)."
-        )
+    """[DEPRECATED v3.4] Substituído por render_tab_divergencia_consolidada."""
     if df.empty:
         st.success("🎉 Nada para lançar — tudo conciliado!")
         return

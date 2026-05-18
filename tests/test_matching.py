@@ -505,6 +505,31 @@ def teste_excesso_sankhya_pos_match():
     print("✓ teste_excesso_sankhya_pos_match")
 
 
+def teste_divergencia_consolidada_aceita_receita():
+    """v3.4: 'Divergência (Sankhya × Banco)' aceita receita (valor > 0).
+
+    Cenário do print do usuário: lançamento de R$ 5.000 no Sankhya como receita,
+    sem par no banco. Deve aparecer como Receita (não como Despesa)."""
+    banco = _df_banco([
+        (_dt("14/05/2026"), "PIX", "", -200.00, "C1"),
+    ])
+    sistema = _df_banco([
+        (_dt("14/05/2026"), "PIX", "", -200.00, "C1"),  # casa
+        (_dt("14/05/2026"), "RECEITA EXTRA", "", 5000.00, "C1"),  # receita extra
+    ])
+    res = executar_pipeline(banco, sistema, rodar_fuzzy=False)
+    k = res.kpis_globais()
+    assert k["divergencia_sankhya_banco"] == 5000.00, \
+        f"esperado 5000, veio {k['divergencia_sankhya_banco']}"
+    assert k["divergencia_sankhya_banco_receitas"] == 5000.00, "receita errada"
+    assert k["divergencia_sankhya_banco_despesas"] == 0.0, "não deveria ter despesa"
+    # Tem que aparecer no detalhamento
+    div_df = res.divergencias_sankhya_banco()
+    assert len(div_df) == 1
+    assert div_df.iloc[0]["valor"] == 5000.00
+    print("✓ teste_divergencia_consolidada_aceita_receita")
+
+
 def main():
     testes = [v for k, v in globals().items() if k.startswith("teste_")]
     falhas = []
