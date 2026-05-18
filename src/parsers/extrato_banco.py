@@ -54,6 +54,31 @@ def _mapear_colunas(df: pd.DataFrame) -> dict[str, str]:
     return encontrados
 
 
+def _detectar_linha_cabecalho(df: pd.DataFrame, max_linhas: int = 20) -> int | None:
+    """v3.7: Procura nas primeiras `max_linhas` qual contém o cabeçalho real.
+
+    Critério: linha onde pelo menos 2 células batem com nomes canônicos
+    (data + valor, ou data + lançamento/histórico).
+    """
+    canonicos_aceitos = {
+        "data", "datalancamento", "dtlancamento",
+        "historico", "descricao", "memo", "lancamento", "movimentacao",
+        "documento", "doc", "numdoc", "numerodoc",
+        "valor", "valorr", "valorrs", "vlrlancamento", "vlr",
+    }
+    n = min(len(df), max_linhas)
+    for i in range(n):
+        linha = df.iloc[i]
+        batidas = 0
+        for celula in linha:
+            norm = _normalizar_nome_coluna(str(celula))
+            if norm in canonicos_aceitos:
+                batidas += 1
+                if batidas >= 2:
+                    return i
+    return None
+
+
 def _parse_data_robusto(serie: pd.Series, ano_referencia: int | None = None) -> pd.Series:
     """Parser de data que respeita formato brasileiro (DD/MM/YYYY) E formato ISO.
 
@@ -141,14 +166,23 @@ def carregar_extrato_banco(
         if df_aba.empty:
             continue
 
-        # Se a primeira linha contém os cabeçalhos (planilha sem header)
-        # tenta detectar tentando mapear; se não rolar, usa a primeira linha como header
+        # Remove colunas totalmente vazias (alguns extratos têm colunas-fantasma)
+        df_aba = df_aba.dropna(axis=1, how="all")
+        if df_aba.empty or len(df_aba.columns) == 0:
+            continue
+
+        # v3.7: alguns extratos (ex: Itaú PDF→XLS) têm várias linhas de metadados
+        # antes do cabeçalho real. Vamos procurar dinamicamente a linha que contém
+        # o cabeçalho (presença de 'Data' + 'Valor' ou 'Lançamento'/'Histórico').
         mapa = _mapear_colunas(df_aba)
         if "data" not in mapa or "valor" not in mapa:
-            # promove primeira linha a cabeçalho
-            df_aba.columns = [str(c) for c in df_aba.iloc[0].tolist()]
-            df_aba = df_aba.iloc[1:].reset_index(drop=True)
-            mapa = _mapear_colunas(df_aba)
+            # Procura nas primeiras 20 linhas qual delas é o cabeçalho real
+            header_linha = _detectar_linha_cabecalho(df_aba, max_linhas=20)
+            if header_linha is not None:
+                df_aba.columns = [str(c) for c in df_aba.iloc[header_linha].tolist()]
+                df_aba = df_aba.iloc[header_linha + 1:].reset_index(drop=True)
+                df_aba = df_aba.dropna(axis=1, how="all")
+                mapa = _mapear_colunas(df_aba)
 
         if "data" not in mapa or "valor" not in mapa:
             # aba não parece ser extrato — pula

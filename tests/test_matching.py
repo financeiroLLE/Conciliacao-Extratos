@@ -552,6 +552,42 @@ def teste_concat_multiplos_extratos_data_object():
     print("✓ teste_concat_multiplos_extratos_data_object")
 
 
+def teste_extrato_com_metadados_antes_do_cabecalho():
+    """v3.7: Extrato bancário com linhas de metadados (Nome, Agência, Data emissão...)
+    ANTES do cabeçalho real. O parser deve detectar dinamicamente a linha do header."""
+    import openpyxl
+    from io import BytesIO
+    from src.parsers import carregar_extrato_banco
+
+    # Simula extrato Itaú: várias linhas de metadados antes do cabeçalho
+    wb = openpyxl.Workbook()
+    ws = wb.active
+    # Linhas de metadados (10 linhas antes do cabeçalho real)
+    ws.append(["", "", "", "", "", "", ""])
+    ws.append(["", "Nome:", "", "", "L.L.E. FERRAGENS LTDA.", "Agência/Conta:", "0023/ 78861-5"])
+    ws.append(["", "", "", "", "", "", ""])
+    ws.append(["", "Data:", "", "", "15/05/2026", "Horário:", "08:05:39h"])
+    ws.append(["", "", "", "", "", "", ""])
+    ws.append(["", "Extrato de Conta Corrente", "", "", "", "", ""])
+    ws.append(["", "", "", "", "", "", ""])
+    # AGORA o cabeçalho real:
+    ws.append(["", "Data", "", "", "Lançamento", "Valor (R$)", "Saldo (R$)"])
+    # Dados:
+    ws.append(["", "14/05", "", "", "PIX RECEBIDO CLIENTE A", -1000.00, ""])
+    ws.append(["", "14/05", "", "", "TED ENVIADA FORNECEDOR", -500.00, ""])
+    ws.append(["", "14/05", "", "", "S A L D O", None, "5000"])
+
+    buf = BytesIO()
+    wb.save(buf)
+    buf.seek(0)
+    buf.name = "extrato_itau_metadados.xlsx"
+
+    df = carregar_extrato_banco(buf, conta="itau", ano_referencia=2026)
+    assert len(df) == 2, f"esperava 2 linhas, veio {len(df)}"
+    assert df["valor"].abs().sum() == 1500.00, f"soma errada: {df['valor'].abs().sum()}"
+    print("✓ teste_extrato_com_metadados_antes_do_cabecalho")
+
+
 def main():
     testes = [v for k, v in globals().items() if k.startswith("teste_")]
     falhas = []
