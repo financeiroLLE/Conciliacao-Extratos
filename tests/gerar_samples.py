@@ -16,15 +16,19 @@ SAMPLES = Path("data/samples")
 
 def gerar_extrato_banco_simples():
     rows = [
+        (datetime(2026, 5, 4), "SALDO INICIAL", "", 8500.00),
         (datetime(2026, 5, 4), "PIX RECEBIDO CLIENTE A", "", 1500.00),
         (datetime(2026, 5, 4), "PIX ENVIADO FORNECEDOR X", "", -800.00),
         (datetime(2026, 5, 4), "BOLETO PAGAMENTO LUZ", "BOL-123", -350.00),
         (datetime(2026, 5, 4), "TAR LIQ COB", "T1", -3.00),
         (datetime(2026, 5, 4), "TAR LIQ COB", "T2", -3.00),
         (datetime(2026, 5, 4), "TED RECEBIDA", "", 5000.00),
+        (datetime(2026, 5, 4), "APLICAÇÃO AUTOMÁTICA", "APL-1", -3000.00),
+        (datetime(2026, 5, 5), "RESGATE FUNDO INVEST", "RG-1", 1000.00),
         (datetime(2026, 5, 5), "DARF FEDERAL", "DARF1", -1200.00),
         # Esse fica como pendência (não está no sistema)
         (datetime(2026, 5, 5), "PIX TAXA EXTRA", "", -45.00),
+        (datetime(2026, 5, 5), "SALDO FINAL", "", 10599.00),
     ]
     df = pd.DataFrame(rows, columns=["Data", "Histórico", "Documento", "Valor (R$)"])
     return df

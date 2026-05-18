@@ -102,6 +102,9 @@ def carregar_relatorio_sistema(
         "conciliado": ["conciliado"],
         "tipo_movimento": ["tipodemovimento", "tipomovimento"],
         "usuario": ["usuario"],
+        "agencia": ["agencia", "ag", "numagencia", "numeroagencia"],
+        "num_conta": ["numconta", "numeroconta", "ccorrente", "contacorrente"],
+        "banco_nome": ["banco", "nomebanco", "nomedobanco"],
     }
     for col_real in df.columns:
         norm = _normalizar_nome_coluna(str(col_real))
@@ -169,6 +172,18 @@ def carregar_relatorio_sistema(
     out["num_unico_bancario"] = (
         df[mapa["num_unico_bancario"]].fillna("").astype(str).str.strip()
         if "num_unico_bancario" in mapa else ""
+    )
+    out["agencia"] = (
+        df[mapa["agencia"]].fillna("").astype(str).str.strip()
+        if "agencia" in mapa else ""
+    )
+    out["num_conta"] = (
+        df[mapa["num_conta"]].fillna("").astype(str).str.strip()
+        if "num_conta" in mapa else ""
+    )
+    out["banco_nome"] = (
+        df[mapa["banco_nome"]].fillna("").astype(str).str.strip()
+        if "banco_nome" in mapa else ""
     )
 
     out = out.dropna(subset=["data"]).reset_index(drop=True)

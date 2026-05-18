@@ -235,6 +235,175 @@ def teste_adicionar_classificacao_em_df_vazio():
     print("✓ teste_adicionar_classificacao_em_df_vazio")
 
 
+def teste_total_bancario_exclui_saldo_e_aplicacao():
+    """Total Extrato Bancário deve ignorar saldo, aplicação e resgate."""
+    banco = _df_banco([
+        (_dt("04/05/2026"), "SALDO INICIAL", "", 5000.00, "C1"),
+        (_dt("04/05/2026"), "PIX RECEBIDO", "", 1000.00, "C1"),
+        (_dt("04/05/2026"), "APLICAÇÃO AUTOMÁTICA", "", -2000.00, "C1"),
+        (_dt("04/05/2026"), "RESGATE FUNDO", "", 500.00, "C1"),
+        (_dt("04/05/2026"), "BOLETO", "B1", -300.00, "C1"),
+        (_dt("04/05/2026"), "SALDO FINAL", "", 4200.00, "C1"),
+    ])
+    sistema = pd.DataFrame(columns=banco.columns)
+    res = executar_pipeline(banco, sistema, rodar_fuzzy=False)
+    kpis = res.kpis_globais()
+    # Só PIX 1000 + BOLETO 300 = 1300 (saldo, aplic, resgate fora)
+    assert kpis["total_extrato_bancario"] == 1300.00, \
+        f"esperado 1300, veio {kpis['total_extrato_bancario']}"
+    # Receitas: só PIX 1000. Despesas: só BOLETO 300.
+    assert kpis["receitas_banco"] == 1000.00
+    assert kpis["despesas_banco"] == 300.00
+    print("✓ teste_total_bancario_exclui_saldo_e_aplicacao")
+
+
+def teste_aplicacoes_resgates_isolados():
+    """Aplicações e resgates ficam num DataFrame próprio, fora do total."""
+    banco = _df_banco([
+        (_dt("04/05/2026"), "APLICAÇÃO AUTOMÁTICA", "A1", -2000.00, "C1"),
+        (_dt("04/05/2026"), "RESGATE FUNDO", "R1", 500.00, "C1"),
+        (_dt("04/05/2026"), "PIX", "", -100.00, "C1"),
+    ])
+    sistema = pd.DataFrame(columns=banco.columns)
+    res = executar_pipeline(banco, sistema, rodar_fuzzy=False)
+    assert len(res.aplicacoes_resgates) == 2, \
+        f"esperado 2 aplic/resg, veio {len(res.aplicacoes_resgates)}"
+    tipos = set(res.aplicacoes_resgates["tipo_aplicacao"])
+    assert "Aplicação" in tipos and "Resgate" in tipos
+    print("✓ teste_aplicacoes_resgates_isolados")
+
+
+def teste_receitas_despesas_absolutos_nao_compensam():
+    """Receitas e despesas absolutas não se anulam mutuamente."""
+    banco = _df_banco([
+        (_dt("04/05/2026"), "PIX RECEBIDO A", "", 10000.00, "C1"),
+        (_dt("04/05/2026"), "PIX ENVIADO B", "", -7000.00, "C1"),
+    ])
+    sistema = pd.DataFrame(columns=banco.columns)
+    res = executar_pipeline(banco, sistema, rodar_fuzzy=False)
+    kpis = res.kpis_globais()
+    assert kpis["receitas_banco"] == 10000.0
+    assert kpis["despesas_banco"] == 7000.0  # POSITIVO
+    assert kpis["total_extrato_bancario"] == 17000.0  # soma absoluta
+    print("✓ teste_receitas_despesas_absolutos_nao_compensam")
+
+
+def teste_possiveis_duplicidades_3_de_4():
+    """Mesmo valor+data+histórico mas documentos diferentes = possível duplicidade."""
+    banco = _df_banco([
+        (_dt("04/05/2026"), "BOLETO ASTRA", "DOC-A", -1000.00, "C1"),
+        (_dt("04/05/2026"), "BOLETO ASTRA", "DOC-B", -1000.00, "C1"),
+    ])
+    sistema = pd.DataFrame(columns=banco.columns)
+    res = executar_pipeline(banco, sistema, rodar_fuzzy=False)
+    assert not res.possiveis_duplicidades.empty, \
+        "deveria detectar possível duplicidade (3 de 4)"
+    assert res.duplicidades.empty, \
+        "NÃO deveria detectar duplicidade estrita (docs diferentes)"
+    print("✓ teste_possiveis_duplicidades_3_de_4")
+
+
+def teste_falta_lancar_via_conciliado_nao():
+    """Quando Sankhya tem coluna Conciliado preenchida, usa ela pra Falta Lançar."""
+    banco = _df_banco([
+        (_dt("04/05/2026"), "PIX", "", -500.00, "C1"),
+    ])
+    # Sistema com 2 lançamentos: 1 conciliado=Sim, 1 conciliado=Não
+    sistema = pd.DataFrame([
+        {"data": _dt("04/05/2026"), "historico": "PIX", "documento": "",
+         "valor": -500.00, "conta": "C1", "conciliado": "Sim",
+         "agencia": "", "num_conta": "", "banco_nome": "",
+         "tipo_movimento": "", "usuario": "", "num_unico_bancario": "",
+         "origem": "sistema"},
+        {"data": _dt("04/05/2026"), "historico": "OUTRO LANÇAMENTO", "documento": "",
+         "valor": -200.00, "conta": "C1", "conciliado": "Não",
+         "agencia": "", "num_conta": "", "banco_nome": "",
+         "tipo_movimento": "", "usuario": "", "num_unico_bancario": "",
+         "origem": "sistema"},
+    ])
+    res = executar_pipeline(banco, sistema, rodar_fuzzy=False)
+    assert res.usa_conciliado_sankhya, "deveria detectar coluna Conciliado preenchida"
+    kpis = res.kpis_globais()
+    assert kpis["fonte_falta_lancar"] == "sankhya_conciliado_nao"
+    assert kpis["falta_lancar"] == 200.0  # só o "Não"
+    print("✓ teste_falta_lancar_via_conciliado_nao")
+
+
+def teste_falta_lancar_fallback_quando_coluna_vazia():
+    """Quando coluna Conciliado está vazia, usa regra antiga (pendentes pós-match)."""
+    banco = _df_banco([(_dt("04/05/2026"), "PIX", "", -500.00, "C1")])
+    sistema = _df_banco([
+        (_dt("04/05/2026"), "PIX", "", -500.00, "C1"),
+        (_dt("04/05/2026"), "OUTRO", "", -200.00, "C1"),
+    ])
+    res = executar_pipeline(banco, sistema, rodar_fuzzy=False)
+    assert not res.usa_conciliado_sankhya, \
+        "sem coluna Conciliado preenchida, não deveria usar"
+    kpis = res.kpis_globais()
+    assert kpis["fonte_falta_lancar"] == "pendentes_pos_match"
+    # PIX casa, OUTRO de 200 fica pendente do sistema → Falta Lançar = 200
+    assert kpis["falta_lancar"] == 200.0
+    print("✓ teste_falta_lancar_fallback_quando_coluna_vazia")
+
+
+def teste_falta_conciliar_separa_receita_despesa():
+    """Card Falta Conciliar mostra receitas e despesas separadas."""
+    banco = _df_banco([
+        (_dt("04/05/2026"), "PIX RECEBIDO", "", 1500.00, "C1"),  # não casa
+        (_dt("04/05/2026"), "BOLETO", "B1", -800.00, "C1"),       # não casa
+    ])
+    sistema = pd.DataFrame(columns=banco.columns)
+    res = executar_pipeline(banco, sistema, rodar_fuzzy=False)
+    kpis = res.kpis_globais()
+    assert kpis["falta_conciliar_receitas"] == 1500.0
+    assert kpis["falta_conciliar_despesas"] == 800.0
+    assert kpis["falta_conciliar"] == 2300.0
+    print("✓ teste_falta_conciliar_separa_receita_despesa")
+
+
+def teste_saldo_final_quando_100():
+    """Conta 100% conciliada com linhas de saldo → calcula saldo final."""
+    banco = _df_banco([
+        (_dt("01/05/2026"), "SALDO INICIAL", "", 10000.00, "C1"),
+        (_dt("04/05/2026"), "PIX", "", -500.00, "C1"),
+        (_dt("05/05/2026"), "SALDO FINAL", "", 9500.00, "C1"),
+    ])
+    sistema = _df_banco([(_dt("04/05/2026"), "PIX", "", -500.00, "C1")])
+    res = executar_pipeline(banco, sistema, rodar_fuzzy=False)
+    info = res.saldo_final_da_conta("C1")
+    assert info is not None, "deveria retornar info de saldo (100% conciliado)"
+    assert info["saldo_inicial"] == 10000.00
+    assert info["saldo_final"] == 9500.00
+    assert info["tem_saldo_no_extrato"] is True
+    print("✓ teste_saldo_final_quando_100")
+
+
+def teste_saldo_final_so_se_100():
+    """Quando não está 100%, saldo_final_da_conta retorna None."""
+    banco = _df_banco([
+        (_dt("01/05/2026"), "SALDO INICIAL", "", 10000.00, "C1"),
+        (_dt("04/05/2026"), "PIX A", "", -500.00, "C1"),
+        (_dt("04/05/2026"), "PIX B", "", -100.00, "C1"),
+        (_dt("05/05/2026"), "SALDO FINAL", "", 9400.00, "C1"),
+    ])
+    sistema = _df_banco([(_dt("04/05/2026"), "PIX A", "", -500.00, "C1")])
+    res = executar_pipeline(banco, sistema, rodar_fuzzy=False)
+    info = res.saldo_final_da_conta("C1")
+    assert info is None, "não deveria ter saldo final (não está 100%)"
+    print("✓ teste_saldo_final_so_se_100")
+
+
+def teste_classificacao_movimento():
+    from src.classificacao import classificar_movimentacao
+    assert classificar_movimentacao("SALDO INICIAL") == "saldo"
+    assert classificar_movimentacao("APLICAÇÃO AUTOMÁTICA") == "aplicacao"
+    assert classificar_movimentacao("RESGATE FUNDO XYZ") == "resgate"
+    assert classificar_movimentacao("PIX RECEBIDO") == "movimentacao"
+    assert classificar_movimentacao("BOLETO ALUGUEL") == "movimentacao"
+    assert classificar_movimentacao("COMPRA CDB") == "aplicacao"
+    print("✓ teste_classificacao_movimento")
+
+
 def main():
     testes = [v for k, v in globals().items() if k.startswith("teste_")]
     falhas = []

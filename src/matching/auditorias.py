@@ -103,6 +103,69 @@ def detectar_duplicidades(
     ]
 
 
+def detectar_possiveis_duplicidades(
+    banco: pd.DataFrame,
+    sistema: pd.DataFrame,
+) -> pd.DataFrame:
+    """Detecta lançamentos suspeitos onde 3 de 4 campos (data, hist, valor, documento) batem.
+
+    São "possíveis" duplicidades — diferente das estritas (4 de 4).
+    Critério mais brando: pra revisão manual, NÃO é certeza.
+    """
+    resultados = []
+    for nome, df in [("banco", banco), ("sistema", sistema)]:
+        if df.empty:
+            continue
+        d = df.copy().reset_index(drop=True)  # <-- garante índice 0..n
+        d["_hist_norm"] = d["historico"].apply(_normalizar_historico)
+        d["_doc_norm"] = d["documento"].fillna("").astype(str).str.strip().str.upper()
+        d["_cent"] = d["valor"].apply(_centavos)
+
+        chaves_3 = [
+            ("data", "_hist_norm", "_cent"),
+            ("data", "_hist_norm", "_doc_norm"),
+            ("data", "_cent", "_doc_norm"),
+            ("_hist_norm", "_cent", "_doc_norm"),
+        ]
+        rotulo = [
+            "Mesma data/histórico/valor (documento divergente)",
+            "Mesma data/histórico/documento (valor divergente)",
+            "Mesma data/valor/documento (histórico divergente)",
+            "Mesmo histórico/valor/documento (data divergente)",
+        ]
+        for chave, motivo in zip(chaves_3, rotulo):
+            grupo = d.groupby(list(chave)).size().reset_index(name="ocorrencias")
+            grupo = grupo[grupo["ocorrencias"] > 1]
+            if grupo.empty:
+                continue
+            for _, g in grupo.iterrows():
+                cond = pd.Series([True] * len(d), index=d.index)  # <-- mesmo índice
+                for col in chave:
+                    cond &= (d[col] == g[col])
+                linhas = d[cond]
+                if len(linhas) < 2:
+                    continue
+                for _, linha in linhas.iterrows():
+                    resultados.append({
+                        "origem": nome,
+                        "data": linha["data"],
+                        "conta": linha.get("conta", ""),
+                        "historico": linha["historico"],
+                        "documento": linha.get("documento", ""),
+                        "valor": linha["valor"],
+                        "motivo": motivo,
+                    })
+
+    if not resultados:
+        return pd.DataFrame()
+    # Remove exatas duplicações que viriam do critério "4 de 4" (essas vão pra estrita)
+    df_res = pd.DataFrame(resultados)
+    # Mantém só um exemplar por (origem, data, hist, valor, doc, motivo)
+    return df_res.drop_duplicates(
+        subset=["origem", "data", "historico", "valor", "documento", "motivo"]
+    ).reset_index(drop=True)
+
+
 def detectar_nao_pertence(
     pendentes_banco: pd.DataFrame,
     pendentes_sistema: pd.DataFrame,
