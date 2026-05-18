@@ -22,6 +22,7 @@ from .matching import (
     detectar_possiveis_duplicidades,
     detectar_nao_pertence,
     detectar_excesso_sankhya,
+    detectar_excesso_sankhya_pos_match,
     match_exato,
     sugerir_matches_fuzzy,
 )
@@ -236,10 +237,14 @@ def _calcular_kpis(
     # Falta Lançar (Sankhya Conciliado=Não OU pendentes do match)
     if usa_conciliado_sankhya and not falta_lancar_sankhya.empty:
         fl_mov = _eh_movimentado(falta_lancar_sankhya)
-        falta_lancar = _soma_abs(fl_mov)
     else:
-        ps_mov = _eh_movimentado(pendentes_sistema)
-        falta_lancar = _soma_abs(ps_mov)
+        fl_mov = _eh_movimentado(pendentes_sistema)
+    falta_lancar = _soma_abs(fl_mov)
+    if not fl_mov.empty:
+        falta_lancar_receitas = float(fl_mov[fl_mov["valor"] > 0]["valor"].sum())
+        falta_lancar_despesas = float(fl_mov[fl_mov["valor"] < 0]["valor"].abs().sum())
+    else:
+        falta_lancar_receitas = falta_lancar_despesas = 0.0
 
     valor_divergencia = (
         float(divergencias["valor_banco"].abs().sum())
@@ -259,6 +264,8 @@ def _calcular_kpis(
         "falta_conciliar_receitas": falta_conciliar_receitas,
         "falta_conciliar_despesas": falta_conciliar_despesas,
         "falta_lancar": falta_lancar,
+        "falta_lancar_receitas": falta_lancar_receitas,
+        "falta_lancar_despesas": falta_lancar_despesas,
         "valor_divergencia": valor_divergencia,
         "percentual_conciliado": percentual,
         "receitas_banco": receitas_banco,
@@ -367,7 +374,11 @@ def executar_pipeline(
     divergencias = detectar_divergencia_valor(pend_banco, pend_sistema)
     duplicidades = detectar_duplicidades(banco_mov, sistema_mov)
     possiveis_dup = detectar_possiveis_duplicidades(banco_mov, sistema_mov)
-    excesso_sis = detectar_excesso_sankhya(banco_mov, sistema_mov)
+
+    # v3.1: excesso_sankhya considera APENAS as pendências do sistema (o que não casou).
+    # Conta quantas linhas pendentes do Sankhya excedem as pendências do banco
+    # para o mesmo perfil (data + valor + conta).
+    excesso_sis = detectar_excesso_sankhya_pos_match(pend_banco, pend_sistema)
     nao_pertence = detectar_nao_pertence(pend_banco, pend_sistema, tolerancia_dias)
     sugestoes = sugerir_matches_fuzzy(pend_banco, pend_sistema) if rodar_fuzzy else pd.DataFrame()
     aplicacoes_resgates = _extrair_aplicacoes_resgates(banco, sistema)

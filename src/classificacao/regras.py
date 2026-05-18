@@ -16,7 +16,7 @@ REGRAS: list[tuple[str, str]] = [
     ("Pix", r"\bPIX\b"),
     # Tarifa primeiro: "TAR LIQ COB" é tarifa de cobrança, não boleto.
     ("Tarifa", r"\b(TAR(IFA)?|IOF|JUROS|MULTA)\b"),
-    ("Boleto", r"\b(BOLETO|COB(R(AN(C|Ç)A)?)?|LIQ(UIDA[CÇ]AO)?\s+COB|TIT(ULO)?)\b"),
+    ("Boleto", r"\b(BOLETO|COB(R(AN(C|Ç)A)?)?|LIQ(UIDA[CÇ]AO)?\s+COB|TIT(ULO)?|BAIXA\s+API)\b"),
     ("TED/DOC", r"\b(TED|DOC)\b"),
     ("Débito Automático", r"\b(D[ÉE]BITO\s+AUT|DA\s)\b"),
     ("Cartão", r"\b(CART[ÃA]O|VISA|MASTERCARD|ELO)\b"),

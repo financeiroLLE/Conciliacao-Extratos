@@ -158,12 +158,11 @@ h1, h2, h3, h4, h5, h6, p, span, div, label {{ color: {CORES["branco"]}; }}
 /* Logo: bloco azul com bordas inferiores arredondadas e transição suave */
 .lle-sidebar-logo {{
     background: linear-gradient(180deg, {CORES["azul_escuro"]} 0%, #061B57 100%);
-    padding: 32px 14px 22px 14px;
-    margin: -56px -16px 22px -16px;
-    border-radius: 0 0 24px 24px;
+    padding: 24px 14px 22px 14px;
+    margin: 8px 4px 22px 4px;
+    border-radius: 18px;
     text-align: center;
-    border-bottom: 3px solid {CORES["azul"]};
-    box-shadow: 0 6px 18px rgba(4,23,71,0.18);
+    box-shadow: 0 6px 18px rgba(4,23,71,0.22);
 }}
 .lle-sidebar-logo img {{
     height: 78px;
@@ -403,6 +402,39 @@ input, textarea, select, [data-baseweb="select"] > div {{
 }}
 [data-testid="stFileUploaderDropzone"] * {{ color: {CORES["branco"]} !important; }}
 
+/* v3.4: tooltip do help (?) — texto PRETO em qualquer lugar (sidebar amarela ou main) */
+[data-testid="stTooltipContent"],
+[data-testid="stTooltipContent"] *,
+[role="tooltip"],
+[role="tooltip"] * {{
+    color: {CORES["azul_escuro"]} !important;
+    background-color: #FFFFFF !important;
+}}
+[data-testid="stTooltipContent"] {{
+    border: 1px solid {CORES["azul_escuro"]} !important;
+    border-radius: 8px !important;
+}}
+
+/* v3.4: botões + / - do number_input — texto BRANCO sobre fundo azul.
+   No sidebar amarela, esses botões herdavam azul-escuro do '*' geral. */
+[data-testid="stNumberInputContainer"] button,
+[data-testid="stNumberInput"] button {{
+    background-color: {CORES["azul"]} !important;
+    color: {CORES["branco"]} !important;
+    border-color: {CORES["azul"]} !important;
+}}
+[data-testid="stNumberInputContainer"] button *,
+[data-testid="stNumberInput"] button *,
+[data-testid="stNumberInputContainer"] button svg,
+[data-testid="stNumberInput"] button svg {{
+    color: {CORES["branco"]} !important;
+    fill: {CORES["branco"]} !important;
+}}
+[data-testid="stNumberInputContainer"] button:hover,
+[data-testid="stNumberInput"] button:hover {{
+    background-color: {CORES["azul_escuro"]} !important;
+}}
+
 /* Radio horizontal */
 [role="radiogroup"] label {{ color: {CORES["branco"]} !important; }}
 
@@ -621,6 +653,19 @@ def _card_falta_conciliar_vertical(receitas: float, despesas: float) -> str:
     """
 
 
+def _card_total_com_rec_desp(receitas: float, despesas: float) -> str:
+    """v3.1: bloco com Receitas (verde) e Despesas (vermelho) empilhadas embaixo do valor total.
+    Usado em 'Total Movimentado no Banco' e 'Total Extrato Sankhya'."""
+    return f"""
+    <div class="lle-kpi-sub-stack">
+        <div class="lle-kpi-sub-label">Receitas:</div>
+        <div class="lle-kpi-sub-valor verde">{fmt_brl(receitas)}</div>
+        <div class="lle-kpi-sub-label">Despesas:</div>
+        <div class="lle-kpi-sub-valor vermelho">{fmt_brl(despesas)}</div>
+    </div>
+    """
+
+
 def _card_investimentos(resultado: ResultadoConciliacao) -> str:
     """Card único de Investimentos (Aplicações + Resgates) — substitui 2 cards separados."""
     return _card_investimentos_de_df(resultado.aplicacoes_resgates)
@@ -699,11 +744,13 @@ def pagina_dashboard():
     section_title("INDICADORES EXECUTIVOS")
 
     # Linha 1: principais
+    sub_banco = _card_total_com_rec_desp(kpis["receitas_banco"], kpis["despesas_banco"])
+    sub_sankhya = _card_total_com_rec_desp(kpis["receitas_sistema"], kpis["despesas_sistema"])
     cards1 = [
-        card_kpi("Total Movimentado no Banco", fmt_brl(kpis["total_movimentado_banco"]),
-                 "exclui apenas saldo"),
-        card_kpi("Total Extrato Sankhya", fmt_brl(kpis["total_extrato_sistema"]),
-                 "movimentações reais"),
+        card_kpi_html("Total Movimentado no Banco", fmt_brl(kpis["total_movimentado_banco"]),
+                      sub_banco),
+        card_kpi_html("Total Extrato Sankhya", fmt_brl(kpis["total_extrato_sistema"]),
+                      sub_sankhya),
         card_kpi("Total Conciliado", fmt_brl(kpis["total_conciliado"]),
                  "match Banco × Sankhya", classe="destaque-verde"),
         card_kpi("Percentual Conciliado", fmt_pct(kpis["percentual_conciliado"]),
@@ -719,27 +766,30 @@ def pagina_dashboard():
     fonte_fl = ("via Sankhya 'Conciliado=Não'"
                 if kpis["fonte_falta_lancar"] == "sankhya_conciliado_nao"
                 else "pendência do sistema")
+    sub_falta_lancar = _card_falta_conciliar_vertical(
+        kpis["falta_lancar_receitas"],
+        kpis["falta_lancar_despesas"],
+    )
     investimentos_html = _card_investimentos(resultado)
 
     cards2 = [
         card_kpi_html("Falta Conciliar", fmt_brl(kpis["falta_conciliar"]),
                       sub_falta_conciliar, classe="destaque-vermelho"),
-        card_kpi("Falta Lançar", fmt_brl(kpis["falta_lancar"]),
-                 fonte_fl, classe="destaque-vermelho"),
-        card_kpi("Conciliado c/ Divergência", fmt_brl(kpis["valor_divergencia"]),
-                 classe="destaque-amarelo" if kpis["valor_divergencia"] > 0 else ""),
+        card_kpi_html("Falta Lançar", fmt_brl(kpis["falta_lancar"]),
+                      sub_falta_lancar, classe="destaque-vermelho"),
+        card_kpi("Qtd c/ Divergência", fmt_int(kpis["qtd_divergencias"]),
+                 "lançamentos com divergência de valor",
+                 classe="destaque-amarelo" if kpis["qtd_divergencias"] > 0 else ""),
         investimentos_html,
     ]
     render_cards(cards2)
 
-    # Linha 3: contagens
+    # Linha 3: contagens (v3.3: sem 'Pendentes')
     cards3 = [
         card_kpi("Registros Processados", fmt_int(kpis["qtd_registros_banco"] + kpis["qtd_registros_sistema"])),
         card_kpi("Conciliados", fmt_int(kpis["qtd_conciliados"]), classe="destaque-verde"),
-        card_kpi("Pendentes", fmt_int(kpis["qtd_pendentes_banco"] + kpis["qtd_pendentes_sistema"]),
-                 classe="destaque-vermelho"),
-        card_kpi("Divergentes", fmt_int(kpis["qtd_divergencias"]),
-                 classe="destaque-amarelo" if kpis["qtd_divergencias"] > 0 else ""),
+        card_kpi("Movimentações Banco", fmt_int(kpis["qtd_movimentacoes_banco"])),
+        card_kpi("Movimentações Sistema", fmt_int(kpis["qtd_movimentacoes_sistema"])),
     ]
     render_cards(cards3)
 
@@ -914,7 +964,9 @@ def tela_upload():
             try:
                 dfs_banco = []
                 for nome_conta, arq in arquivos_banco:
-                    df = carregar_extrato_banco(arq, conta=nome_conta)
+                    df = carregar_extrato_banco(
+                        arq, conta=nome_conta, ano_referencia=data_ref.year
+                    )
                     dfs_banco.append(df)
                 banco = pd.concat(dfs_banco, ignore_index=True) if dfs_banco else pd.DataFrame()
 
@@ -928,6 +980,26 @@ def tela_upload():
                     st.info(
                         f"ℹ️ Relatório do sistema sem coluna de conta — atribuído a '{arquivos_banco[0][0]}'."
                     )
+                elif modo != "1 conta por vez" and not sistema.empty:
+                    # Modo várias contas: avisar se há contas no Sankhya que não existem no banco
+                    contas_banco = {nome for nome, _ in arquivos_banco}
+                    contas_sis = set(sistema["conta"].unique()) - {"—"}
+                    if contas_sis and not (contas_sis & contas_banco):
+                        st.warning(
+                            f"⚠️ As contas no Sankhya **{sorted(contas_sis)}** não "
+                            f"coincidem com nenhum dos identificadores dos extratos "
+                            f"bancários enviados **{sorted(contas_banco)}**. Resultado "
+                            f"será 0% conciliado. Verifique se o identificador da conta "
+                            f"informado para cada extrato bancário corresponde ao valor "
+                            f"da coluna de conta no relatório do Sankhya."
+                        )
+                    elif (sistema["conta"] == "—").any():
+                        qtd = int((sistema["conta"] == "—").sum())
+                        st.warning(
+                            f"⚠️ {qtd} linha(s) do Sankhya estão sem identificador de "
+                            f"conta. Inclua a conta na planilha do Sankhya antes de "
+                            f"subir, ou troque para o modo '1 conta por vez'."
+                        )
 
                 pendencias = carregar_pendencias_anteriores(arquivo_pendencias)
 
@@ -1045,12 +1117,14 @@ def tela_resultado():
     # KPIs executivos
     section_title("RESUMO EXECUTIVO")
 
-    # Linha 1: principais
+    # Linha 1: principais (com receitas/despesas embaixo dos 2 totais)
+    sub_banco = _card_total_com_rec_desp(kpis["receitas_banco"], kpis["despesas_banco"])
+    sub_sankhya = _card_total_com_rec_desp(kpis["receitas_sistema"], kpis["despesas_sistema"])
     cards1 = [
-        card_kpi("Total Movimentado no Banco", fmt_brl(kpis["total_movimentado_banco"]),
-                 "exclui apenas saldo"),
-        card_kpi("Total Extrato Sankhya", fmt_brl(kpis["total_extrato_sistema"]),
-                 "movimentações reais"),
+        card_kpi_html("Total Movimentado no Banco", fmt_brl(kpis["total_movimentado_banco"]),
+                      sub_banco),
+        card_kpi_html("Total Extrato Sankhya", fmt_brl(kpis["total_extrato_sistema"]),
+                      sub_sankhya),
         card_kpi("Total Conciliado", fmt_brl(kpis["total_conciliado"]),
                  "match Banco × Sankhya", classe="destaque-verde"),
         card_kpi("Percentual Conciliado", fmt_pct(kpis["percentual_conciliado"]),
@@ -1068,47 +1142,37 @@ def tela_resultado():
         if kpis["fonte_falta_lancar"] == "sankhya_conciliado_nao"
         else "pendência do sistema"
     )
+    sub_falta_lancar = _card_falta_conciliar_vertical(
+        kpis["falta_lancar_receitas"],
+        kpis["falta_lancar_despesas"],
+    )
     investimentos_html = _card_investimentos(resultado)
 
     cards2 = [
         card_kpi_html("Falta Conciliar", fmt_brl(kpis["falta_conciliar"]),
                       sub_falta_conciliar, classe="destaque-vermelho"),
-        card_kpi("Falta Lançar", fmt_brl(kpis["falta_lancar"]),
-                 fonte_fl, classe="destaque-vermelho"),
-        card_kpi("Valor c/ Divergência", fmt_brl(kpis["valor_divergencia"]),
-                 classe="destaque-amarelo" if kpis["valor_divergencia"] > 0 else ""),
+        card_kpi_html("Falta Lançar", fmt_brl(kpis["falta_lancar"]),
+                      sub_falta_lancar, classe="destaque-vermelho"),
+        card_kpi("Qtd c/ Divergência", fmt_int(kpis["qtd_divergencias"]),
+                 "lançamentos com divergência de valor",
+                 classe="destaque-amarelo" if kpis["qtd_divergencias"] > 0 else ""),
         investimentos_html,
     ]
     render_cards(cards2)
 
-    # Linha 3: contagens
+    # Linha 3: contagens (sem 'Pendentes Banco' e 'Pendentes Sistema' — v3.3)
     cards3 = [
         card_kpi("Registros Banco", fmt_int(kpis["qtd_registros_banco"]),
                  f"{fmt_int(kpis['qtd_movimentacoes_banco'])} movimentações"),
         card_kpi("Registros Sistema", fmt_int(kpis["qtd_registros_sistema"]),
                  f"{fmt_int(kpis['qtd_movimentacoes_sistema'])} movimentações"),
-        card_kpi("Pendentes Banco", fmt_int(kpis["qtd_pendentes_banco"])),
-        card_kpi("Pendentes Sistema", fmt_int(kpis["qtd_pendentes_sistema"])),
+        card_kpi("Conciliados", fmt_int(kpis["qtd_conciliados"]),
+                 "pares Banco × Sankhya", classe="destaque-verde"),
+        card_kpi("Contas processadas", fmt_int(len(resultado.contas_processadas))),
     ]
     render_cards(cards3)
-
-    # Linha 4: avisos (possíveis duplicidades, excesso Sankhya, não pertence)
-    qtd_poss_dup = len(resultado.possiveis_duplicidades)
-    qtd_excesso = len(resultado.excesso_sankhya)
-    qtd_npert = len(resultado.nao_pertence)
-    qtd_dup_estrita = len(resultado.duplicidades)
-    if qtd_poss_dup > 0 or qtd_excesso > 0 or qtd_npert > 0 or qtd_dup_estrita > 0:
-        cards4 = [
-            card_kpi("Possíveis Duplicidades", fmt_int(qtd_poss_dup),
-                     "revisar manualmente", classe="destaque-amarelo" if qtd_poss_dup else ""),
-            card_kpi("Excesso no Sankhya", fmt_int(qtd_excesso),
-                     "Sankhya tem mais que o banco", classe="destaque-vermelho" if qtd_excesso else ""),
-            card_kpi("Duplicidades estritas", fmt_int(qtd_dup_estrita),
-                     "4 de 4 campos iguais", classe="destaque-vermelho" if qtd_dup_estrita else ""),
-            card_kpi("Não Pertence à Conta", fmt_int(qtd_npert),
-                     classe="destaque-amarelo" if qtd_npert else ""),
-        ]
-        render_cards(cards4)
+    # v3.3: cards 'Possíveis Duplicidades', 'Excesso no Sankhya', 'Duplicidades estritas',
+    # 'Não Pertence à Conta' REMOVIDOS daqui. Acessíveis pelas abas do detalhamento por banco.
 
     st.divider()
 
@@ -1137,11 +1201,13 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
     section_title(f"DETALHAMENTO · {conta}")
 
     k = resultado.kpis_da_conta(conta)
+    sub_banco_c = _card_total_com_rec_desp(k["receitas_banco"], k["despesas_banco"])
+    sub_sankhya_c = _card_total_com_rec_desp(k["receitas_sistema"], k["despesas_sistema"])
     cards = [
-        card_kpi("Movimentado no Banco", fmt_brl(k["total_movimentado_banco"]),
-                 "exclui apenas saldo"),
-        card_kpi("Total Sankhya", fmt_brl(k["total_extrato_sistema"]),
-                 "movimentações reais"),
+        card_kpi_html("Movimentado no Banco", fmt_brl(k["total_movimentado_banco"]),
+                      sub_banco_c),
+        card_kpi_html("Total Sankhya", fmt_brl(k["total_extrato_sistema"]),
+                      sub_sankhya_c),
         card_kpi("Conciliado", fmt_brl(k["total_conciliado"]), classe="destaque-verde"),
         card_kpi("% Conciliado", fmt_pct(k["percentual_conciliado"]), classe="destaque-amarelo"),
     ]
@@ -1161,10 +1227,14 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
     cards2 = [
         card_kpi_html("Falta Conciliar", fmt_brl(k["falta_conciliar"]),
                       sub_fc, classe="destaque-vermelho"),
-        card_kpi("Falta Lançar", fmt_brl(k["falta_lancar"]),
-                 fonte_fl, classe="destaque-vermelho"),
-        card_kpi("c/ Divergência", fmt_brl(k["valor_divergencia"]),
-                 classe="destaque-amarelo" if k["valor_divergencia"] > 0 else ""),
+        card_kpi_html("Falta Lançar", fmt_brl(k["falta_lancar"]),
+                      _card_falta_conciliar_vertical(
+                          k["falta_lancar_receitas"], k["falta_lancar_despesas"]
+                      ),
+                      classe="destaque-vermelho"),
+        card_kpi("Qtd c/ Divergência", fmt_int(k["qtd_divergencias"]),
+                 "lançamentos com divergência",
+                 classe="destaque-amarelo" if k["qtd_divergencias"] > 0 else ""),
         investimentos_conta_html,
     ]
     render_cards(cards2)
@@ -1479,49 +1549,135 @@ def render_tab_falta_lancar(df: pd.DataFrame, conta: str, fonte: str):
 # Subabas por TIPO de lançamento (Boleto, Pix, Tarifa...)
 # ============================================================
 def render_subabas_tipo(resultado: ResultadoConciliacao):
+    """v3.3: Subabas por tipo mostram pares conciliados + pendentes (banco e sankhya)
+    juntos, todos com coluna Status. O tipo dos pares conciliados vem do lado banco
+    (histórico mais padronizado). Aba 'Outros' = sem categoria reconhecida."""
     tipos_disponiveis = ["Todos"] + TIPOS_PRINCIPAIS + ["Pagamentos", "Recebimentos", "Outros"]
     tabs = st.tabs(tipos_disponiveis)
+
+    # Monta DataFrame único: 3 origens (Conciliado / Pendente Banco / Pendente Sankhya)
+    df_unif = _montar_visao_unificada(resultado)
 
     for tab, tipo in zip(tabs, tipos_disponiveis):
         with tab:
             if tipo == "Todos":
-                df = pd.concat(
-                    [resultado.banco_completo.assign(origem="Banco"),
-                     resultado.sistema_completo.assign(origem="Sistema")],
-                    ignore_index=True,
-                ) if not (resultado.banco_completo.empty and resultado.sistema_completo.empty) else pd.DataFrame()
+                df = df_unif.copy()
             elif tipo == "Pagamentos":
-                df = _filtrar_por(resultado, lambda d: d[d["natureza"] == "Pagamento"])
+                df = df_unif[df_unif["natureza"] == "Pagamento"].copy()
             elif tipo == "Recebimentos":
-                df = _filtrar_por(resultado, lambda d: d[d["natureza"] == "Recebimento"])
+                df = df_unif[df_unif["natureza"] == "Recebimento"].copy()
             else:
-                df = _filtrar_por(resultado, lambda d: d[d["tipo"] == tipo])
+                df = df_unif[df_unif["tipo"] == tipo].copy()
 
             if df.empty:
-                st.info(f"Nenhum lançamento do tipo **{tipo}**.")
+                if tipo == "Outros":
+                    st.info(
+                        "🎉 Nenhum lançamento sem categoria. "
+                        "Esta aba mostra lançamentos cujo histórico não bateu com "
+                        "nenhuma das categorias conhecidas (Pix, Boleto, Tarifa, TED/DOC, "
+                        "Débito Automático, Cartão, Salário/Folha, Imposto, Transferência)."
+                    )
+                else:
+                    st.info(f"Nenhum lançamento do tipo **{tipo}**.")
                 continue
 
             # KPIs do tipo
             qtd = len(df)
-            valor_total = float(df["valor"].abs().sum()) if "valor" in df.columns else 0.0
-            por_conta = (
-                df.groupby("conta")["valor"].agg(["count", "sum"]).reset_index()
-                if "conta" in df.columns else pd.DataFrame()
-            )
+            valor_total = float(df["valor"].abs().sum())
+            receitas = float(df[df["valor"] > 0]["valor"].sum())
+            despesas = float(df[df["valor"] < 0]["valor"].abs().sum())
 
+            sub_rec_desp = _card_total_com_rec_desp(receitas, despesas)
+
+            # Contagens por status
+            qtd_conciliado = int((df["status"] == "Conciliado").sum())
+            qtd_pend_b = int((df["status"] == "Pendente Banco").sum())
+            qtd_pend_s = int((df["status"] == "Pendente Sankhya").sum())
+
+            label_qtd = f"Lançamentos {tipo}" if tipo not in ("Todos", "Outros") else f"Lançamentos {tipo.lower()}"
             cards = [
-                card_kpi(f"Lançamentos {tipo}", fmt_int(qtd)),
-                card_kpi("Valor total (absoluto)", fmt_brl(valor_total), classe="destaque-amarelo"),
+                card_kpi(label_qtd, fmt_int(qtd),
+                         f"Conciliados: {qtd_conciliado} · Pend. Banco: {qtd_pend_b} · Pend. Sankhya: {qtd_pend_s}"),
+                card_kpi_html("Valor total (absoluto)", fmt_brl(valor_total),
+                              sub_rec_desp, classe="destaque-amarelo"),
                 card_kpi("Contas envolvidas",
-                         fmt_int(df["conta"].nunique() if "conta" in df.columns else 0)),
+                         fmt_int(df["conta"].nunique())),
             ]
             render_cards(cards)
 
-            cols_show = ["origem", "data", "conta", "historico", "documento", "valor", "tipo", "natureza"]
+            # Tabela: status + origem + dados padronizados
+            if tipo == "Recebimentos":
+                st.caption(
+                    "💡 Esta aba mostra todos os recebimentos — separados por status "
+                    "(Conciliado / Pendente no Banco / Pendente no Sankhya)."
+                )
+            elif tipo == "Outros":
+                st.caption(
+                    "📌 Lançamentos cujo histórico não bateu com nenhuma categoria conhecida. "
+                    "Use esta lista para identificar termos que valem regras novas."
+                )
+
+            cols_show = ["status", "origem", "data", "conta", "historico",
+                         "documento", "valor", "tipo", "natureza"]
             cols_show = [c for c in cols_show if c in df.columns]
             out = df[cols_show].copy()
             out.columns = [c.title() for c in out.columns]
-            _exibir_df(out, f"tipo_{tipo.lower().replace(' ', '_')}")
+            _exibir_df(out, f"tipo_{tipo.lower().replace(' ', '_').replace('/', '_')}")
+
+
+def _montar_visao_unificada(resultado: ResultadoConciliacao) -> pd.DataFrame:
+    """Une conciliados (lado banco) + pendentes banco + pendentes sankhya em um único
+    DataFrame com coluna 'status' e 'origem'.
+
+    Para pares conciliados, usa o tipo/natureza do lado BANCO (histórico padronizado).
+    """
+    frames = []
+
+    # Pares conciliados — pega o lado banco
+    if not resultado.conciliados.empty:
+        c = resultado.conciliados.copy()
+        # Renomeia banco_* → colunas canônicas
+        renomeio = {
+            "banco_data": "data",
+            "banco_historico": "historico",
+            "banco_documento": "documento",
+            "banco_valor": "valor",
+            "banco_conta": "conta",
+            "banco_tipo": "tipo",
+            "banco_natureza": "natureza",
+        }
+        cols_pegar = [k for k in renomeio if k in c.columns]
+        d = c[cols_pegar].rename(columns=renomeio).copy()
+        d["status"] = "Conciliado"
+        d["origem"] = "Banco (conciliado)"
+        frames.append(d)
+
+    # Pendentes do banco
+    if not resultado.pendentes_banco.empty:
+        d = resultado.pendentes_banco.copy()
+        d["status"] = "Pendente Banco"
+        d["origem"] = "Banco"
+        cols_keep = [c for c in ["data","historico","documento","valor","conta","tipo","natureza"]
+                     if c in d.columns]
+        d = d[cols_keep + ["status", "origem"]]
+        frames.append(d)
+
+    # Pendentes do sankhya
+    if not resultado.pendentes_sistema.empty:
+        d = resultado.pendentes_sistema.copy()
+        d["status"] = "Pendente Sankhya"
+        d["origem"] = "Sankhya"
+        cols_keep = [c for c in ["data","historico","documento","valor","conta","tipo","natureza"]
+                     if c in d.columns]
+        d = d[cols_keep + ["status", "origem"]]
+        frames.append(d)
+
+    if not frames:
+        return pd.DataFrame(columns=["status","origem","data","conta","historico",
+                                      "documento","valor","tipo","natureza"])
+
+    out = pd.concat(frames, ignore_index=True)
+    return out
 
 
 def _filtrar_por(resultado: ResultadoConciliacao, filtro_fn) -> pd.DataFrame:

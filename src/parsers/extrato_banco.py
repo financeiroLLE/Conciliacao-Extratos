@@ -39,7 +39,7 @@ def _mapear_colunas(df: pd.DataFrame) -> dict[str, str]:
     """Mapeia colunas do arquivo para nomes canônicos."""
     canonicos = {
         "data": ["data", "datalancamento", "dtlancamento"],
-        "historico": ["historico", "descricao", "memo"],
+        "historico": ["historico", "descricao", "memo", "lancamento", "movimentacao"],
         "documento": ["documento", "doc", "numdoc", "numerodoc"],
         # "valorr" cobre 'Valor (R$)' depois da normalização que remove parênteses
         "valor": ["valor", "valorr", "valorrs", "vlrlancamento", "vlr"],
@@ -54,23 +54,33 @@ def _mapear_colunas(df: pd.DataFrame) -> dict[str, str]:
     return encontrados
 
 
-def _parse_data_robusto(serie: pd.Series) -> pd.Series:
+def _parse_data_robusto(serie: pd.Series, ano_referencia: int | None = None) -> pd.Series:
     """Parser de data que respeita formato brasileiro (DD/MM/YYYY) E formato ISO.
 
     Datas brasileiras: 04/05/2026 → 4 de maio.
     Datas ISO: 2026-05-04 ou 2026-05-04 00:00:00 → 4 de maio.
+    Datas SEM ano: 04/05 → completa com `ano_referencia` (ou ano corrente).
     Datetimes nativos passam direto.
     """
-    # Se já é datetime/timestamp, retorna direto
     if pd.api.types.is_datetime64_any_dtype(serie):
         return pd.to_datetime(serie, errors="coerce")
-    # Converte para string para inspeção
     str_serie = serie.astype(str).str.strip()
-    # Detecta ISO (4 dígitos no começo separados por '-')
+
+    # Detecta padrão DD/MM (sem ano) — extrai-se das datas SEM ano e adiciona o ano de referência
+    padrao_sem_ano = r"^\d{1,2}/\d{1,2}\s*$"
+    parece_sem_ano = str_serie.str.match(padrao_sem_ano, na=False)
+    if parece_sem_ano.any():
+        if ano_referencia is None:
+            from datetime import date
+            ano_referencia = date.today().year
+        str_serie = str_serie.where(
+            ~parece_sem_ano,
+            str_serie + f"/{ano_referencia}",
+        )
+
     parece_iso = str_serie.str.match(r"^\d{4}-\d{2}-\d{2}", na=False)
     if parece_iso.all():
         return pd.to_datetime(str_serie, errors="coerce")
-    # Senão, usa formato brasileiro
     return pd.to_datetime(str_serie, dayfirst=True, errors="coerce")
 
 
@@ -97,7 +107,11 @@ def _parse_valor_brl(v: Any) -> float:
         return 0.0
 
 
-def carregar_extrato_banco(arquivo: Any, conta: str) -> pd.DataFrame:
+def carregar_extrato_banco(
+    arquivo: Any,
+    conta: str,
+    ano_referencia: int | None = None,
+) -> pd.DataFrame:
     """Lê o(s) extrato(s) bancário(s) padronizado(s) e retorna DataFrame canônico.
 
     Aceita arquivo .xlsx/.xls com 1 ou mais abas. Cada aba é tratada como um pedaço
@@ -141,7 +155,7 @@ def carregar_extrato_banco(arquivo: Any, conta: str) -> pd.DataFrame:
             continue
 
         out = pd.DataFrame()
-        out["data"] = _parse_data_robusto(df_aba[mapa["data"]])
+        out["data"] = _parse_data_robusto(df_aba[mapa["data"]], ano_referencia=ano_referencia)
         out["historico"] = df_aba[mapa["historico"]].fillna("") if "historico" in mapa else ""
         out["documento"] = (
             df_aba[mapa["documento"]].fillna("") if "documento" in mapa else ""

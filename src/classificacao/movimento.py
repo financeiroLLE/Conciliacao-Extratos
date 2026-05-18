@@ -14,21 +14,43 @@ import re
 import pandas as pd
 
 
+def _normalizar_para_classificacao(s: str) -> str:
+    """Normaliza histórico para matching robusto.
+
+    1. Caixa alta.
+    2. Colapsa espaços múltiplos.
+    3. Junta sequências de letras únicas separadas por espaço:
+       'S A L D O' → 'SALDO'.
+    """
+    if not isinstance(s, str):
+        return ""
+    s = s.upper().strip()
+    s = re.sub(r"\s+", " ", s)
+    # 'S A L D O' → 'SALDO': junta sequências de 3+ letras separadas por espaço
+    s = re.sub(
+        r"\b((?:[A-Z]\s){2,}[A-Z])\b",
+        lambda m: m.group(1).replace(" ", ""),
+        s,
+    )
+    return s
+
+
 # Termos que identificam linha que é SALDO (não movimentação)
 RE_SALDO = re.compile(
     r"\b("
     r"SALDO|"
-    r"SDO\s+(ANT|ATU|FIN|INI)|"  # SDO ANT, SDO ATUAL etc
+    r"SDO|"               # SDO ANT, SDO ATUAL, SDO APLIC etc — qualquer SDO é saldo
     r"POSI[CÇ][AÃ]O|"
     r"COBERTURA"
     r")\b",
     re.IGNORECASE,
 )
 
-# Termos que identificam aplicação financeira (saída para investimento)
+# Aplicação financeira (saída para investimento)
 RE_APLICACAO = re.compile(
     r"\b("
-    r"APLIC(A[CÇ][AÃ]O)?|"
+    r"APLIC(A[CÇ][AÃ]O)?\s+AUT|"  # APLIC AUT, APLICAÇÃO AUTOM
+    r"APLICA[CÇ][AÃ]O|"
     r"INVESTIMENTO|"
     r"COMPRA\s+(CDB|RDB|LCI|LCA|TESOURO)|"
     r"COMPRA\s+T[IÍ]TULO|"
@@ -37,48 +59,73 @@ RE_APLICACAO = re.compile(
     re.IGNORECASE,
 )
 
-# Termos que identificam resgate (volta de investimento para conta)
+# Resgate (volta de investimento para conta)
 RE_RESGATE = re.compile(
     r"\b("
     r"RESGATE|"
-    r"REGAS(TE)?|"
+    r"RESG\.?\s*AUT|"      # RESG. AUT, RESG AUT, RESGATE AUT
+    r"RES\s+APLIC|"        # RES APLIC AUT (do extrato Itaú)
     r"VENDA\s+(CDB|RDB|LCI|LCA|TESOURO)|"
     r"VENDA\s+T[IÍ]TULO|"
-    r"VENC(IMENTO)?\s+(CDB|RDB|APLIC)|"
-    r"CR[EÉ]DITO\s+RENDIMENTO"
+    r"VENC(IMENTO)?\s+(CDB|RDB|APLIC)"
     r")\b",
     re.IGNORECASE,
 )
 
-# Genérico investimento (sem direção clara)
+# Rendimento creditado em conta — é RECEITA, não investimento!
+# 'REND PAGO APLIC AUT' = juros recebidos do CDB. Conta como movimentação normal.
+RE_RENDIMENTO = re.compile(
+    r"\b("
+    r"REND\s+PAGO|"
+    r"RENDIMENTO\s+PAGO|"
+    r"CR[EÉ]DITO\s+RENDIMENTO|"
+    r"JUROS\s+(CRED|RECEB)"
+    r")\b",
+    re.IGNORECASE,
+)
+
+# Genérico investimento (sem direção clara — fica em 'investimento_outro' só se nada acima casar)
 RE_INVESTIMENTO_OUTRO = re.compile(
     r"\b("
     r"FUNDO\s+DE\s+INVESTIMENTO|"
-    r"CDB|RDB|LCI|LCA|TESOURO\s+DIRETO"
+    r"\bCDB\b|\bRDB\b|\bLCI\b|\bLCA\b|TESOURO\s+DIRETO"
     r")\b",
     re.IGNORECASE,
 )
 
 
 def is_saldo(historico: str) -> bool:
-    return isinstance(historico, str) and bool(RE_SALDO.search(historico))
+    if not isinstance(historico, str):
+        return False
+    return bool(RE_SALDO.search(_normalizar_para_classificacao(historico)))
 
 
 def classificar_movimentacao(historico: str) -> str:
     """Retorna 'aplicacao', 'resgate', 'investimento_outro', 'saldo' ou 'movimentacao'.
 
-    'movimentacao' = lançamento normal (entra no Total Extrato Bancário).
-    Os demais são EXCLUÍDOS do total.
+    'movimentacao' = lançamento normal (entra no Total).
+    'saldo' = linha de posição/extrato. ÚNICA categoria EXCLUÍDA do total (v3).
+    Demais entram no total mas aparecem em aba específica.
     """
     if not isinstance(historico, str) or not historico.strip():
         return "movimentacao"
-    if RE_SALDO.search(historico):
+
+    # Normaliza ('S A L D O' → 'SALDO') antes de testar
+    norm = _normalizar_para_classificacao(historico)
+
+    # ORDEM IMPORTA:
+    # 1. SALDO primeiro (cobre 'SDO APLIC AUT' que tem APLIC mas é saldo)
+    if RE_SALDO.search(norm):
         return "saldo"
-    if RE_APLICACAO.search(historico):
-        return "aplicacao"
-    if RE_RESGATE.search(historico):
+    # 2. RENDIMENTO (REND PAGO) é movimentação normal, não investimento
+    if RE_RENDIMENTO.search(norm):
+        return "movimentacao"
+    # 3. Resgate antes de aplicação ('RES APLIC' tem ambos, mas é resgate)
+    if RE_RESGATE.search(norm):
         return "resgate"
-    if RE_INVESTIMENTO_OUTRO.search(historico):
+    if RE_APLICACAO.search(norm):
+        return "aplicacao"
+    if RE_INVESTIMENTO_OUTRO.search(norm):
         return "investimento_outro"
     return "movimentacao"
 

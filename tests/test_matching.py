@@ -277,7 +277,7 @@ def teste_aplicacoes_resgates_ainda_disponiveis_em_aba_propria():
 
 
 def teste_excesso_no_sankhya():
-    """Quando Sankhya tem mais lançamentos que banco, sinaliza excedentes (v3)."""
+    """Quando Sankhya tem mais lançamentos que banco, sinaliza o EXCEDENTE (pós-match)."""
     banco = _df_banco([
         (_dt("04/05/2026"), "PIX RECEBIDO", "", 100.00, "C1"),
         (_dt("04/05/2026"), "PIX RECEBIDO", "", 100.00, "C1"),
@@ -287,13 +287,13 @@ def teste_excesso_no_sankhya():
         (_dt("04/05/2026"), "PIX RECEBIDO", "", 100.00, "C1"),
         (_dt("04/05/2026"), "PIX RECEBIDO", "", 100.00, "C1"),
         (_dt("04/05/2026"), "PIX RECEBIDO", "", 100.00, "C1"),
-        (_dt("04/05/2026"), "PIX RECEBIDO", "", 100.00, "C1"),  # 4º — excedente
+        (_dt("04/05/2026"), "PIX RECEBIDO", "", 100.00, "C1"),  # 4º — vai sobrar
     ])
     res = executar_pipeline(banco, sistema, rodar_fuzzy=False)
+    # 3 conciliam, 1 sobra como pendente do Sankhya → 1 excedente
+    assert len(res.conciliados) == 3
     assert len(res.excesso_sankhya) == 1, \
         f"esperado 1 excedente, veio {len(res.excesso_sankhya)}"
-    assert res.excesso_sankhya.iloc[0]["qtd_sankhya"] == 4
-    assert res.excesso_sankhya.iloc[0]["qtd_banco"] == 3
     print("✓ teste_excesso_no_sankhya")
 
 
@@ -441,6 +441,68 @@ def teste_classificacao_movimento():
     assert classificar_movimentacao("BOLETO ALUGUEL") == "movimentacao"
     assert classificar_movimentacao("COMPRA CDB") == "aplicacao"
     print("✓ teste_classificacao_movimento")
+
+
+def teste_saldo_com_letras_separadas_por_espaco():
+    """'S A L D O' deve ser reconhecido como saldo (caso real Itaú)."""
+    from src.classificacao import classificar_movimentacao
+    assert classificar_movimentacao("S A L D O") == "saldo"
+    assert classificar_movimentacao("SDO APLIC AUT MAIS AP") == "saldo"
+    print("✓ teste_saldo_com_letras_separadas_por_espaco")
+
+
+def teste_rendimento_pago_e_movimentacao_nao_aplicacao():
+    """'REND PAGO APLIC AUT' deve ser MOVIMENTAÇÃO (receita real), não aplicação."""
+    from src.classificacao import classificar_movimentacao
+    assert classificar_movimentacao("REND PAGO APLIC AUT APR") == "movimentacao"
+    assert classificar_movimentacao("CRÉDITO RENDIMENTO") == "movimentacao"
+    print("✓ teste_rendimento_pago_e_movimentacao_nao_aplicacao")
+
+
+def teste_res_aplic_e_resgate():
+    """'RES APLIC AUT' deve ser resgate, não aplicação."""
+    from src.classificacao import classificar_movimentacao
+    assert classificar_movimentacao("RES APLIC AUT MAIS AP") == "resgate"
+    assert classificar_movimentacao("RESG. AUT MAIS") == "resgate"
+    print("✓ teste_res_aplic_e_resgate")
+
+
+def teste_baixa_api_e_boleto():
+    """'BAIXA API' no Sankhya deve ser classificado como Boleto."""
+    from src.classificacao import classificar_tipo
+    assert classificar_tipo("BAIXA API FORNECEDOR XYZ") == "Boleto"
+    assert classificar_tipo("BAIXA API") == "Boleto"
+    print("✓ teste_baixa_api_e_boleto")
+
+
+def teste_possiveis_duplic_ignora_documento_vazio():
+    """Não dispara possíveis duplicidades quando documento é vazio (caso real Itaú SISPAG)."""
+    banco = _df_banco([
+        (_dt("14/05/2026"), "SISPAG FORNECEDORES", "", -2240.00, "C1"),
+        (_dt("14/05/2026"), "SISPAG FORNECEDORES", "", -700.00, "C1"),
+        (_dt("14/05/2026"), "SISPAG FORNECEDORES", "", -2700.00, "C1"),
+    ])
+    sistema = pd.DataFrame(columns=banco.columns)
+    res = executar_pipeline(banco, sistema, rodar_fuzzy=False)
+    assert res.possiveis_duplicidades.empty, \
+        "documento vazio NÃO deveria disparar possíveis duplicidades"
+    print("✓ teste_possiveis_duplic_ignora_documento_vazio")
+
+
+def teste_excesso_sankhya_pos_match():
+    """Excesso só sinaliza linhas pendentes do Sankhya (não as já conciliadas)."""
+    banco = _df_banco([
+        (_dt("14/05/2026"), "PIX", "", -1000.00, "C1"),
+    ])
+    sistema = _df_banco([
+        (_dt("14/05/2026"), "FORNECEDOR XYZ", "", -1000.00, "C1"),  # casa
+        (_dt("14/05/2026"), "FORNECEDOR ABC", "", -1000.00, "C1"),  # excedente
+    ])
+    res = executar_pipeline(banco, sistema, rodar_fuzzy=False)
+    # 1 deve casar, 1 fica como excesso
+    assert len(res.conciliados) == 1, f"esperava 1 conciliado, veio {len(res.conciliados)}"
+    assert len(res.excesso_sankhya) == 1, f"esperava 1 excesso, veio {len(res.excesso_sankhya)}"
+    print("✓ teste_excesso_sankhya_pos_match")
 
 
 def main():

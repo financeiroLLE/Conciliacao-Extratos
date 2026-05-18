@@ -29,47 +29,56 @@ def _centavos(v: float) -> int:
 def detectar_excesso_sankhya(
     banco: pd.DataFrame,
     sistema: pd.DataFrame,
+    pares_conciliados_idx_sistema: set[int] | None = None,
 ) -> pd.DataFrame:
-    """Detecta quando o Sankhya tem MAIS lançamentos do que o banco (v3).
+    """Detecta excesso de lançamentos no Sankhya — versão histórica (pré-match).
+
+    Mantida por retrocompatibilidade. A nova versão usada no pipeline é
+    `detectar_excesso_sankhya_pos_match` que recebe pendentes (depois do match).
+    """
+    return detectar_excesso_sankhya_pos_match(banco, sistema)
+
+
+def detectar_excesso_sankhya_pos_match(
+    pend_banco: pd.DataFrame,
+    pend_sistema: pd.DataFrame,
+) -> pd.DataFrame:
+    """v3.1: Detecta excesso de Sankhya entre as PENDÊNCIAS (após o match).
+
+    Critério: para cada (conta, valor, data) — se há mais pendências do Sankhya
+    do que do banco, sinaliza o excedente. Não considera histórico, porque banco
+    e ERP têm históricos diferentes para a mesma transação.
 
     A base da verdade é o EXTRATO BANCÁRIO.
-    Para cada (conta, valor, data, histórico normalizado) — se o Sankhya tem N
-    lançamentos e o banco tem M < N, sinaliza os (N - M) lançamentos excedentes
-    do Sankhya como possíveis lançamentos a mais.
-
-    Exemplo: 3 PIX de R$100 no banco, 4 PIX de R$100 no Sankhya → 1 excedente.
     """
-    if sistema.empty:
+    if pend_sistema.empty:
         return pd.DataFrame()
 
-    s = sistema.copy()
-    s["_hist_norm"] = s["historico"].apply(_normalizar_historico)
+    s = pend_sistema.copy()
     s["_cent"] = s["valor"].apply(_centavos)
 
-    if not banco.empty:
-        b = banco.copy()
-        b["_hist_norm"] = b["historico"].apply(_normalizar_historico)
+    if not pend_banco.empty:
+        b = pend_banco.copy()
         b["_cent"] = b["valor"].apply(_centavos)
         contagem_banco = (
-            b.groupby(["conta", "_cent", "data", "_hist_norm"])
+            b.groupby(["conta", "_cent", "data"])
             .size()
             .reset_index(name="qtd_banco")
         )
     else:
         contagem_banco = pd.DataFrame(
-            columns=["conta", "_cent", "data", "_hist_norm", "qtd_banco"]
+            columns=["conta", "_cent", "data", "qtd_banco"]
         )
 
     contagem_sis = (
-        s.groupby(["conta", "_cent", "data", "_hist_norm"])
+        s.groupby(["conta", "_cent", "data"])
         .size()
         .reset_index(name="qtd_sistema")
     )
 
-    # Junta as duas contagens
     juntos = contagem_sis.merge(
         contagem_banco,
-        on=["conta", "_cent", "data", "_hist_norm"],
+        on=["conta", "_cent", "data"],
         how="left",
     )
     juntos["qtd_banco"] = juntos["qtd_banco"].fillna(0).astype(int)
@@ -79,14 +88,12 @@ def detectar_excesso_sankhya(
     if juntos.empty:
         return pd.DataFrame()
 
-    # Recupera as linhas excedentes do Sankhya
     resultados = []
     for _, grupo in juntos.iterrows():
         cond = (
             (s["conta"] == grupo["conta"])
             & (s["_cent"] == grupo["_cent"])
             & (s["data"] == grupo["data"])
-            & (s["_hist_norm"] == grupo["_hist_norm"])
         )
         linhas = s[cond].head(int(grupo["excedente"]))
         for _, linha in linhas.iterrows():
@@ -96,12 +103,13 @@ def detectar_excesso_sankhya(
                 "historico": linha["historico"],
                 "documento": linha.get("documento", ""),
                 "valor": linha["valor"],
-                "qtd_sankhya": int(grupo["qtd_sistema"]),
-                "qtd_banco": int(grupo["qtd_banco"]),
+                "qtd_sankhya_pendente": int(grupo["qtd_sistema"]),
+                "qtd_banco_pendente": int(grupo["qtd_banco"]),
                 "excedente_total": int(grupo["excedente"]),
                 "motivo": (
-                    f"Sankhya tem {int(grupo['qtd_sistema'])} lançamento(s) com este perfil; "
-                    f"banco tem apenas {int(grupo['qtd_banco'])}"
+                    f"Sankhya tem {int(grupo['qtd_sistema'])} pendência(s) "
+                    f"(mesma data+valor+conta); banco tem apenas "
+                    f"{int(grupo['qtd_banco'])} pendência(s)"
                 ),
             })
 
@@ -223,7 +231,11 @@ def detectar_possiveis_duplicidades(
             if grupo.empty:
                 continue
             for _, g in grupo.iterrows():
-                cond = pd.Series([True] * len(d), index=d.index)  # <-- mesmo índice
+                # Pula grupos onde o documento é vazio (gera falso positivo em massa
+                # para lançamentos legítimos sem documento — ex: 19 SISPAGs sem doc).
+                if "_doc_norm" in chave and not str(g.get("_doc_norm", "")).strip():
+                    continue
+                cond = pd.Series([True] * len(d), index=d.index)
                 for col in chave:
                     cond &= (d[col] == g[col])
                 linhas = d[cond]
