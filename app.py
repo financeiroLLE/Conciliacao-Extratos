@@ -741,76 +741,69 @@ def pagina_dashboard():
 
     kpis = resultado.kpis_globais()
 
-    # v3.9: INDICADORES EXECUTIVOS globais só aparecem quando NENHUMA conta está selecionada.
-    if not st.session_state.banco_conta_selecionada:
-        section_title("INDICADORES EXECUTIVOS")
+    section_title("INDICADORES EXECUTIVOS")
 
-        # Linha 1: principais
-        sub_banco = _card_total_com_rec_desp(kpis["receitas_banco"], kpis["despesas_banco"])
-        sub_sankhya = _card_total_com_rec_desp(kpis["receitas_sistema"], kpis["despesas_sistema"])
-        cards1 = [
-            card_kpi_html("Total Movimentado no Banco", fmt_brl(kpis["total_movimentado_banco"]),
-                          sub_banco),
-            card_kpi_html("Total Extrato Sankhya", fmt_brl(kpis["total_extrato_sistema"]),
-                          sub_sankhya),
-            card_kpi("Total Conciliado", fmt_brl(kpis["total_conciliado"]),
-                     "match Banco × Sankhya", classe="destaque-verde"),
-            card_kpi("Percentual Conciliado", fmt_pct(kpis["percentual_conciliado"]),
-                     classe="destaque-amarelo"),
-        ]
-        render_cards(cards1)
+    # Linha 1: principais
+    sub_banco = _card_total_com_rec_desp(kpis["receitas_banco"], kpis["despesas_banco"])
+    sub_sankhya = _card_total_com_rec_desp(kpis["receitas_sistema"], kpis["despesas_sistema"])
+    cards1 = [
+        card_kpi_html("Total Movimentado no Banco", fmt_brl(kpis["total_movimentado_banco"]),
+                      sub_banco),
+        card_kpi_html("Total Extrato Sankhya", fmt_brl(kpis["total_extrato_sistema"]),
+                      sub_sankhya),
+        card_kpi("Total Conciliado", fmt_brl(kpis["total_conciliado"]),
+                 "match Banco × Sankhya", classe="destaque-verde"),
+        card_kpi("Percentual Conciliado", fmt_pct(kpis["percentual_conciliado"]),
+                 classe="destaque-amarelo"),
+    ]
+    render_cards(cards1)
 
-        # Linha 2: Falta Conciliar vertical + Divergência + Investimentos
-        sub_falta_conciliar = _card_falta_conciliar_vertical(
-            kpis["falta_conciliar_receitas"],
-            kpis["falta_conciliar_despesas"],
-        )
-        sub_falta_lancar = _card_falta_conciliar_vertical(
-            kpis["falta_lancar_receitas"],
-            kpis["falta_lancar_despesas"],
-        )
-        investimentos_html = _card_investimentos(resultado)
+    # Linha 2: Falta Conciliar vertical + Divergência + Investimentos
+    sub_falta_conciliar = _card_falta_conciliar_vertical(
+        kpis["falta_conciliar_receitas"],
+        kpis["falta_conciliar_despesas"],
+    )
+    investimentos_html = _card_investimentos(resultado)
 
-        cards2 = [
-            card_kpi_html("Falta Conciliar", fmt_brl(kpis["falta_conciliar"]),
-                          sub_falta_conciliar, classe="destaque-vermelho"),
-            card_kpi_html("Divergência (Sankhya × Banco)",
-                          fmt_brl(kpis["divergencia_sankhya_banco"]),
-                          _card_falta_conciliar_vertical(
-                              kpis["divergencia_sankhya_banco_receitas"],
-                              kpis["divergencia_sankhya_banco_despesas"],
-                          ),
-                          classe="destaque-vermelho"),
-            card_kpi("Qtd Divergências", fmt_int(kpis["qtd_divergencia_sankhya_banco"]),
-                     "lançamentos do Sankhya sem par no banco",
-                     classe="destaque-amarelo" if kpis["qtd_divergencia_sankhya_banco"] > 0 else ""),
-            investimentos_html,
-        ]
-        render_cards(cards2)
+    cards2 = [
+        card_kpi_html("Falta Conciliar", fmt_brl(kpis["falta_conciliar"]),
+                      sub_falta_conciliar, classe="destaque-vermelho"),
+        card_kpi_html("Divergência (Sankhya × Banco)",
+                      fmt_brl(kpis["divergencia_sankhya_banco"]),
+                      _card_falta_conciliar_vertical(
+                          kpis["divergencia_sankhya_banco_receitas"],
+                          kpis["divergencia_sankhya_banco_despesas"],
+                      ),
+                      classe="destaque-vermelho"),
+        card_kpi("Qtd Divergências", fmt_int(kpis["qtd_divergencia_sankhya_banco"]),
+                 "lançamentos do Sankhya sem par no banco",
+                 classe="destaque-amarelo" if kpis["qtd_divergencia_sankhya_banco"] > 0 else ""),
+        investimentos_html,
+    ]
+    render_cards(cards2)
 
-        # Linha 3: contagens
-        cards3 = [
-            card_kpi("Registros Processados", fmt_int(kpis["qtd_registros_banco"] + kpis["qtd_registros_sistema"])),
-            card_kpi("Conciliados", fmt_int(kpis["qtd_conciliados"]), classe="destaque-verde"),
-            card_kpi("Movimentações Banco", fmt_int(kpis["qtd_movimentacoes_banco"])),
-            card_kpi("Movimentações Sistema", fmt_int(kpis["qtd_movimentacoes_sistema"])),
-        ]
-        render_cards(cards3)
+    # Linha 3: contagens
+    cards3 = [
+        card_kpi("Registros Processados", fmt_int(kpis["qtd_registros_banco"] + kpis["qtd_registros_sistema"])),
+        card_kpi("Conciliados", fmt_int(kpis["qtd_conciliados"]), classe="destaque-verde"),
+        card_kpi("Movimentações Banco", fmt_int(kpis["qtd_movimentacoes_banco"])),
+        card_kpi("Movimentações Sistema", fmt_int(kpis["qtd_movimentacoes_sistema"])),
+    ]
+    render_cards(cards3)
 
-        st.divider()
+    st.divider()
 
-    # v3.5: se uma conta foi selecionada, mostra detalhamento; senão, painel de bancos
-    if st.session_state.banco_conta_selecionada:
-        tela_detalhamento_banco(resultado, st.session_state.banco_conta_selecionada)
-    else:
-        section_title("CONTAS PROCESSADAS — CLIQUE PARA DETALHAR")
-        render_painel_bancos(resultado)
+    # v3.10: Dashboard é visão gerencial — cards das contas são só informativos.
+    # Drill-down (Ver detalhamento) só acontece na aba Conciliação.
+    section_title("CONTAS PROCESSADAS")
+    render_painel_bancos(resultado, mostrar_botao=False)
 
 
 # ============================================================
 # Painel de botões por banco
 # ============================================================
-def render_painel_bancos(resultado: ResultadoConciliacao):
+def render_painel_bancos(resultado: ResultadoConciliacao, mostrar_botao: bool = True):
+    """v3.10: `mostrar_botao=False` no Dashboard (cards só informativos)."""
     contas = resultado.contas_processadas
     if not contas:
         st.warning("Nenhuma conta foi processada.")
@@ -832,7 +825,7 @@ def render_painel_bancos(resultado: ResultadoConciliacao):
         with col:
             st.html(
                 f"""
-                <div class="lle-kpi" style="cursor:pointer;">
+                <div class="lle-kpi">
                     <div class="lle-kpi-label">{conta}</div>
                     <div class="lle-kpi-value" style="font-size:22px;">
                         {fmt_pct(pct)}
@@ -845,13 +838,14 @@ def render_painel_bancos(resultado: ResultadoConciliacao):
                 </div>
                 """
             )
-            st.button(
-                "Ver detalhamento →",
-                key=f"banco_btn_{conta}",
-                on_click=selecionar_banco,
-                args=(conta,),
-                use_container_width=True,
-            )
+            if mostrar_botao:
+                st.button(
+                    "Ver detalhamento →",
+                    key=f"banco_btn_{conta}",
+                    on_click=selecionar_banco,
+                    args=(conta,),
+                    use_container_width=True,
+                )
 
 
 # ============================================================
@@ -1110,6 +1104,7 @@ def tela_upload():
                 st.session_state.pendencias_anteriores = pendencias
                 st.session_state.id_execucao_atual = id_exec
                 st.session_state.xlsx_atual = xlsx_bytes
+                st.session_state.csvs_zip_atual = None  # força regerar quando precisar
                 st.session_state.fluxo_etapa = "resultado"
                 st.rerun()
 
@@ -1150,7 +1145,11 @@ def tela_resultado():
             use_container_width=True,
         )
     with col_top3:
-        zip_bytes = gerar_csvs_zip(resultado)
+        # v3.10: cache no session_state — evita regerar o zip a cada rerun
+        zip_bytes = st.session_state.get("csvs_zip_atual")
+        if zip_bytes is None:
+            zip_bytes = gerar_csvs_zip(resultado)
+            st.session_state.csvs_zip_atual = zip_bytes
         nome_zip = f"conciliacao_{resultado.data_referencia.strftime('%Y%m%d')}_csvs.zip"
         st.download_button(
             "⬇️ CSVs (zip)",
@@ -1304,7 +1303,12 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
 
     # Download específico desse banco
     try:
-        xlsx_banco = gerar_relatorio_excel_de_conta(resultado, conta)
+        # v3.10: cache do Excel da conta no session_state
+        excel_conta_key = f"xlsx_conta_{st.session_state.get('id_execucao_atual', 'novo')}_{conta}"
+        xlsx_banco = st.session_state.get(excel_conta_key)
+        if xlsx_banco is None:
+            xlsx_banco = gerar_relatorio_excel_de_conta(resultado, conta)
+            st.session_state[excel_conta_key] = xlsx_banco
         st.download_button(
             f"⬇️ Baixar relatório de {conta}",
             data=xlsx_banco,
@@ -1651,8 +1655,14 @@ def render_subabas_tipo(resultado: ResultadoConciliacao, conta: str | None = Non
     tipos_disponiveis = ["Todos"] + TIPOS_PRINCIPAIS + ["Pagamentos", "Recebimentos", "Outros"]
     tabs = st.tabs(tipos_disponiveis)
 
-    # Monta DataFrame único: 3 origens (Conciliado / Pendente Banco / Pendente Sankhya)
-    df_unif = _montar_visao_unificada(resultado)
+    # v3.10: visão unificada é cara (concat de 3 DataFrames). Cache no session_state.
+    # Chave inclui id_execucao_atual pra invalidar quando o resultado muda.
+    cache_key = f"visao_unificada_{st.session_state.get('id_execucao_atual', 'novo')}"
+    df_unif = st.session_state.get(cache_key)
+    if df_unif is None:
+        df_unif = _montar_visao_unificada(resultado)
+        st.session_state[cache_key] = df_unif
+
     if conta is not None and not df_unif.empty and "conta" in df_unif.columns:
         df_unif = df_unif[df_unif["conta"] == conta].copy()
 
