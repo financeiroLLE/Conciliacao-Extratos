@@ -552,6 +552,36 @@ def teste_concat_multiplos_extratos_data_object():
     print("✓ teste_concat_multiplos_extratos_data_object")
 
 
+def teste_divergencia_nao_conta_linha_ja_casada():
+    """v3.11: Se o Sankhya marca uma linha como 'Conciliado=Não' MAS ela já casou
+    no nosso match automático, NÃO deve aparecer em Divergência. Bug do print Sicredi:
+    22 linhas conciliadas estavam aparecendo também em divergência."""
+    banco = _df_banco([
+        (_dt("14/05/2026"), "PIX RECEBIDO", "", 100.00, "C1"),
+        (_dt("14/05/2026"), "PIX RECEBIDO", "", 200.00, "C1"),
+    ])
+    sistema = _df_banco([
+        (_dt("14/05/2026"), "CLIENTE A", "", 100.00, "C1"),  # casa com banco
+        (_dt("14/05/2026"), "CLIENTE B", "", 200.00, "C1"),  # casa com banco
+    ])
+    # Marca AMBAS como Conciliado=Não no Sankhya (cenário do bug)
+    sistema["conciliado"] = "Não"
+
+    res = executar_pipeline(banco, sistema, rodar_fuzzy=False)
+    # Ambas casaram no match automático
+    assert len(res.conciliados) == 2, f"esperava 2 conciliados, veio {len(res.conciliados)}"
+    # Mas nenhuma deve aparecer como divergência (a falha era que entravam em 'Sem par no banco')
+    div = res.divergencias_sankhya_banco()
+    assert div.empty, (
+        f"esperava 0 divergências (linhas já conciliadas no match), veio {len(div)}\n"
+        f"{div.to_string() if not div.empty else ''}"
+    )
+    k = res.kpis_globais()
+    assert k["qtd_divergencia_sankhya_banco"] == 0, \
+        f"esperava qtd=0, veio {k['qtd_divergencia_sankhya_banco']}"
+    print("✓ teste_divergencia_nao_conta_linha_ja_casada")
+
+
 def teste_extrato_com_metadados_antes_do_cabecalho():
     """v3.7: Extrato bancário com linhas de metadados (Nome, Agência, Data emissão...)
     ANTES do cabeçalho real. O parser deve detectar dinamicamente a linha do header."""

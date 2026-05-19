@@ -98,8 +98,38 @@ class ResultadoConciliacao:
         frames = []
 
         # 1) Sem par no banco
+        # v3.11 BUGFIX: se a fonte é 'Conciliado=Não do Sankhya', precisamos REMOVER
+        # as linhas que JÁ casaram no nosso match automático. Caso contrário, uma
+        # linha pode aparecer ao mesmo tempo como 'Conciliada' (porque bateu com o
+        # banco) e como 'Divergência - Sem par no banco' (porque o Sankhya marca
+        # ela como Conciliado=Não no campo do ERP).
         if self.usa_conciliado_sankhya and not self.falta_lancar_sankhya.empty:
-            df = _eh_movimentado(self.falta_lancar_sankhya)
+            df_origem = _eh_movimentado(self.falta_lancar_sankhya)
+            # Remove linhas que aparecem em 'conciliados' (lado sistema)
+            if not self.conciliados.empty and not df_origem.empty:
+                # Identifica chaves (data, valor, conta) que já casaram
+                sis_cols = [c for c in self.conciliados.columns if c.startswith("sistema_")]
+                if sis_cols:
+                    chaves_casadas = set()
+                    for _, row in self.conciliados.iterrows():
+                        data_v = row.get("sistema_data")
+                        valor_v = row.get("sistema_valor")
+                        conta_v = row.get("sistema_conta")
+                        hist_v = row.get("sistema_historico", "")
+                        if data_v is not None and valor_v is not None:
+                            chaves_casadas.add(
+                                (str(data_v), round(float(valor_v), 2),
+                                 str(conta_v), str(hist_v))
+                            )
+                    def _esta_casada(linha):
+                        return (
+                            str(linha.get("data")),
+                            round(float(linha.get("valor", 0)), 2),
+                            str(linha.get("conta", "")),
+                            str(linha.get("historico", "")),
+                        ) in chaves_casadas
+                    df_origem = df_origem[~df_origem.apply(_esta_casada, axis=1)]
+            df = df_origem
         else:
             df = _eh_movimentado(self.pendentes_sistema)
         if not df.empty:
@@ -293,10 +323,38 @@ def _calcular_kpis(
     #   2. Excesso no Sankhya (mesma data+valor+conta, Sankhya tem mais que o banco)
     #   3. Divergência de valor (mesma chave, valor diferente)
     # As 3 podem se sobrepor, então deduplicamos pelo conjunto (data, valor, hist, conta).
+
+    # v3.11 BUGFIX: linhas do Sankhya com 'Conciliado=Não' que JÁ casaram no nosso
+    # match não devem entrar em 'Sem par no banco'. Caso comum: lançamentos
+    # contabilmente "não conciliados" no ERP mas que batem 1-pra-1 com o banco.
+    chaves_casadas_sis = set()
+    if not conciliados.empty:
+        for _, row in conciliados.iterrows():
+            d_v = row.get("sistema_data")
+            v_v = row.get("sistema_valor")
+            c_v = row.get("sistema_conta")
+            h_v = row.get("sistema_historico", "")
+            if d_v is not None and v_v is not None:
+                chaves_casadas_sis.add(
+                    (str(d_v), round(float(v_v), 2), str(c_v), str(h_v))
+                )
+
+    def _remover_casadas(df_sis: pd.DataFrame) -> pd.DataFrame:
+        if df_sis.empty or not chaves_casadas_sis:
+            return df_sis
+        def _key(linha):
+            return (
+                str(linha.get("data")),
+                round(float(linha.get("valor", 0)), 2),
+                str(linha.get("conta", "")),
+                str(linha.get("historico", "")),
+            )
+        return df_sis[~df_sis.apply(lambda r: _key(r) in chaves_casadas_sis, axis=1)]
+
     if usa_conciliado_sankhya and not falta_lancar_sankhya.empty:
-        sem_par_banco = _eh_movimentado(falta_lancar_sankhya)
+        sem_par_banco = _remover_casadas(_eh_movimentado(falta_lancar_sankhya))
     else:
-        sem_par_banco = _eh_movimentado(pendentes_sistema)
+        sem_par_banco = _remover_casadas(_eh_movimentado(pendentes_sistema))
 
     # Junta com excesso e divergências de valor
     frames_diverg = []
