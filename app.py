@@ -1414,19 +1414,19 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
     excesso_conta = resultado.excesso_sankhya_da_conta(conta)
     diverg_consolidada = resultado.divergencias_sankhya_banco(conta)
 
-    # v5.0: filtra estornos e TOP 1722 pela conta
-    estornos_anu_conta = resultado.estornos_anulados[
-        resultado.estornos_anulados["conta"] == conta
-    ] if not resultado.estornos_anulados.empty else pd.DataFrame()
-    estornos_par_conta = resultado.estornos_parciais[
-        resultado.estornos_parciais["conta"] == conta
-    ] if not resultado.estornos_parciais.empty else pd.DataFrame()
-    top1722_grupos_conta = resultado.top1722_grupos[
-        resultado.top1722_grupos["conta"] == conta
-    ] if not resultado.top1722_grupos.empty else pd.DataFrame()
-    top1722_diff_conta = resultado.top1722_diferencas[
-        resultado.top1722_diferencas["conta"] == conta
-    ] if not resultado.top1722_diferencas.empty else pd.DataFrame()
+    # v5.0/v5.1: filtra estornos e TOP 1722 pela conta.
+    # `getattr` com fallback pra DataFrame vazio garante compatibilidade quando o objeto
+    # `resultado` em sessão veio de uma versão anterior do código (sem esses campos).
+    def _filtrar_conta_seguro(attr_name: str) -> pd.DataFrame:
+        df = getattr(resultado, attr_name, None)
+        if df is None or df.empty or "conta" not in df.columns:
+            return pd.DataFrame()
+        return df[df["conta"] == conta]
+
+    estornos_anu_conta = _filtrar_conta_seguro("estornos_anulados")
+    estornos_par_conta = _filtrar_conta_seguro("estornos_parciais")
+    top1722_grupos_conta = _filtrar_conta_seguro("top1722_grupos")
+    top1722_diff_conta = _filtrar_conta_seguro("top1722_diferencas")
 
     tabs_nomes = ["✅ Conciliadas", "⏳ Pendentes",
                   "⚠️ Divergências (Sankhya × Banco)",
@@ -1490,7 +1490,11 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
     if not top1722_grupos_conta.empty:
         idx += 1
         with tabs[idx]:
-            render_tab_top1722_grupos(top1722_grupos_conta, resultado.top1722_linhas, conta)
+            render_tab_top1722_grupos(
+                top1722_grupos_conta,
+                getattr(resultado, "top1722_linhas", pd.DataFrame()),
+                conta,
+            )
     if not top1722_diff_conta.empty:
         idx += 1
         with tabs[idx]:

@@ -582,6 +582,221 @@ def teste_divergencia_nao_conta_linha_ja_casada():
     print("✓ teste_divergencia_nao_conta_linha_ja_casada")
 
 
+def teste_estorno_total_anula_par():
+    """v5.0: par recebimento + estorno com saldo zero é anulado totalmente.
+    Nenhum dos 2 entra em Pendentes/Falta Conciliar/Conta 70."""
+    banco = _df_banco([
+        (_dt("10/05/2026"), "RECEBIMENTO CARTAO STONE CLIENTE X", "", 1000.00, "C1"),
+        (_dt("11/05/2026"), "ESTORNO RECEBIMENTO CARTAO STONE CLIENTE X", "", -1000.00, "C1"),
+        (_dt("12/05/2026"), "TED RECEBIDA FORNECEDOR Y", "", 500.00, "C1"),  # entra normalmente
+    ])
+    sistema = _df_banco([])
+    res = executar_pipeline(banco, sistema, rodar_fuzzy=False)
+
+    # 1 par anulado
+    assert len(res.estornos_anulados) == 1, f"esperava 1 par, veio {len(res.estornos_anulados)}"
+    par = res.estornos_anulados.iloc[0]
+    assert par["status"] == "Anulado por Estorno"
+    assert par["saldo_liquido"] == 0.0
+    # Nem o original nem o estorno aparecem em pendentes
+    pend = res.pendentes_banco
+    assert len(pend) == 1, f"esperava 1 pendente, veio {len(pend)}: {pend}"
+    assert pend.iloc[0]["valor"] == 500.00
+    print("✓ teste_estorno_total_anula_par")
+
+
+def teste_estorno_parcial_mantem_diferenca():
+    """v5.0: par com valores diferentes (estorno parcial) mantém saldo na análise."""
+    banco = _df_banco([
+        (_dt("10/05/2026"), "PAGAMENTO FORNECEDOR Z", "", -1000.00, "C1"),
+        (_dt("11/05/2026"), "ESTORNO PARCIAL PAGAMENTO Z", "", 300.00, "C1"),
+    ])
+    sistema = _df_banco([])
+    res = executar_pipeline(banco, sistema, rodar_fuzzy=False)
+
+    # Sem anulado total (porque saldo != 0)
+    assert res.estornos_anulados.empty
+    # 1 estorno parcial detectado
+    assert len(res.estornos_parciais) == 1
+    par = res.estornos_parciais.iloc[0]
+    assert par["saldo_liquido"] == -700.00
+    # A diferença de -R$ 700 deve ter voltado pro fluxo como linha sintética
+    pend = res.pendentes_banco
+    # Tem que ter 1 linha com valor -700 e histórico marcado
+    assert len(pend) == 1, f"esperava 1 pendente, veio {len(pend)}"
+    assert pend.iloc[0]["valor"] == -700.00
+    assert "[ESTORNO PARCIAL]" in pend.iloc[0]["historico"]
+    print("✓ teste_estorno_parcial_mantem_diferenca")
+
+
+def teste_estorno_palavra_chave_chargeback():
+    """v5.0: chargeback é reconhecido como termo de estorno."""
+    banco = _df_banco([
+        (_dt("10/05/2026"), "RECEBIMENTO CARTAO STONE", "", 500.00, "C1"),
+        (_dt("15/05/2026"), "CHARGEBACK STONE", "", -500.00, "C1"),
+    ])
+    sistema = _df_banco([])
+    res = executar_pipeline(banco, sistema, rodar_fuzzy=False)
+    assert len(res.estornos_anulados) == 1
+    par = res.estornos_anulados.iloc[0]
+    assert par["motivo"].lower() == "chargeback"
+    print("✓ teste_estorno_palavra_chave_chargeback")
+
+
+def teste_estorno_fora_da_janela_nao_anula():
+    """v5.0: par fora da janela de 7 dias não é considerado estorno."""
+    banco = _df_banco([
+        (_dt("01/05/2026"), "RECEBIMENTO CARTAO", "", 500.00, "C1"),
+        (_dt("20/05/2026"), "ESTORNO CARTAO", "", -500.00, "C1"),  # 19 dias depois
+    ])
+    sistema = _df_banco([])
+    res = executar_pipeline(banco, sistema, rodar_fuzzy=False)
+    assert res.estornos_anulados.empty
+    # Ambos entram em pendentes
+    assert len(res.pendentes_banco) == 2
+    print("✓ teste_estorno_fora_da_janela_nao_anula")
+
+
+def teste_estorno_sem_palavra_chave_nao_anula():
+    """v5.0: par com valores opostos mas SEM palavra-chave de estorno no histórico
+    não é tratado como estorno (poderia ser coisa diferente)."""
+    banco = _df_banco([
+        (_dt("10/05/2026"), "RECEBIMENTO CLIENTE A", "", 500.00, "C1"),
+        (_dt("11/05/2026"), "PAGAMENTO FORNECEDOR B", "", -500.00, "C1"),  # mesmo valor mas sem palavra-chave
+    ])
+    sistema = _df_banco([])
+    res = executar_pipeline(banco, sistema, rodar_fuzzy=False)
+    assert res.estornos_anulados.empty
+    assert len(res.pendentes_banco) == 2
+    print("✓ teste_estorno_sem_palavra_chave_nao_anula")
+
+
+def teste_top1722_agrupamento_basico():
+    """v5.0: 4 linhas Sankhya TOP 1722 somam exatamente 1 crédito do banco."""
+    banco = _df_banco([
+        (_dt("10/05/2026"), "CREDITO CARTAO STONE", "", 5000.00, "ITAU"),
+    ])
+    sistema = pd.DataFrame([
+        # 4 linhas TOP 1722 mesma data
+        {"data": _dt("10/05/2026"), "historico": "CLIENTE A", "documento": "NF001",
+         "valor": 1200.00, "conta": "ITAU", "top_baixa": "1722"},
+        {"data": _dt("10/05/2026"), "historico": "CLIENTE B", "documento": "NF002",
+         "valor": 800.00, "conta": "ITAU", "top_baixa": "1722"},
+        {"data": _dt("10/05/2026"), "historico": "CLIENTE C", "documento": "NF003",
+         "valor": 2000.00, "conta": "ITAU", "top_baixa": "1722"},
+        {"data": _dt("10/05/2026"), "historico": "CLIENTE D", "documento": "NF004",
+         "valor": 1000.00, "conta": "ITAU", "top_baixa": "1722"},
+    ])
+
+    res = executar_pipeline(banco, sistema, rodar_fuzzy=False)
+
+    # 1 grupo conciliado
+    assert len(res.top1722_grupos) == 1, f"esperava 1 grupo, veio {len(res.top1722_grupos)}"
+    grupo = res.top1722_grupos.iloc[0]
+    assert grupo["valor_banco"] == 5000.00
+    assert grupo["qtd_sankhya"] == 4
+    assert grupo["valor_sankhya_total"] == 5000.00
+    # 4 linhas Sankhya viraram parte do agrupamento
+    assert len(res.top1722_linhas) == 4
+    # Banco saiu de pendentes
+    assert len(res.pendentes_banco) == 0
+    # Sankhya saiu de pendentes
+    assert len(res.pendentes_sistema) == 0
+    print("✓ teste_top1722_agrupamento_basico")
+
+
+def teste_top1722_sem_top_nao_agrupa():
+    """v5.0: linhas sem TOP 1722 não devem entrar em agrupamento."""
+    banco = _df_banco([
+        (_dt("10/05/2026"), "CREDITO CARTAO", "", 1000.00, "ITAU"),
+    ])
+    sistema = pd.DataFrame([
+        {"data": _dt("10/05/2026"), "historico": "X", "documento": "",
+         "valor": 600.00, "conta": "ITAU", "top_baixa": "1500"},  # TOP diferente
+        {"data": _dt("10/05/2026"), "historico": "Y", "documento": "",
+         "valor": 400.00, "conta": "ITAU", "top_baixa": ""},  # sem TOP
+    ])
+    res = executar_pipeline(banco, sistema, rodar_fuzzy=False)
+    # Nenhum grupo deve formar (600+400=1000 mas TOPs não são 1722)
+    assert res.top1722_grupos.empty
+    print("✓ teste_top1722_sem_top_nao_agrupa")
+
+
+def teste_top1722_com_diferenca():
+    """v5.0: se há candidatos TOP 1722 mas a soma não fecha → marca diferença."""
+    banco = _df_banco([
+        (_dt("10/05/2026"), "CREDITO CARTAO", "", 5000.00, "ITAU"),
+    ])
+    sistema = pd.DataFrame([
+        # Soma 4850 — banco recebeu 5000 (não fecha)
+        {"data": _dt("10/05/2026"), "historico": "A", "documento": "",
+         "valor": 2000.00, "conta": "ITAU", "top_baixa": "1722"},
+        {"data": _dt("10/05/2026"), "historico": "B", "documento": "",
+         "valor": 2850.00, "conta": "ITAU", "top_baixa": "1722"},
+    ])
+    res = executar_pipeline(banco, sistema, rodar_fuzzy=False)
+    # Nenhum grupo formou, mas tem "diferença"
+    assert res.top1722_grupos.empty
+    assert len(res.top1722_diferencas) == 1
+    diff = res.top1722_diferencas.iloc[0]
+    assert diff["valor_banco"] == 5000.00
+    assert diff["soma_candidatos"] == 4850.00
+    assert diff["diferenca"] == 150.00
+    assert diff["status"] == "Cartão TOP 1722 com Diferença"
+    # Banco continua em pendentes (não foi consumido)
+    assert len(res.pendentes_banco) == 1
+    print("✓ teste_top1722_com_diferenca")
+
+
+def teste_top1722_janela_de_data():
+    """v5.0: TOP 1722 dentro da janela ±2 dias deve agrupar."""
+    banco = _df_banco([
+        (_dt("10/05/2026"), "CREDITO CARTAO", "", 3000.00, "ITAU"),
+    ])
+    sistema = pd.DataFrame([
+        # Vendas ocorreram dia 8 (banco recebeu dia 10)
+        {"data": _dt("08/05/2026"), "historico": "A", "documento": "",
+         "valor": 1500.00, "conta": "ITAU", "top_baixa": "1722"},
+        {"data": _dt("09/05/2026"), "historico": "B", "documento": "",
+         "valor": 1500.00, "conta": "ITAU", "top_baixa": "1722"},
+    ])
+    res = executar_pipeline(banco, sistema, rodar_fuzzy=False)
+    assert len(res.top1722_grupos) == 1
+    assert res.top1722_grupos.iloc[0]["qtd_sankhya"] == 2
+    print("✓ teste_top1722_janela_de_data")
+
+
+def teste_top1722_2_creditos_banco_mesma_data():
+    """v5.0: 2 créditos banco no mesmo dia.
+    Se uma linha Sankhya bate 1-pra-1 com um crédito (mesmo valor exato),
+    o match exato consome essa linha; o resto vai pro agrupamento."""
+    banco = _df_banco([
+        (_dt("10/05/2026"), "CREDITO CARTAO", "", 1000.00, "ITAU"),
+        (_dt("10/05/2026"), "CREDITO CARTAO", "", 2000.00, "ITAU"),
+    ])
+    sistema = pd.DataFrame([
+        # 1000 vai casar 1-pra-1 com o 1º crédito banco
+        {"data": _dt("10/05/2026"), "historico": "A", "documento": "",
+         "valor": 1000.00, "conta": "ITAU", "top_baixa": "1722"},
+        # 800 + 1200 = 2000 → grupo
+        {"data": _dt("10/05/2026"), "historico": "B", "documento": "",
+         "valor": 800.00, "conta": "ITAU", "top_baixa": "1722"},
+        {"data": _dt("10/05/2026"), "historico": "C", "documento": "",
+         "valor": 1200.00, "conta": "ITAU", "top_baixa": "1722"},
+    ])
+    res = executar_pipeline(banco, sistema, rodar_fuzzy=False)
+    # 1 match exato 1-pra-1 (o de R$ 1000) + 1 grupo (o de R$ 2000)
+    assert len(res.conciliados) == 1, f"esperava 1 match exato, veio {len(res.conciliados)}"
+    assert len(res.top1722_grupos) == 1, f"esperava 1 grupo, veio {len(res.top1722_grupos)}"
+    # Total consumido: 1000 (match) + 2000 (grupo) = 3000
+    assert res.top1722_grupos.iloc[0]["valor_banco"] == 2000.00
+    assert res.top1722_grupos.iloc[0]["qtd_sankhya"] == 2
+    # Nada sobrou em pendentes
+    assert len(res.pendentes_banco) == 0
+    assert len(res.pendentes_sistema) == 0
+    print("✓ teste_top1722_2_creditos_banco_mesma_data")
+
+
 def teste_extrato_com_metadados_antes_do_cabecalho():
     """v3.7: Extrato bancário com linhas de metadados (Nome, Agência, Data emissão...)
     ANTES do cabeçalho real. O parser deve detectar dinamicamente a linha do header."""
@@ -616,6 +831,65 @@ def teste_extrato_com_metadados_antes_do_cabecalho():
     assert len(df) == 2, f"esperava 2 linhas, veio {len(df)}"
     assert df["valor"].abs().sum() == 1500.00, f"soma errada: {df['valor'].abs().sum()}"
     print("✓ teste_extrato_com_metadados_antes_do_cabecalho")
+
+
+def teste_conta70_basico():
+    """v5.0: créditos banco sem par viram linhas Conta 70 com status 'Não identificado'."""
+    from src.conta70 import gerar_conta_70
+    pend_banco = _df_banco([
+        (_dt("10/05/2026"), "PIX RECEBIDO CLIENTE X", "", 500.00, "ITAU"),
+        (_dt("10/05/2026"), "TED FORNECEDOR Y", "", -300.00, "ITAU"),  # despesa não vai
+        (_dt("11/05/2026"), "CREDITO NF DESCONHECIDA", "", 1000.00, "ITAU"),
+    ])
+    res = gerar_conta_70(pend_banco)
+    assert len(res.detalhado) == 2, f"esperava 2 (só créditos), veio {len(res.detalhado)}"
+    assert all(res.detalhado["status"] == "Não identificado")
+    assert all(res.detalhado["conta_contabil"] == "Conta 70")
+    assert res.kpis["total_a_lancar"] == 1500.00
+    assert res.kpis["qtd_total"] == 2
+    print("✓ teste_conta70_basico")
+
+
+def teste_conta70_historico_mantem_regularizado():
+    """v5.0: linhas marcadas como Regularizado no histórico mantêm o status."""
+    from src.conta70 import gerar_conta_70
+    pend_banco = _df_banco([
+        (_dt("10/05/2026"), "PIX CLIENTE X", "", 500.00, "ITAU"),
+        (_dt("11/05/2026"), "PIX CLIENTE Y", "", 800.00, "ITAU"),
+    ])
+    historico = pd.DataFrame([
+        {"data": _dt("10/05/2026"), "conta": "ITAU", "historico": "PIX CLIENTE X",
+         "valor": 500.00, "status": "Regularizado", "observacao": "NF 123"},
+    ])
+    res = gerar_conta_70(pend_banco, historico_anterior=historico)
+    # 1 linha veio do histórico (Regularizada)
+    reg = res.detalhado[res.detalhado["status"] == "Regularizado"]
+    assert len(reg) == 1
+    assert reg.iloc[0]["observacao"] == "NF 123"
+    # Outra continua "Não identificado"
+    nao_ident = res.detalhado[res.detalhado["status"] == "Não identificado"]
+    assert len(nao_ident) == 1
+    # Total a lançar = só a NÃO regularizada (800)
+    assert res.kpis["total_a_lancar"] == 800.00
+    print("✓ teste_conta70_historico_mantem_regularizado")
+
+
+def teste_conta70_classificacao_tipo():
+    """v5.0: classifica tipo do recebimento pelo histórico (Pix, Cartão, TED, etc)."""
+    from src.conta70 import gerar_conta_70
+    pend_banco = _df_banco([
+        (_dt("10/05/2026"), "PIX RECEBIDO CLIENTE X", "", 500.00, "ITAU"),
+        (_dt("10/05/2026"), "TED RECEBIDA", "", 1000.00, "ITAU"),
+        (_dt("10/05/2026"), "BOLETO PAGO", "", 800.00, "ITAU"),
+        (_dt("10/05/2026"), "CREDITO CARTAO STONE", "", 2000.00, "ITAU"),
+    ])
+    res = gerar_conta_70(pend_banco)
+    tipos = res.detalhado["tipo_recebimento"].tolist()
+    assert "Pix" in tipos
+    assert "TED/DOC" in tipos
+    assert "Boleto" in tipos
+    assert "Cartão" in tipos
+    print("✓ teste_conta70_classificacao_tipo")
 
 
 def main():
