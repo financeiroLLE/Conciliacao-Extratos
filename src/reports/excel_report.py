@@ -334,6 +334,94 @@ def _aba_excesso_sankhya(wb: Workbook, resultado: "ResultadoConciliacao"):
     _escrever_dataframe(ws, df)
 
 
+# v5.0: novas abas
+def _aba_estornos_anulados(wb: Workbook, resultado: "ResultadoConciliacao"):
+    """v5.0: pares pagamento/recebimento + estorno com saldo zero."""
+    ws = wb.create_sheet("Anulados por Estorno")
+    df = getattr(resultado, "estornos_anulados", pd.DataFrame())
+    if df.empty:
+        _escrever_dataframe(ws, df)
+        return
+    df = df.copy()
+    df.columns = [c.replace("_", " ").title() for c in df.columns]
+    _escrever_dataframe(ws, df)
+
+
+def _aba_estornos_parciais(wb: Workbook, resultado: "ResultadoConciliacao"):
+    """v5.0: pares com estorno parcial (saldo ≠ zero)."""
+    ws = wb.create_sheet("Estornos Parciais")
+    df = getattr(resultado, "estornos_parciais", pd.DataFrame())
+    if df.empty:
+        _escrever_dataframe(ws, df)
+        return
+    df = df.copy()
+    df.columns = [c.replace("_", " ").title() for c in df.columns]
+    _escrever_dataframe(ws, df)
+
+
+def _aba_top1722(wb: Workbook, resultado: "ResultadoConciliacao"):
+    """v5.0: grupos conciliados por agrupamento TOP 1722 (cartão de crédito).
+    A aba mostra os grupos (1 por crédito banco) + linha por linha Sankhya."""
+    ws = wb.create_sheet("Cartão TOP 1722")
+    grupos = getattr(resultado, "top1722_grupos", pd.DataFrame())
+    linhas = getattr(resultado, "top1722_linhas", pd.DataFrame())
+
+    if grupos.empty and linhas.empty:
+        _escrever_dataframe(ws, grupos)
+        return
+
+    # Cabeçalho do bloco de grupos
+    ws.cell(row=1, column=1, value="GRUPOS CONCILIADOS POR AGRUPAMENTO — CARTÃO TOP 1722")
+    cur_row = 3
+    if not grupos.empty:
+        g = grupos.copy()
+        g.columns = [c.replace("_", " ").title() for c in g.columns]
+        for j, col in enumerate(g.columns, start=1):
+            ws.cell(row=cur_row, column=j, value=col)
+        for i, (_, row) in enumerate(g.iterrows(), start=cur_row + 1):
+            for j, val in enumerate(row.tolist(), start=1):
+                ws.cell(row=i, column=j, value=val)
+        cur_row += len(g) + 3
+
+    # Cabeçalho do bloco de linhas individuais
+    ws.cell(row=cur_row, column=1, value="COMPOSIÇÃO — LINHAS SANKHYA INDIVIDUAIS")
+    cur_row += 2
+    if not linhas.empty:
+        l = linhas.copy()
+        l.columns = [c.replace("_", " ").title() for c in l.columns]
+        for j, col in enumerate(l.columns, start=1):
+            ws.cell(row=cur_row, column=j, value=col)
+        for i, (_, row) in enumerate(l.iterrows(), start=cur_row + 1):
+            for j, val in enumerate(row.tolist(), start=1):
+                ws.cell(row=i, column=j, value=val)
+
+
+def _aba_top1722_diferenca(wb: Workbook, resultado: "ResultadoConciliacao"):
+    """v5.0: créditos banco com candidatos TOP 1722 mas soma não fechou."""
+    ws = wb.create_sheet("TOP 1722 Diferença")
+    df = getattr(resultado, "top1722_diferencas", pd.DataFrame())
+    if df.empty:
+        _escrever_dataframe(ws, df)
+        return
+    df = df.copy()
+    df.columns = [c.replace("_", " ").title() for c in df.columns]
+    _escrever_dataframe(ws, df)
+
+
+def _aba_conta70(wb: Workbook, resultado: "ResultadoConciliacao"):
+    """v5.0: Conta 70 — créditos banco não identificados."""
+    from src.conta70 import gerar_conta_70
+    ws = wb.create_sheet("Conta 70")
+    res_c70 = gerar_conta_70(resultado.pendentes_banco)
+    df = res_c70.detalhado
+    if df.empty:
+        _escrever_dataframe(ws, df)
+        return
+    df = df.copy()
+    df.columns = [c.replace("_", " ").title() for c in df.columns]
+    _escrever_dataframe(ws, df)
+
+
 def _aba_sugestoes(wb: Workbook, resultado: "ResultadoConciliacao"):
     ws = wb.create_sheet("Sugestões Fuzzy")
     df = resultado.sugestoes_fuzzy.copy()
@@ -427,6 +515,12 @@ def gerar_relatorio_excel(
     _aba_natureza(wb, resultado, "Recebimento", "Recebimentos")
     _aba_duplicidades(wb, resultado)
     _aba_excesso_sankhya(wb, resultado)
+    # v5.0: novas abas
+    _aba_conta70(wb, resultado)
+    _aba_estornos_anulados(wb, resultado)
+    _aba_estornos_parciais(wb, resultado)
+    _aba_top1722(wb, resultado)
+    _aba_top1722_diferenca(wb, resultado)
     _aba_sugestoes(wb, resultado)
     if pendencias_anteriores is None:
         pendencias_anteriores = pd.DataFrame()

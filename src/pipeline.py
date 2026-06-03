@@ -10,7 +10,7 @@ Mudanças sobre v2:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
@@ -47,16 +47,26 @@ class ResultadoConciliacao:
     sugestoes_fuzzy: pd.DataFrame
     aplicacoes_resgates: pd.DataFrame
     falta_lancar_sankhya: pd.DataFrame  # quando Sankhya tem Conciliado=Não preenchido
+    # v5.0: estornos detectados no banco
+    estornos_anulados: pd.DataFrame = field(default_factory=pd.DataFrame)
+    estornos_parciais: pd.DataFrame = field(default_factory=pd.DataFrame)
+    # v5.0: TOP 1722 (agrupamento cartão de crédito)
+    top1722_grupos: pd.DataFrame = field(default_factory=pd.DataFrame)
+    top1722_linhas: pd.DataFrame = field(default_factory=pd.DataFrame)
+    top1722_linhas_banco: pd.DataFrame = field(default_factory=pd.DataFrame)
+    top1722_diferencas: pd.DataFrame = field(default_factory=pd.DataFrame)
 
-    banco_completo: pd.DataFrame
-    sistema_completo: pd.DataFrame
+    banco_completo: pd.DataFrame = field(default_factory=pd.DataFrame)
+    sistema_completo: pd.DataFrame = field(default_factory=pd.DataFrame)
 
-    data_referencia: datetime
-    contas_processadas: list[str]
-    tolerancia_dias: int
-    usa_conciliado_sankhya: bool
+    data_referencia: datetime = None
+    contas_processadas: list[str] = field(default_factory=list)
+    tolerancia_dias: int = 2
+    usa_conciliado_sankhya: bool = False
 
     def kpis_globais(self) -> dict[str, Any]:
+        # v5.1: getattr defensivo — objetos em session_state de versões antigas
+        # podem não ter os campos novos (estornos_*, top1722_*).
         return _calcular_kpis(
             self.conciliados,
             self.pendentes_banco,
@@ -67,12 +77,22 @@ class ResultadoConciliacao:
             self.falta_lancar_sankhya,
             self.usa_conciliado_sankhya,
             self.excesso_sankhya,
+            getattr(self, "estornos_anulados", pd.DataFrame()),
+            getattr(self, "estornos_parciais", pd.DataFrame()),
+            getattr(self, "top1722_grupos", pd.DataFrame()),
         )
 
     def kpis_por_banco(self) -> dict[str, dict[str, Any]]:
         return {conta: self.kpis_da_conta(conta) for conta in self.contas_processadas}
 
     def kpis_da_conta(self, conta: str) -> dict[str, Any]:
+        # v5.1: getattr defensivo + filtro seguro pra campos opcionais
+        def _filtra(attr_name: str) -> pd.DataFrame:
+            df = getattr(self, attr_name, None)
+            if df is None or df.empty or "conta" not in df.columns:
+                return pd.DataFrame()
+            return df[df["conta"] == conta]
+
         return _calcular_kpis(
             _filtrar_conciliados(self.conciliados, conta),
             _filtrar_conta(self.pendentes_banco, conta),
@@ -83,6 +103,9 @@ class ResultadoConciliacao:
             _filtrar_conta(self.falta_lancar_sankhya, conta) if self.usa_conciliado_sankhya else pd.DataFrame(),
             self.usa_conciliado_sankhya,
             _filtrar_conta(self.excesso_sankhya, conta),
+            _filtra("estornos_anulados"),
+            _filtra("estornos_parciais"),
+            _filtra("top1722_grupos"),
         )
 
     def divergencias_sankhya_banco(self, conta: str | None = None) -> pd.DataFrame:
@@ -279,6 +302,9 @@ def _calcular_kpis(
     falta_lancar_sankhya: pd.DataFrame,
     usa_conciliado_sankhya: bool,
     excesso_sankhya: pd.DataFrame | None = None,
+    estornos_anulados: pd.DataFrame | None = None,
+    estornos_parciais: pd.DataFrame | None = None,
+    top1722_grupos: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
     banco_mov = _eh_movimentado(banco_completo)
     sistema_mov = _eh_movimentado(sistema_completo)
@@ -440,6 +466,25 @@ def _calcular_kpis(
         "fonte_falta_lancar": (
             "sankhya_conciliado_nao" if usa_conciliado_sankhya else "pendentes_pos_match"
         ),
+        # v5.0: estornos e TOP 1722
+        "qtd_estornos_anulados": int(len(estornos_anulados)) if estornos_anulados is not None else 0,
+        "valor_estornos_anulados": (
+            float(estornos_anulados["valor_original"].abs().sum())
+            if (estornos_anulados is not None and not estornos_anulados.empty
+                and "valor_original" in estornos_anulados.columns) else 0.0
+        ),
+        "qtd_estornos_parciais": int(len(estornos_parciais)) if estornos_parciais is not None else 0,
+        "saldo_estornos_parciais": (
+            float(estornos_parciais["saldo_liquido"].sum())
+            if (estornos_parciais is not None and not estornos_parciais.empty
+                and "saldo_liquido" in estornos_parciais.columns) else 0.0
+        ),
+        "qtd_top1722_grupos": int(len(top1722_grupos)) if top1722_grupos is not None else 0,
+        "valor_top1722_conciliado": (
+            float(top1722_grupos["valor_banco_total"].sum())
+            if (top1722_grupos is not None and not top1722_grupos.empty
+                and "valor_banco_total" in top1722_grupos.columns) else 0.0
+        ),
     }
 
 
@@ -515,13 +560,45 @@ def executar_pipeline(
     banco_mov = _eh_movimentado(banco).copy() if not banco.empty else banco
     sistema_mov = _eh_movimentado(sistema).copy() if not sistema.empty else sistema
 
+    # v5.0: detector de estornos (banco × banco) ANTES do match.
+    # Pares anulados (saldo zero) são removidos do banco antes da conciliação.
+    # Estornos parciais: par é removido e adicionada uma linha sintética com saldo restante.
+    from src.matching.estornos import detectar_estornos
+    res_estornos = detectar_estornos(banco_mov)
+    if res_estornos.indices_anulados or res_estornos.indices_parciais_removidos:
+        idx_remover = res_estornos.indices_anulados | res_estornos.indices_parciais_removidos
+        banco_mov = banco_mov.reset_index(drop=True)
+        banco_mov = banco_mov.drop(index=[i for i in idx_remover if i < len(banco_mov)]).reset_index(drop=True)
+        # Adiciona saldos restantes de estornos parciais
+        if not res_estornos.saldos_parciais.empty:
+            saldos = res_estornos.saldos_parciais.copy()
+            # Adiciona colunas que o banco normalmente tem
+            for col in banco_mov.columns:
+                if col not in saldos.columns:
+                    saldos[col] = "" if banco_mov[col].dtype == object else 0
+            banco_mov = pd.concat([banco_mov, saldos[banco_mov.columns]], ignore_index=True)
+
     conciliados, pend_banco, pend_sistema = match_exato(
         banco_mov, sistema_mov, tolerancia_dias=tolerancia_dias
     )
 
+    # v5.0: conciliação por agrupamento TOP 1722 (cartão de crédito).
+    # Roda APÓS o match 1-pra-1, sobre as pendências que sobraram.
+    from src.matching.cartao_top1722 import detectar_top_1722
+    res_top1722 = detectar_top_1722(pend_banco, pend_sistema, janela_dias=tolerancia_dias)
+    if res_top1722.indices_banco_casados or res_top1722.indices_sankhya_casados:
+        # Remove das pendências o que foi consumido pelo agrupamento
+        pend_banco = pend_banco.reset_index(drop=True)
+        pend_sistema = pend_sistema.reset_index(drop=True)
+        pend_banco = pend_banco.drop(
+            index=[i for i in res_top1722.indices_banco_casados if i < len(pend_banco)]
+        ).reset_index(drop=True)
+        pend_sistema = pend_sistema.drop(
+            index=[i for i in res_top1722.indices_sankhya_casados if i < len(pend_sistema)]
+        ).reset_index(drop=True)
+
     if not conciliados.empty:
         # Preserva a categoria_mov no resultado conciliado (pra dashboards)
-        # Não força mais "movimentacao" — o valor original já vem do match
         pass
 
     divergencias = detectar_divergencia_valor(pend_banco, pend_sistema)
@@ -559,6 +636,12 @@ def executar_pipeline(
         sugestoes_fuzzy=sugestoes,
         aplicacoes_resgates=aplicacoes_resgates,
         falta_lancar_sankhya=falta_lancar_df,
+        estornos_anulados=res_estornos.anulados,
+        estornos_parciais=res_estornos.parciais,
+        top1722_grupos=res_top1722.grupos_conciliados,
+        top1722_linhas=res_top1722.linhas_sankhya_casadas,
+        top1722_linhas_banco=res_top1722.linhas_banco_casadas,
+        top1722_diferencas=res_top1722.com_diferenca,
         banco_completo=banco,
         sistema_completo=sistema,
         data_referencia=data_referencia,

@@ -105,6 +105,8 @@ def carregar_relatorio_sistema(
         "agencia": ["agencia", "ag", "numagencia", "numeroagencia"],
         "num_conta": ["numconta", "numeroconta", "ccorrente", "contacorrente"],
         "banco_nome": ["banco", "nomebanco", "nomedobanco"],
+        # v5.0: TOP é o código da operação no Sankhya (TOP 1722 = recebimento cartão de crédito)
+        "top_baixa": ["topdebaixa", "top", "codtop", "codigotop", "tipooperacao", "codtipooperacao"],
     }
     for col_real in df.columns:
         norm = _normalizar_nome_coluna(str(col_real))
@@ -184,6 +186,11 @@ def carregar_relatorio_sistema(
     out["banco_nome"] = (
         df[mapa["banco_nome"]].fillna("").astype(str).str.strip()
         if "banco_nome" in mapa else ""
+    )
+    # v5.0: TOP DE BAIXA (código da operação Sankhya). 1722 = cartão de crédito.
+    out["top_baixa"] = (
+        df[mapa["top_baixa"]].fillna("").astype(str).str.strip()
+        if "top_baixa" in mapa else ""
     )
 
     out = out.dropna(subset=["data"]).reset_index(drop=True)
