@@ -127,17 +127,25 @@ html, body, [class*="css"], .stMarkdown, .stText, button, input, select, textare
     color: {CORES["branco"]};
 }}
 
-/* ===== v3: ESCONDER faixa branca do topo do Streamlit ===== */
+/* ===== v3: ESCONDER faixa branca do topo do Streamlit =====
+   v5.8: mantemos o header vis\u00edvel (mas transparente) porque \u00e9 onde fica
+   o bot\u00e3o de reabrir sidebar. Com 'display: none' o bot\u00e3o sumia. */
 header[data-testid="stHeader"] {{
     background-color: transparent !important;
-    height: 0 !important;
-    display: none !important;
 }}
 [data-testid="stToolbar"] {{
-    display: none !important;
+    background-color: transparent !important;
 }}
 #MainMenu {{ visibility: hidden; }}
-.stDeployButton {{ display: none !important; }}
+.stDeployButton,
+.stAppDeployButton,
+[data-testid="stDeployButton"],
+[data-testid="stAppDeployButton"],
+[data-testid="stToolbarActions"],
+[data-testid="stStatusWidget"] {{
+    display: none !important;
+    visibility: hidden !important;
+}}
 footer {{ visibility: hidden; }}
 
 .block-container {{
@@ -176,6 +184,27 @@ h1, h2, h3, h4, h5, h6, p, span, div, label {{ color: {CORES["branco"]}; }}
     font-weight: 700;
     letter-spacing: 2px;
     margin-top: 10px;
+}}
+
+/* v5.8: bot\u00e3o de reabrir sidebar quando ela est\u00e1 fechada.
+   Por padr\u00e3o o Streamlit deixa quase invis\u00edvel no canto. */
+[data-testid="stExpandSidebarButton"] {{
+    background-color: {CORES["amarelo"]} !important;
+    border-radius: 8px !important;
+    padding: 6px !important;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.35) !important;
+    transition: all 0.18s ease !important;
+}}
+[data-testid="stExpandSidebarButton"]:hover {{
+    box-shadow: 0 4px 12px rgba(0,0,0,0.5) !important;
+    transform: scale(1.05);
+    background-color: {CORES["amarelo"]} !important;
+}}
+[data-testid="stExpandSidebarButton"] svg,
+[data-testid="stExpandSidebarButton"] *,
+[data-testid="stExpandSidebarButton"] button {{
+    color: {CORES["azul_escuro"]} !important;
+    fill: {CORES["azul_escuro"]} !important;
 }}
 
 /* Sidebar buttons — TODOS com mesmo tom, ícones verdes ao lado */
@@ -984,11 +1013,18 @@ def tela_upload():
                 type=["xlsx", "xls"],
                 key="banco_single",
             )
+            # v5.8: auto-preenche o nome da conta a partir do nome do arquivo.
+            # O usu\u00e1rio pode editar livremente.
+            nome_default = ""
+            if arquivo_banco is not None:
+                nome_default = arquivo_banco.name.rsplit(".", 1)[0].strip()
+
             nome_conta = st.text_input(
                 "Extrato Bancário (identificador da conta)",
+                value=nome_default,
                 placeholder="ex: Bradesco-CC-12345",
                 key="conta_single",
-                help="Rótulo único da conta. Mínimo 3 caracteres.",
+                help="Rótulo único da conta. Mínimo 3 caracteres. Auto-preenchido com o nome do arquivo.",
             )
             arquivos_banco = (
                 [(nome_conta.strip(), arquivo_banco)]
@@ -1043,11 +1079,32 @@ def tela_upload():
         bool(arquivos_banco) and bool(arquivo_sistema) and not erros_validacao
     )
 
-    if not arquivos_banco or not arquivo_sistema:
-        st.warning("⏳ Aguardando upload do extrato bancário **e** do relatório do sistema.")
-    elif erros_validacao:
-        for e in erros_validacao:
-            st.error(f"❌ {e}")
+    # v5.8: mensagem espec\u00edfica em vez do gen\u00e9rico "Aguardando upload"
+    if not pode_executar:
+        faltando: list[str] = []
+        # No modo "1 conta por vez": pode faltar o nome da conta mesmo com arquivo
+        if modo == "1 conta por vez":
+            tem_arquivo_banco = bool(locals().get("arquivo_banco"))
+            tem_nome_conta = bool(locals().get("nome_conta", "").strip())
+            if not tem_arquivo_banco:
+                faltando.append("**Extrato Bancário** (.xlsx ou .xls)")
+            elif not tem_nome_conta:
+                faltando.append("**Identificador da conta** (campo de texto abaixo do extrato banc\u00e1rio)")
+        else:
+            if not arquivos_banco:
+                faltando.append("**Extratos Banc\u00e1rios** (.xlsx ou .xls)")
+        if not arquivo_sistema:
+            faltando.append("**Relat\u00f3rio Sankhya** (.xlsx ou .xls)")
+
+        if faltando and not erros_validacao:
+            if len(faltando) == 1:
+                st.warning(f"⏳ Falta: {faltando[0]}")
+            else:
+                lista = "\n".join(f"- {f}" for f in faltando)
+                st.warning(f"⏳ Para executar a conciliação ainda falta:\n\n{lista}")
+        elif erros_validacao:
+            for e in erros_validacao:
+                st.error(f"❌ {e}")
 
     # Para sidebar — recupera config
     rodar_fuzzy = st.session_state.get("rodar_fuzzy", True)
