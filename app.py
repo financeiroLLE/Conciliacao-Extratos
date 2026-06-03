@@ -207,6 +207,20 @@ h1, h2, h3, h4, h5, h6, p, span, div, label {{ color: {CORES["branco"]}; }}
     color: {CORES["amarelo"]} !important;
 }}
 
+/* v5.7: força texto amarelo no bot\u00e3o ativo da sidebar com especificidade alta.
+   Sem isso, a regra geral '[kind="primary"] *' (texto azul) sobrescrevia,
+   ficando azul sobre azul (invis\u00edvel). */
+[data-testid="stSidebar"] .stButton > button[kind="primary"] p,
+[data-testid="stSidebar"] .stButton > button[kind="primary"] span,
+[data-testid="stSidebar"] .stButton > button[kind="primary"] div,
+[data-testid="stSidebar"] [data-testid="stBaseButton-primary"] p,
+[data-testid="stSidebar"] [data-testid="stBaseButton-primary"] span,
+[data-testid="stSidebar"] [data-testid="stBaseButton-primary"] div,
+[data-testid="stSidebar"] [data-testid="stBaseButton-primary"] {{
+    color: {CORES["amarelo"]} !important;
+    -webkit-text-fill-color: {CORES["amarelo"]} !important;
+}}
+
 /* ===== Header escuro com logo ===== */
 .lle-header {{
     background: linear-gradient(135deg, {CORES["azul_escuro"]} 0%, {CORES["azul_escuro_2"]} 100%);
@@ -415,6 +429,22 @@ input, textarea, select, [data-baseweb="select"] > div {{
     border-radius: 8px !important;
 }}
 
+/* v5.6: o input do number_input estava com texto invisível na sidebar (texto
+   escuro sobre fundo escuro). Força cor branca com seletores específicos. */
+[data-testid="stNumberInput"] input,
+[data-testid="stNumberInputContainer"] input,
+input[type="number"] {{
+    background-color: {CORES["azul_escuro_2"]} !important;
+    color: {CORES["branco"]} !important;
+    -webkit-text-fill-color: {CORES["branco"]} !important;
+}}
+
+/* v5.6: checkbox da sidebar — o "check" estava invisível */
+[data-testid="stCheckbox"] svg {{
+    color: {CORES["branco"]} !important;
+    fill: {CORES["branco"]} !important;
+}}
+
 /* v3.4: botões + / - do number_input — texto BRANCO sobre fundo azul.
    No sidebar amarela, esses botões herdavam azul-escuro do '*' geral. */
 [data-testid="stNumberInputContainer"] button,
@@ -569,12 +599,12 @@ with st.sidebar:
         use_container_width=True,
     )
 
-    # v4.0: módulo CARTÃO com submenus
-    # v5.3: Auditoria de Taxas saiu daqui — agora é botão principal "Auditoria de Cartões"
-    cartao_atual = st.session_state.pagina in ("Cadastro de Taxas",)
+    # v5.5: Auditoria volta pra dentro do submenu CARTÃO
+    cartao_atual = st.session_state.pagina in ("Cadastro de Taxas", "Auditoria de Taxas")
     with st.expander("💳 CARTÃO", expanded=cartao_atual):
         submenus_cartao = [
             ("🏦 Cadastro de Taxas", "Cadastro de Taxas"),
+            ("💳 Auditoria de Cartões", "Auditoria de Taxas"),
         ]
         for label, key in submenus_cartao:
             is_atual = st.session_state.pagina == key
@@ -586,17 +616,6 @@ with st.sidebar:
                 type="primary" if is_atual else "secondary",
                 use_container_width=True,
             )
-
-    # v5.3: Auditoria de Cartões (movido do submenu CARTÃO pro menu principal)
-    auditoria_atual = st.session_state.pagina == "Auditoria de Taxas"
-    st.button(
-        "💳 Auditoria de Cartões",
-        key="nav_Auditoria de Taxas",
-        on_click=ir_para,
-        args=("Auditoria de Taxas",),
-        type="primary" if auditoria_atual else "secondary",
-        use_container_width=True,
-    )
 
     # Restante das páginas principais
     paginas_bot = [
