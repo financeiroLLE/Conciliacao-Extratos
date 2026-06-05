@@ -3977,6 +3977,9 @@ def pagina_auditoria_taxas():
         carregar_relatorio_adquirente,
         auditar_taxas,
         consolidar_historico,
+        eh_extrato_getnet_cru,
+        carregar_extrato_getnet_cru,
+        resumir_extrato_getnet,
     )
     from io import BytesIO
 
@@ -4042,12 +4045,15 @@ def pagina_auditoria_taxas():
         )
     with col_arq:
         arq = st.file_uploader(
-            "Relatório padronizado das adquirentes (.xlsx)",
+            "Relatório da adquirente (.xlsx)",
             type=["xlsx"],
             key="upload_relatorio_adq",
             help=(
-                "Colunas: data_venda, adquirente, modalidade, parcelas, valor_bruto, "
-                "taxa_aplicada, valor_liquido (opcional), data_prevista_recebimento (opcional)."
+                "Aceita 2 formatos:\n\n"
+                "1) **Extrato CRU da GETNET** — o XLSX baixado direto do portal "
+                "(Recebíveis > Completos > Detalhado). O sistema detecta e converte sozinho.\n\n"
+                "2) **Relatório padronizado** — XLSX com colunas: data_venda, adquirente, "
+                "modalidade, parcelas, valor_bruto, taxa_aplicada, valor_liquido (opcional)."
             ),
         )
 
@@ -4056,21 +4062,56 @@ def pagina_auditoria_taxas():
 
     if arq is None and (historico_df is None or historico_df.empty):
         st.info(
-            "🙋 Suba o relatório padronizado das adquirentes para iniciar a auditoria.\n\n"
-            "**Formato esperado**: uma planilha Excel com as colunas\n"
-            "- `data_venda` (data da transação)\n"
-            "- `adquirente`, `modalidade`, `parcelas`\n"
-            "- `valor_bruto`, `taxa_aplicada`\n"
-            "- `valor_liquido` (opcional — calculado se vier vazio)\n"
-            "- `data_prevista_recebimento` (opcional)\n\n"
-            "💡 Há um arquivo de exemplo em `data/samples/relatorio_adquirente_exemplo.xlsx`."
+            "🙋 Suba o relatório da adquirente para iniciar a auditoria.\n\n"
+            "**Formato 1 — Extrato CRU da GETNET (recomendado):**\n"
+            "- Baixe direto do portal GETNET: *Recebíveis > Completos > Detalhado*\n"
+            "- Suba o XLSX como veio, o sistema converte sozinho\n\n"
+            "**Formato 2 — Relatório padronizado:**\n"
+            "- Planilha Excel com colunas: `data_venda`, `adquirente`, `modalidade`, "
+            "`parcelas`, `valor_bruto`, `taxa_aplicada`, `valor_liquido` (opcional)\n"
+            "- Exemplo em `data/samples/relatorio_adquirente_exemplo.xlsx`"
         )
         return
 
-    # Carrega relatório atual (se subiu)
+    # Carrega relatório atual (se subiu) — detecta formato automaticamente
     if arq is not None:
         try:
-            relatorio = carregar_relatorio_adquirente(arq)
+            # v5.16: detecta se é extrato CRU da GETNET e converte automaticamente
+            if eh_extrato_getnet_cru(arq):
+                relatorio = carregar_extrato_getnet_cru(arq)
+                # Resumo informativo do que foi lido do extrato GETNET
+                resumo_getnet = resumir_extrato_getnet(relatorio)
+                periodo_str = ""
+                if resumo_getnet["data_min"] and resumo_getnet["data_max"]:
+                    periodo_str = (
+                        f" · Período: {resumo_getnet['data_min'].strftime('%d/%m/%Y')} → "
+                        f"{resumo_getnet['data_max'].strftime('%d/%m/%Y')}"
+                    )
+                st.success(
+                    f"🟧 **Extrato GETNET detectado e convertido automaticamente.** "
+                    f"{resumo_getnet['qtd']} vendas · "
+                    f"Bruto: {fmt_brl(resumo_getnet['bruto_total'])} · "
+                    f"Líquido: {fmt_brl(resumo_getnet['liquido_total'])} · "
+                    f"Taxa média real: {fmt_pct(resumo_getnet['taxa_media']*100)}"
+                    f"{periodo_str}"
+                )
+                # Mostra taxa real por bandeira/modalidade num expander (pra você conferir
+                # antes de cadastrar o contrato)
+                if not resumo_getnet["por_modalidade"].empty:
+                    with st.expander("📊 Taxa real cobrada por bandeira/modalidade (informativo)", expanded=False):
+                        st.caption(
+                            "Esta é a taxa que a GETNET **efetivamente cobrou** em cada bandeira/modalidade neste período. "
+                            "Use como referência para cadastrar a taxa contratada no `taxas.xlsx`."
+                        )
+                        visu_mod = resumo_getnet["por_modalidade"].copy()
+                        visu_mod["bruto"] = visu_mod["bruto"].apply(fmt_brl)
+                        visu_mod["liquido"] = visu_mod["liquido"].apply(fmt_brl)
+                        visu_mod["taxa_real"] = (visu_mod["taxa_real"] * 100).round(4).astype(str) + "%"
+                        visu_mod.columns = [c.replace("_", " ").title() for c in visu_mod.columns]
+                        st.dataframe(visu_mod, use_container_width=True, hide_index=True)
+            else:
+                # Formato padronizado clássico
+                relatorio = carregar_relatorio_adquirente(arq)
         except Exception as e:
             st.error(f"❌ Erro ao ler o relatório: {e}")
             return
