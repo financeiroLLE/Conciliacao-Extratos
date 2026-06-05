@@ -15,6 +15,11 @@ from .auditoria_taxas import (
     consolidar_historico,
     ResultadoAuditoriaTaxas,
 )
+from .parser_getnet import (
+    eh_extrato_getnet_cru,
+    carregar_extrato_getnet_cru,
+    resumir_extrato_getnet,
+)
 
 __all__ = [
     "MODALIDADES_VALIDAS",
@@ -25,4 +30,7 @@ __all__ = [
     "carregar_auditoria_anterior",
     "consolidar_historico",
     "ResultadoAuditoriaTaxas",
+    "eh_extrato_getnet_cru",
+    "carregar_extrato_getnet_cru",
+    "resumir_extrato_getnet",
 ]
