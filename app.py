@@ -2258,8 +2258,8 @@ def pagina_dashboard():
 
     st.divider()
 
-    # v5.12: Exceções e Regras Aplicadas — seção separada (não polui mais o resumo)
-    render_secao_excecoes_regras(resultado, kpis, conta=None)
+    # v5.14: Seção "Exceções e Regras Aplicadas" removida.
+    # TOP 1722 e Estornos seguem funcionando; aparecem dentro do detalhamento da conta.
 
     # v3.10: Dashboard é visão gerencial — cards das contas são só informativos.
     # Drill-down (Ver detalhamento) só acontece na aba Conciliação.
@@ -2703,7 +2703,8 @@ def tela_resultado():
         ]
         render_cards(cards2)
 
-        # Linha 3: contagens
+        # Linha 3: contagens (v5.14: Investimentos no 4º card no lugar do placeholder vazio)
+        investimentos_html_lin3 = _card_investimentos(resultado)
         cards3 = [
             card_kpi("Registros Banco", fmt_int(kpis["qtd_registros_banco"]),
                      f"{fmt_int(kpis['qtd_movimentacoes_banco'])} movimentações"),
@@ -2711,15 +2712,13 @@ def tela_resultado():
                      f"{fmt_int(kpis['qtd_movimentacoes_sistema'])} movimentações"),
             card_kpi("Conciliados", fmt_int(kpis["qtd_conciliados"]),
                      "pares Banco × Sankhya", classe="destaque-verde"),
-            card_kpi("", "", ""),
+            investimentos_html_lin3,
         ]
         render_cards(cards3)
 
-        st.divider()
-
-        # v5.12: Exceções e Regras Aplicadas (estornos, TOP 1722, investimentos)
-        # ficam em seção separada — não poluem mais o Resumo Executivo.
-        render_secao_excecoes_regras(resultado, kpis, conta=None)
+        # v5.14: Removida a seção "Exceções e Regras Aplicadas" (estornos + TOP 1722).
+        # A lógica continua rodando — mas o resumo não exibe mais esses cards.
+        # TOP 1722 aparece na aba dedicada dentro do detalhamento da conta.
 
     # Painel de bancos OU detalhe do banco selecionado
     if st.session_state.banco_conta_selecionada:
@@ -2727,10 +2726,8 @@ def tela_resultado():
     else:
         section_title("CONTAS PROCESSADAS — CLIQUE PARA DETALHAR")
         render_painel_bancos(resultado)
-
-        st.write("")
-        section_title("CONCILIAÇÃO POR TIPO DE LANÇAMENTO")
-        render_subabas_tipo(resultado)
+        # v5.14: Removida "CONCILIAÇÃO POR TIPO DE LANÇAMENTO" do resumo.
+        # Os mesmos dados aparecem dentro do detalhamento de cada conta (sem duplicar).
 
 
 # ============================================================
