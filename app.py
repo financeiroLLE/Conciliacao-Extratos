@@ -1369,8 +1369,38 @@ def _card_investimentos_da_conta(resultado: ResultadoConciliacao, conta: str) ->
 
 
 def _card_investimentos_de_df(df: pd.DataFrame) -> str:
+    """v5.15: conserto duplo no card de Investimentos.
+
+    Bug anterior: o df vinha com lançamentos do banco E do sankhya, e a soma
+    contava o mesmo movimento duas vezes (R$ 27.698 virava R$ 55.396).
+
+    Correções:
+    1) DEDUP: agrupa por (data + valor + conta + tipo_aplicacao), preferindo
+       o lado Sankhya quando ambos existem (ERP é a verdade contábil).
+    2) Ignora SALDO defensivamente — saldo aplicado não é movimento, não
+       deveria nem chegar aqui, mas se chegar (bug em src/), é filtrado.
+    """
     if df.empty:
         return card_kpi("Investimentos", "—", "sem aplicações/resgates")
+
+    df = df.copy()
+
+    # (2) Filtro defensivo: SALDO não é aplicação nem resgate
+    if "historico" in df.columns:
+        mask_saldo = df["historico"].astype(str).str.upper().str.contains("SALDO", na=False)
+        df = df[~mask_saldo]
+
+    if df.empty:
+        return card_kpi("Investimentos", "—", "sem aplicações/resgates")
+
+    # (1) DEDUP banco × sankhya: preferir Sankhya quando ambos existem
+    cols_chave = [c for c in ["data", "valor", "conta", "tipo_aplicacao"] if c in df.columns]
+    if cols_chave and "origem" in df.columns:
+        # Ordena pra Sankhya vir antes de Banco, depois drop_duplicates mantém o primeiro
+        df["_ord_origem"] = df["origem"].apply(lambda x: 0 if "Sankhya" in str(x) else 1)
+        df = df.sort_values("_ord_origem").drop_duplicates(subset=cols_chave, keep="first")
+        df = df.drop(columns=["_ord_origem"])
+
     aplic = df[df["tipo_aplicacao"] == "Aplicação"] if "tipo_aplicacao" in df.columns else pd.DataFrame()
     resg = df[df["tipo_aplicacao"] == "Resgate"] if "tipo_aplicacao" in df.columns else pd.DataFrame()
     qtd_a = len(aplic)
@@ -3407,7 +3437,9 @@ def render_subabas_tipo(resultado: ResultadoConciliacao, conta: str | None = Non
 
     # v3.10: visão unificada é cara (concat de 3 DataFrames). Cache no session_state.
     # Chave inclui id_execucao_atual pra invalidar quando o resultado muda.
-    cache_key = f"visao_unificada_{st.session_state.get('id_execucao_atual', 'novo')}"
+    # v5.15: adicionada versão na chave pra invalidar cache antigo após deploy do filtro
+    # de aplicações/resgates.
+    cache_key = f"visao_unificada_v515_{st.session_state.get('id_execucao_atual', 'novo')}"
     df_unif = st.session_state.get(cache_key)
     if df_unif is None:
         df_unif = _montar_visao_unificada(resultado)
@@ -3584,6 +3616,10 @@ def _montar_visao_unificada(resultado: ResultadoConciliacao) -> pd.DataFrame:
     DataFrame com coluna 'status' e 'origem'.
 
     Para pares conciliados, usa o tipo/natureza do lado BANCO (histórico padronizado).
+
+    v5.15: Exclui aplicações/resgates/SALDO da visão genérica — esses lançamentos
+    são tratamento especial e aparecem só no card de Investimentos. Antes apareciam
+    duplicados em 'Recebimentos' (Por Tipo de Lançamento).
     """
     frames = []
 
@@ -3631,6 +3667,20 @@ def _montar_visao_unificada(resultado: ResultadoConciliacao) -> pd.DataFrame:
                                       "documento","valor","tipo","natureza"])
 
     out = pd.concat(frames, ignore_index=True)
+
+    # v5.15: filtra aplicações/resgates/rendimentos/SALDO da visão genérica
+    # (esses lançamentos pertencem ao card de Investimentos, não a Recebimentos)
+    if "historico" in out.columns:
+        h = out["historico"].astype(str).str.upper()
+        mask_invest = (
+            h.str.contains("APLIC", na=False)
+            | h.str.contains("RESG", na=False)
+            | h.str.contains("REND PAGO", na=False)
+            | h.str.contains("SALDO APLIC", na=False)
+            | h.str.contains("AUT MAIS", na=False)
+        )
+        out = out[~mask_invest].reset_index(drop=True)
+
     return out
 
 
