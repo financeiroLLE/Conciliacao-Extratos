@@ -117,6 +117,7 @@ LOGO_URI = _logo_data_uri()
 st.html(
     f"""
 <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<link href="https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css" rel="stylesheet">
 <style>
 /* ===== Tipografia e fundo ===== */
 html, body, [class*="css"], .stMarkdown, .stText, button, input, select, textarea {{
@@ -582,6 +583,308 @@ table {{ color: {CORES["branco"]}; }}
 .lle-badge.amarelo {{ background: {CORES["amarelo"]}; color: {CORES["azul_escuro"]}; }}
 .lle-badge.vermelho {{ background: {CORES["vermelho"]}; color: {CORES["branco"]}; }}
 .lle-badge.azul {{ background: {CORES["azul"]}; color: {CORES["branco"]}; }}
+
+/* ============================================================
+   v5.12 — Estilo EDITORIAL (Fase 1: Resumo Executivo)
+   Componentes novos com prefixo .editorial-*. Convivem com o CSS antigo.
+   Princípios: tipografia leve (300/400/500), sem cards, divisores finos,
+   cor cirúrgica.
+   ============================================================ */
+
+/* Header do resumo (kicker + título + data) */
+.editorial-header {{
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    margin-bottom: 8px;
+}}
+.editorial-kicker {{
+    color: {CORES["amarelo"]};
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+}}
+.editorial-title {{
+    color: {CORES["branco"]};
+    font-size: 22px;
+    font-weight: 300;
+    margin-top: 6px;
+    letter-spacing: -0.3px;
+}}
+.editorial-meta {{
+    color: #6B88B5;
+    font-size: 11px;
+    font-weight: 400;
+    letter-spacing: 0.5px;
+    text-align: right;
+}}
+.editorial-meta + .editorial-meta {{ margin-top: 2px; }}
+
+/* Divisor temático com fade dourado */
+.editorial-divisor-fade {{
+    height: 1px;
+    background: linear-gradient(90deg,
+        rgba(250,195,24,0.4) 0%,
+        rgba(250,195,24,0.05) 40%,
+        transparent 100%);
+    margin: 20px 0 36px;
+}}
+
+/* Bloco do KPI âncora (% + valor) */
+.editorial-destaque-row {{
+    display: flex;
+    align-items: flex-end;
+    gap: 28px;
+    margin-bottom: 8px;
+}}
+.editorial-destaque-col {{ flex: 1; }}
+.editorial-destaque-col.bigger {{
+    flex: 1.4;
+    padding-left: 28px;
+    border-left: 1px solid rgba(255,255,255,0.08);
+}}
+.editorial-label {{
+    color: #6B88B5;
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 2.5px;
+    text-transform: uppercase;
+}}
+.editorial-valor-hero {{
+    color: {CORES["branco"]};
+    font-size: 52px;
+    font-weight: 300;
+    letter-spacing: -1.5px;
+    line-height: 1;
+    margin-top: 10px;
+}}
+.editorial-valor-hero .unit {{
+    color: #6B88B5;
+    font-size: 28px;
+    font-weight: 300;
+}}
+.editorial-valor-grande {{
+    color: {CORES["branco"]};
+    font-size: 38px;
+    font-weight: 300;
+    letter-spacing: -1px;
+    margin-top: 10px;
+    line-height: 1;
+}}
+.editorial-valor-grande .destaque {{ font-weight: 400; }}
+.editorial-valor-grande .centavos {{ color: #6B88B5; }}
+.editorial-sub-text {{
+    color: #6B88B5;
+    font-size: 12px;
+    margin-top: 8px;
+}}
+.editorial-status-pill {{
+    font-size: 12px;
+    font-weight: 500;
+    padding-bottom: 6px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}}
+.editorial-status-pill.verde {{ color: #7DD87D; }}
+.editorial-status-pill.amarelo {{ color: {CORES["amarelo"]}; }}
+.editorial-status-pill.vermelho {{ color: #FF8A8A; }}
+
+/* Barra de progresso editorial */
+.editorial-progresso-wrap {{ margin: 36px 0; }}
+.editorial-progresso-track {{
+    height: 6px;
+    background: rgba(255,255,255,0.04);
+    border-radius: 3px;
+    position: relative;
+    overflow: hidden;
+}}
+.editorial-progresso-fill {{
+    position: absolute;
+    left: 0;
+    top: 0;
+    height: 100%;
+    background: linear-gradient(90deg, {CORES["amarelo"]} 0%, {CORES["amarelo_2"]} 100%);
+    border-radius: 3px;
+}}
+.editorial-progresso-legend {{
+    display: flex;
+    justify-content: space-between;
+    margin-top: 10px;
+    font-size: 10px;
+    color: #6B88B5;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+}}
+
+/* Linha de métricas em colunas com divisor */
+.editorial-cols {{
+    display: grid;
+    grid-template-columns: repeat(var(--cols, 4), 1fr);
+    gap: 0;
+    margin: 48px 0 36px;
+}}
+.editorial-cols .col {{
+    padding: 0 20px;
+    border-right: 1px solid rgba(255,255,255,0.08);
+}}
+.editorial-cols .col:first-child {{ padding-left: 0; }}
+.editorial-cols .col:last-child {{
+    padding-right: 0;
+    border-right: none;
+}}
+.editorial-cols .label {{
+    color: #6B88B5;
+    font-size: 9px;
+    font-weight: 500;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+}}
+.editorial-cols .valor {{
+    color: {CORES["branco"]};
+    font-size: 24px;
+    font-weight: 300;
+    margin-top: 8px;
+    letter-spacing: -0.5px;
+}}
+.editorial-cols .valor.verde {{ color: #7DD87D; }}
+.editorial-cols .valor.amarelo {{ color: {CORES["amarelo"]}; }}
+.editorial-cols .valor.vermelho {{ color: #FF8A8A; }}
+.editorial-cols .valor.atencao {{ color: #FFD6A0; }}
+.editorial-cols .valor .centavos {{ color: #6B88B5; font-size: 14px; }}
+.editorial-cols .sub {{
+    color: #6B88B5;
+    font-size: 10px;
+    margin-top: 10px;
+}}
+.editorial-cols .sub .verde {{ color: #7DD87D; }}
+.editorial-cols .sub .vermelho {{ color: #FF8A8A; }}
+.editorial-cols .sub .inline {{ margin-right: 10px; }}
+
+/* Faixa horizontal de contagens (entre divisores horizontais) */
+.editorial-faixa {{
+    display: flex;
+    align-items: center;
+    gap: 20px;
+    padding: 18px 0;
+    border-top: 1px solid rgba(255,255,255,0.06);
+    border-bottom: 1px solid rgba(255,255,255,0.06);
+    margin-bottom: 36px;
+}}
+.editorial-faixa .item {{
+    flex: 1;
+    text-align: center;
+}}
+.editorial-faixa .item .valor {{
+    color: {CORES["branco"]};
+    font-size: 18px;
+    font-weight: 300;
+}}
+.editorial-faixa .item .valor.verde {{ color: #7DD87D; }}
+.editorial-faixa .item .valor.amarelo {{ color: {CORES["amarelo"]}; }}
+.editorial-faixa .item .label {{
+    color: #6B88B5;
+    font-size: 9px;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    margin-top: 2px;
+}}
+.editorial-faixa .sep {{
+    width: 1px;
+    height: 24px;
+    background: rgba(255,255,255,0.08);
+}}
+
+/* Cabeçalho de seção editorial (com linha que se esvai) */
+.editorial-secao-head {{
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 18px;
+}}
+.editorial-secao-head .titulo {{
+    color: {CORES["amarelo"]};
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 2.5px;
+    text-transform: uppercase;
+}}
+.editorial-secao-head .linha {{
+    flex: 1;
+    height: 1px;
+    background: linear-gradient(90deg, rgba(250,195,24,0.2) 0%, transparent 100%);
+}}
+.editorial-secao-head .contagem {{
+    color: #6B88B5;
+    font-size: 10px;
+}}
+
+/* Lista de exceções (sem cards) */
+.editorial-lista {{
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}}
+.editorial-lista-item {{
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    padding: 6px 0;
+}}
+.editorial-lista-item.muted {{ opacity: 0.5; }}
+.editorial-lista-divisor {{
+    height: 1px;
+    background: rgba(255,255,255,0.04);
+}}
+.editorial-lista-icone {{
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    border: 1px solid rgba(107,136,181,0.3);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    color: #6B88B5;
+}}
+.editorial-lista-icone.verde {{
+    border-color: rgba(125,216,125,0.3);
+    color: #7DD87D;
+}}
+.editorial-lista-icone.amarelo {{
+    border-color: rgba(250,195,24,0.3);
+    color: {CORES["amarelo"]};
+}}
+.editorial-lista-corpo {{ flex: 1; }}
+.editorial-lista-titulo {{
+    color: {CORES["branco"]};
+    font-size: 13px;
+    font-weight: 400;
+}}
+.editorial-lista-titulo .light {{ color: #6B88B5; font-weight: 300; }}
+.editorial-lista-sub {{
+    color: #6B88B5;
+    font-size: 11px;
+    margin-top: 2px;
+}}
+.editorial-lista-direita {{ text-align: right; }}
+.editorial-lista-valor {{
+    color: {CORES["branco"]};
+    font-size: 15px;
+    font-weight: 300;
+}}
+.editorial-lista-valor.muted {{ color: #6B88B5; }}
+.editorial-lista-status {{
+    font-size: 9px;
+    font-weight: 500;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    margin-top: 2px;
+}}
+.editorial-lista-status.verde {{ color: #7DD87D; }}
+.editorial-lista-status.amarelo {{ color: {CORES["amarelo"]}; }}
+
 </style>
 """
 )
@@ -812,6 +1115,492 @@ def section_title(texto: str):
     st.html(f'<div class="lle-section-title">{texto}</div>')
 
 
+def render_secao_excecoes_regras(resultado, kpis: dict, conta: str | None = None):
+    """v5.12: Seção 'EXCEÇÕES E REGRAS APLICADAS' — agrupa os cards de tratamento
+    especial (Estornos, Cartão TOP 1722, Investimentos) que antes poluíam o Resumo
+    Executivo. Só renderiza se houver pelo menos uma exceção com dados.
+
+    Args:
+        resultado: ResultadoConciliacao
+        kpis: dict de KPIs (globais ou da conta)
+        conta: se informado, filtra Investimentos pela conta
+    """
+    qtd_est_anu = kpis.get("qtd_estornos_anulados", 0)
+    qtd_est_par = kpis.get("qtd_estornos_parciais", 0)
+    qtd_top1722 = kpis.get("qtd_top1722_grupos", 0)
+
+    # Investimentos: pega global ou por conta
+    if conta:
+        df_inv = resultado.aplicacoes_resgates_da_conta(conta)
+    else:
+        df_inv = resultado.aplicacoes_resgates
+    tem_invest = not df_inv.empty
+
+    # Só renderiza a seção se houver pelo menos uma exceção
+    if not (qtd_est_anu > 0 or qtd_est_par > 0 or qtd_top1722 > 0 or tem_invest):
+        return
+
+    section_title("EXCEÇÕES E REGRAS APLICADAS")
+    st.caption(
+        "Tratamentos especiais aplicados pelo sistema durante a conciliação — "
+        "estes valores já foram considerados nos totais do Resumo Executivo."
+    )
+
+    cards = []
+    if qtd_est_anu > 0:
+        cards.append(card_kpi(
+            "♻️ Anulados por Estorno", fmt_int(qtd_est_anu),
+            f"valor bruto: {fmt_brl(kpis.get('valor_estornos_anulados', 0.0))}",
+            classe="destaque-verde",
+        ))
+    if qtd_est_par > 0:
+        cards.append(card_kpi(
+            "⚖️ Estornos Parciais", fmt_int(qtd_est_par),
+            f"saldo restante: {fmt_brl(kpis.get('saldo_estornos_parciais', 0.0))}",
+            classe="destaque-amarelo",
+        ))
+    if qtd_top1722 > 0:
+        cards.append(card_kpi(
+            "🃏 Cartão TOP 1722", fmt_int(qtd_top1722),
+            f"valor: {fmt_brl(kpis.get('valor_top1722_conciliado', 0.0))}",
+            classe="destaque-verde",
+        ))
+    if tem_invest:
+        cards.append(_card_investimentos_de_df(df_inv))
+
+    # Completa com cards vazios pra manter grid de 4
+    while len(cards) % 4 != 0:
+        cards.append(card_kpi("", "", ""))
+
+    render_cards(cards)
+    st.divider()
+
+
+# ============================================================
+# v5.12 — Componentes EDITORIAIS (Fase 1: Resumo Executivo)
+# Convivem com os helpers antigos. Outras telas continuam usando os antigos.
+# ============================================================
+
+def _split_centavos(valor: float) -> tuple[str, str]:
+    """Quebra 874388.20 em ('R$ 874.388', ',20'). Usado pros valores com centavos
+    em cinza no estilo editorial."""
+    s = fmt_brl(valor)  # 'R$ 874.388,20'
+    if "," in s:
+        inteiro, cents = s.rsplit(",", 1)
+        return inteiro, f",{cents}"
+    return s, ""
+
+
+def editorial_header(kicker: str, titulo: str, meta_esquerda: str = "", meta_direita: str = ""):
+    """Cabeçalho editorial: kicker em amarelo + título grande + meta à direita."""
+    meta_html = ""
+    if meta_esquerda or meta_direita:
+        m1 = f'<div class="editorial-meta">{meta_esquerda}</div>' if meta_esquerda else ""
+        m2 = f'<div class="editorial-meta">{meta_direita}</div>' if meta_direita else ""
+        meta_html = f'<div>{m1}{m2}</div>'
+    st.html(
+        f"""
+        <div class="editorial-header">
+            <div>
+                <div class="editorial-kicker">{kicker}</div>
+                <div class="editorial-title">{titulo}</div>
+            </div>
+            {meta_html}
+        </div>
+        <div class="editorial-divisor-fade"></div>
+        """
+    )
+
+
+def editorial_kpi_destaque(
+    percentual: float,
+    valor_conciliado: float,
+    valor_total: float,
+    label_pct: str = "Conciliado",
+    label_valor: str = "Valor conciliado",
+    status_text: str | None = None,
+    status_cor: str = "verde",  # 'verde' | 'amarelo' | 'vermelho'
+):
+    """KPI âncora gigante: percentual (52px) + valor (38px) lado a lado."""
+    pct_str = f"{percentual:.1f}".replace(".", ",")
+    inteiro, cents = _split_centavos(valor_conciliado)
+
+    status_html = ""
+    if status_text:
+        status_html = (
+            f'<div class="editorial-status-pill {status_cor}">'
+            f'<i class="ti ti-trending-up"></i> {status_text}'
+            f'</div>'
+        )
+
+    st.html(
+        f"""
+        <div class="editorial-destaque-row">
+            <div class="editorial-destaque-col">
+                <div class="editorial-label">{label_pct}</div>
+                <div style="display:flex; align-items:baseline; gap:14px; margin-top:10px;">
+                    <div class="editorial-valor-hero">{pct_str}<span class="unit">%</span></div>
+                    {status_html}
+                </div>
+            </div>
+            <div class="editorial-destaque-col bigger">
+                <div class="editorial-label">{label_valor}</div>
+                <div class="editorial-valor-grande">
+                    R$ <span class="destaque">{inteiro.replace('R$ ', '')}</span><span class="centavos">{cents}</span>
+                </div>
+                <div class="editorial-sub-text">de {fmt_brl(valor_total)} movimentados</div>
+            </div>
+        </div>
+        """
+    )
+
+
+def editorial_barra_progresso(percentual: float, label_esq: str = "", label_dir: str = ""):
+    """Barra de progresso fina, dourada, com legendas opcionais embaixo."""
+    pct_clamped = max(0.0, min(100.0, percentual))
+    st.html(
+        f"""
+        <div class="editorial-progresso-wrap">
+            <div class="editorial-progresso-track">
+                <div class="editorial-progresso-fill" style="width:{pct_clamped}%;"></div>
+            </div>
+            <div class="editorial-progresso-legend">
+                <span>{label_esq}</span>
+                <span>{label_dir}</span>
+            </div>
+        </div>
+        """
+    )
+
+
+def editorial_linha_metricas(metricas: list[dict]):
+    """Linha de colunas separadas por divisores verticais.
+    Cada métrica: {'label': str, 'valor': str, 'centavos': str?, 'cor': str?, 'sub_html': str?}
+    cor: '' (branco) | 'verde' | 'amarelo' | 'vermelho' | 'atencao'
+    """
+    cols_html = []
+    for m in metricas:
+        cor_class = m.get("cor", "")
+        centavos = m.get("centavos", "")
+        sub = m.get("sub_html", "")
+        sub_html = f'<div class="sub">{sub}</div>' if sub else ""
+        cols_html.append(
+            f"""
+            <div class="col">
+                <div class="label">{m['label']}</div>
+                <div class="valor {cor_class}">{m['valor']}<span class="centavos">{centavos}</span></div>
+                {sub_html}
+            </div>
+            """
+        )
+    cols_count = len(metricas)
+    st.html(
+        f'<div class="editorial-cols" style="--cols:{cols_count};">{"".join(cols_html)}</div>'
+    )
+
+
+def editorial_faixa_contagens(itens: list[dict]):
+    """Faixa horizontal entre dois divisores. Cada item: {'label', 'valor', 'cor'?}"""
+    parts = []
+    for i, item in enumerate(itens):
+        if i > 0:
+            parts.append('<div class="sep"></div>')
+        cor = item.get("cor", "")
+        parts.append(
+            f"""
+            <div class="item">
+                <div class="valor {cor}">{item['valor']}</div>
+                <div class="label">{item['label']}</div>
+            </div>
+            """
+        )
+    st.html(f'<div class="editorial-faixa">{"".join(parts)}</div>')
+
+
+def editorial_secao_head(titulo: str, contagem_text: str = ""):
+    """Cabeçalho de seção: título amarelo + linha que esmaece + contagem opcional à direita."""
+    contagem_html = f'<span class="contagem">{contagem_text}</span>' if contagem_text else ""
+    st.html(
+        f"""
+        <div class="editorial-secao-head">
+            <span class="titulo">{titulo}</span>
+            <span class="linha"></span>
+            {contagem_html}
+        </div>
+        """
+    )
+
+
+def editorial_lista_excecoes(itens: list[dict]):
+    """Lista de exceções (não cards). Cada item:
+        {'icone': 'ti-credit-card', 'titulo': str, 'sub': str,
+         'valor': str, 'status': str?, 'cor': 'verde'|'amarelo'|'',
+         'muted': bool?}
+    """
+    parts = []
+    for i, item in enumerate(itens):
+        if i > 0:
+            parts.append('<div class="editorial-lista-divisor"></div>')
+        cor = item.get("cor", "")
+        muted = "muted" if item.get("muted") else ""
+        status = item.get("status", "")
+        status_html = (
+            f'<div class="editorial-lista-status {cor}">{status}</div>' if status else ""
+        )
+        valor_class = "muted" if item.get("muted") else ""
+        # Parte "light" (cinza) no título: separar por travessão
+        titulo = item["titulo"]
+        if " — " in titulo:
+            principal, light = titulo.split(" — ", 1)
+            titulo_html = f'{principal} <span class="light">— {light}</span>'
+        else:
+            titulo_html = titulo
+        parts.append(
+            f"""
+            <div class="editorial-lista-item {muted}">
+                <div class="editorial-lista-icone {cor}">
+                    <i class="ti {item['icone']}"></i>
+                </div>
+                <div class="editorial-lista-corpo">
+                    <div class="editorial-lista-titulo">{titulo_html}</div>
+                    <div class="editorial-lista-sub">{item['sub']}</div>
+                </div>
+                <div class="editorial-lista-direita">
+                    <div class="editorial-lista-valor {valor_class}">{item['valor']}</div>
+                    {status_html}
+                </div>
+            </div>
+            """
+        )
+    st.html(f'<div class="editorial-lista">{"".join(parts)}</div>')
+
+
+def render_resumo_executivo_editorial(resultado: ResultadoConciliacao, kpis: dict):
+    """v5.12 Fase 1: Resumo Executivo no estilo editorial.
+    Substitui os 8-11 cards retangulares por um layout em camadas:
+    1) Header (kicker + título + data)
+    2) KPI âncora (% + valor conciliado, lado a lado)
+    3) Barra de progresso
+    4) Linha de 4 colunas com divisores (Banco | Sankhya | Falta | Divergência)
+    5) Faixa de contagens (Banco · Sankhya · Pares · Conta)
+    6) Seção de exceções (lista, não cards)
+    """
+    # 1) Header
+    data_ref = resultado.data_referencia.strftime("%d de %B · %Y")
+    # tradução curta dos meses pra PT-BR (cobre EN-US default e variações de locale)
+    meses_pt = {
+        "January": "janeiro", "February": "fevereiro", "March": "março",
+        "April": "abril", "May": "maio", "June": "junho",
+        "July": "julho", "August": "agosto", "September": "setembro",
+        "October": "outubro", "November": "novembro", "December": "dezembro",
+    }
+    for en, pt in meses_pt.items():
+        data_ref = data_ref.replace(en, pt).replace(en.lower(), pt)
+
+    n_contas = len(resultado.contas_processadas)
+    titulo_subtitulo = (
+        "Conciliação consolidada"
+        if n_contas != 1
+        else f"Conciliação · {resultado.contas_processadas[0]}"
+    )
+
+    editorial_header(
+        kicker="Resumo executivo",
+        titulo=titulo_subtitulo,
+        meta_esquerda=data_ref,
+        meta_direita=f"{n_contas} conta{'s' if n_contas != 1 else ''} processada{'s' if n_contas != 1 else ''}",
+    )
+
+    # 2) KPI âncora
+    pct = float(kpis["percentual_conciliado"])
+    if pct >= 95:
+        status_text, status_cor = "dentro da meta", "verde"
+    elif pct >= 80:
+        status_text, status_cor = "próximo da meta", "amarelo"
+    else:
+        status_text, status_cor = "abaixo da meta", "vermelho"
+
+    editorial_kpi_destaque(
+        percentual=pct,
+        valor_conciliado=float(kpis["total_conciliado"]),
+        valor_total=float(kpis["total_movimentado_banco"]),
+        status_text=status_text,
+        status_cor=status_cor,
+    )
+
+    # 3) Barra de progresso
+    falta = float(kpis["falta_conciliar"])
+    diverg = float(kpis["divergencia_sankhya_banco"])
+    label_dir = []
+    if falta > 0:
+        label_dir.append(f"{fmt_brl(falta)} falta")
+    if diverg > 0:
+        label_dir.append(f"{fmt_brl(diverg)} divergência")
+    editorial_barra_progresso(
+        percentual=pct,
+        label_esq=f"{fmt_brl(float(kpis['total_conciliado']))} conciliado",
+        label_dir=" · ".join(label_dir) if label_dir else "—",
+    )
+
+    # 4) Linha de 4 colunas: Banco | Sankhya | Falta | Divergência
+    inteiro_b, cents_b = _split_centavos(float(kpis["total_movimentado_banco"]))
+    inteiro_s, cents_s = _split_centavos(float(kpis["total_extrato_sistema"]))
+    inteiro_f, cents_f = _split_centavos(falta)
+    inteiro_d, cents_d = _split_centavos(diverg)
+
+    # Subs: receitas/despesas resumidos
+    rec_b = float(kpis["receitas_banco"])
+    desp_b = float(kpis["despesas_banco"])
+    rec_s = float(kpis["receitas_sistema"])
+    desp_s = float(kpis["despesas_sistema"])
+
+    sub_banco = (
+        f'<span class="inline"><span class="verde">↑ {fmt_brl(rec_b).replace("R$ ", "")}</span></span>'
+        f'<span class="vermelho">↓ {fmt_brl(desp_b).replace("R$ ", "")}</span>'
+    )
+    sub_sankhya = (
+        f'<span class="inline"><span class="verde">↑ {fmt_brl(rec_s).replace("R$ ", "")}</span></span>'
+        f'<span class="vermelho">↓ {fmt_brl(desp_s).replace("R$ ", "")}</span>'
+    )
+
+    # Sub de "Falta": indicar se é só despesas, só receitas ou ambos
+    fr = float(kpis["falta_conciliar_receitas"])
+    fd = float(kpis["falta_conciliar_despesas"])
+    if fr > 0 and fd > 0:
+        sub_falta = "receitas e despesas"
+    elif fd > 0:
+        sub_falta = "apenas em despesas"
+    elif fr > 0:
+        sub_falta = "apenas em receitas"
+    else:
+        sub_falta = "—"
+
+    qtd_div = int(kpis.get("qtd_divergencia_sankhya_banco", 0))
+    sub_div = f"{qtd_div} lançamento{'s' if qtd_div != 1 else ''}" if qtd_div else "—"
+
+    # Remover "R$ " dos inteiros pra mostrar só o número (R$ já está embutido no contexto)
+    editorial_linha_metricas([
+        {
+            "label": "Banco",
+            "valor": inteiro_b.replace("R$ ", ""),
+            "centavos": cents_b,
+            "sub_html": sub_banco,
+        },
+        {
+            "label": "Sankhya",
+            "valor": inteiro_s.replace("R$ ", ""),
+            "centavos": cents_s,
+            "sub_html": sub_sankhya,
+        },
+        {
+            "label": "Falta conciliar",
+            "valor": inteiro_f.replace("R$ ", ""),
+            "centavos": cents_f,
+            "cor": "vermelho" if falta > 0 else "",
+            "sub_html": sub_falta,
+        },
+        {
+            "label": "Divergência",
+            "valor": inteiro_d.replace("R$ ", ""),
+            "centavos": cents_d,
+            "cor": "atencao" if diverg > 0 else "",
+            "sub_html": sub_div,
+        },
+    ])
+
+    # 5) Faixa de contagens
+    editorial_faixa_contagens([
+        {"label": "Banco", "valor": fmt_int(kpis["qtd_registros_banco"])},
+        {"label": "Sankhya", "valor": fmt_int(kpis["qtd_registros_sistema"])},
+        {"label": "Pares", "valor": fmt_int(kpis["qtd_conciliados"]), "cor": "verde"},
+        {"label": "Conta" if n_contas == 1 else "Contas", "valor": fmt_int(n_contas), "cor": "amarelo"},
+    ])
+
+    # 6) Seção de exceções (lista editorial)
+    _render_excecoes_editorial(resultado, kpis)
+
+
+def _render_excecoes_editorial(resultado: ResultadoConciliacao, kpis: dict):
+    """Lista de exceções no estilo editorial — substitui a versão de cards."""
+    qtd_est_anu = kpis.get("qtd_estornos_anulados", 0)
+    qtd_est_par = kpis.get("qtd_estornos_parciais", 0)
+    qtd_top1722 = kpis.get("qtd_top1722_grupos", 0)
+    df_inv = resultado.aplicacoes_resgates
+    tem_invest = not df_inv.empty
+
+    # Se nenhuma das regras se aplica, mostra seção minimalista com "nenhuma exceção"
+    if not (qtd_est_anu > 0 or qtd_est_par > 0 or qtd_top1722 > 0 or tem_invest):
+        editorial_secao_head("Exceções aplicadas", "nenhuma neste período")
+        return
+
+    total_regras = sum(1 for x in [qtd_est_anu > 0, qtd_est_par > 0, qtd_top1722 > 0, tem_invest] if x)
+    editorial_secao_head("Exceções aplicadas", f"{total_regras} regra{'s' if total_regras != 1 else ''} ativa{'s' if total_regras != 1 else ''}")
+
+    itens = []
+
+    # TOP 1722
+    if qtd_top1722 > 0:
+        valor_top = float(kpis.get("valor_top1722_conciliado", 0.0))
+        # Detalhamento de qtd banco × sankhya, se possível
+        linhas_b = getattr(resultado, "top1722_linhas_banco", pd.DataFrame())
+        linhas_s = getattr(resultado, "top1722_linhas", pd.DataFrame())
+        qtd_b = len(linhas_b) if not linhas_b.empty else 0
+        qtd_s = len(linhas_s) if not linhas_s.empty else 0
+        sub = (
+            f"{qtd_b} créditos banco × {qtd_s} vendas Sankhya · diferença R$ 0,00"
+            if qtd_b and qtd_s
+            else f"{qtd_top1722} agrupamento{'s' if qtd_top1722 != 1 else ''}"
+        )
+        itens.append({
+            "icone": "ti-credit-card",
+            "titulo": "Cartão TOP 1722 — agrupamento por soma total",
+            "sub": sub,
+            "valor": fmt_brl(valor_top),
+            "status": "Conciliado",
+            "cor": "verde",
+        })
+
+    # Investimentos
+    if tem_invest:
+        aplic = df_inv[df_inv["tipo_aplicacao"] == "Aplicação"] if "tipo_aplicacao" in df_inv.columns else pd.DataFrame()
+        resg = df_inv[df_inv["tipo_aplicacao"] == "Resgate"] if "tipo_aplicacao" in df_inv.columns else pd.DataFrame()
+        qtd_a = len(aplic)
+        qtd_r = len(resg)
+        val_total = float(df_inv["valor"].abs().sum())
+        itens.append({
+            "icone": "ti-trending-up",
+            "titulo": "Investimentos — aplicações e resgates",
+            "sub": f"{qtd_a} aplicaç{'ão' if qtd_a == 1 else 'ões'} · {qtd_r} resgate{'s' if qtd_r != 1 else ''}",
+            "valor": fmt_brl(val_total),
+            "status": "Excluído da divergência",
+            "cor": "amarelo",
+        })
+
+    # Estornos anulados
+    if qtd_est_anu > 0:
+        itens.append({
+            "icone": "ti-refresh",
+            "titulo": "Estornos anulados — débito e crédito se cancelam",
+            "sub": f"{qtd_est_anu} ocorrência{'s' if qtd_est_anu != 1 else ''}",
+            "valor": fmt_brl(float(kpis.get("valor_estornos_anulados", 0.0))),
+            "status": "Removidos do resumo",
+            "cor": "verde",
+        })
+
+    # Estornos parciais
+    if qtd_est_par > 0:
+        itens.append({
+            "icone": "ti-scale",
+            "titulo": "Estornos parciais — débito reduz crédito",
+            "sub": f"{qtd_est_par} ocorrência{'s' if qtd_est_par != 1 else ''}",
+            "valor": fmt_brl(float(kpis.get("saldo_estornos_parciais", 0.0))),
+            "status": "Saldo restante",
+            "cor": "amarelo",
+        })
+
+    editorial_lista_excecoes(itens)
+
+
 # ============================================================
 # Validações
 # ============================================================
@@ -864,12 +1653,11 @@ def pagina_dashboard():
     ]
     render_cards(cards1)
 
-    # Linha 2: Falta Conciliar vertical + Divergência + Investimentos
+    # Linha 2: Falta Conciliar vertical + Divergência + Qtd + Contas
     sub_falta_conciliar = _card_falta_conciliar_vertical(
         kpis["falta_conciliar_receitas"],
         kpis["falta_conciliar_despesas"],
     )
-    investimentos_html = _card_investimentos(resultado)
 
     cards2 = [
         card_kpi_html("Falta Conciliar", fmt_brl(kpis["falta_conciliar"]),
@@ -884,7 +1672,7 @@ def pagina_dashboard():
         card_kpi("Qtd Divergências", fmt_int(kpis["qtd_divergencia_sankhya_banco"]),
                  "lançamentos do Sankhya sem par no banco",
                  classe="destaque-amarelo" if kpis["qtd_divergencia_sankhya_banco"] > 0 else ""),
-        investimentos_html,
+        card_kpi("Contas processadas", fmt_int(len(resultado.contas_processadas))),
     ]
     render_cards(cards2)
 
@@ -897,26 +1685,10 @@ def pagina_dashboard():
     ]
     render_cards(cards3)
 
-    # v5.0: linha 4 — estornos e cartão TOP 1722 (só aparece se tem dados)
-    qtd_est_anu = kpis.get("qtd_estornos_anulados", 0)
-    qtd_est_par = kpis.get("qtd_estornos_parciais", 0)
-    qtd_top1722 = kpis.get("qtd_top1722_grupos", 0)
-    if qtd_est_anu > 0 or qtd_est_par > 0 or qtd_top1722 > 0:
-        cards4 = [
-            card_kpi("♻️ Anulados por Estorno", fmt_int(qtd_est_anu),
-                     f"valor bruto: {fmt_brl(kpis.get('valor_estornos_anulados', 0.0))}",
-                     classe="destaque-verde" if qtd_est_anu > 0 else ""),
-            card_kpi("⚖️ Estornos Parciais", fmt_int(qtd_est_par),
-                     f"saldo restante: {fmt_brl(kpis.get('saldo_estornos_parciais', 0.0))}",
-                     classe="destaque-amarelo" if qtd_est_par > 0 else ""),
-            card_kpi("🃏 Cartão TOP 1722", fmt_int(qtd_top1722),
-                     f"valor: {fmt_brl(kpis.get('valor_top1722_conciliado', 0.0))}",
-                     classe="destaque-verde" if qtd_top1722 > 0 else ""),
-            card_kpi("", "", ""),  # espaço vazio
-        ]
-        render_cards(cards4)
-
     st.divider()
+
+    # v5.12: Exceções e Regras Aplicadas — seção separada (não polui mais o resumo)
+    render_secao_excecoes_regras(resultado, kpis, conta=None)
 
     # v3.10: Dashboard é visão gerencial — cards das contas são só informativos.
     # Drill-down (Ver detalhamento) só acontece na aba Conciliação.
@@ -1319,87 +2091,9 @@ def tela_resultado():
     # Quando o usuário entra no detalhamento de uma conta específica, mostra direto
     # o detalhe da conta — evita confundir KPIs globais com KPIs da conta selecionada.
     if not st.session_state.banco_conta_selecionada:
-        # KPIs executivos
-        section_title("RESUMO EXECUTIVO")
-
-        # Linha 1: principais (com receitas/despesas embaixo dos 2 totais)
-        sub_banco = _card_total_com_rec_desp(kpis["receitas_banco"], kpis["despesas_banco"])
-        sub_sankhya = _card_total_com_rec_desp(kpis["receitas_sistema"], kpis["despesas_sistema"])
-        cards1 = [
-            card_kpi_html("Total Movimentado no Banco", fmt_brl(kpis["total_movimentado_banco"]),
-                          sub_banco),
-            card_kpi_html("Total Extrato Sankhya", fmt_brl(kpis["total_extrato_sistema"]),
-                          sub_sankhya),
-            card_kpi("Total Conciliado", fmt_brl(kpis["total_conciliado"]),
-                     "match Banco × Sankhya", classe="destaque-verde"),
-            card_kpi("Percentual Conciliado", fmt_pct(kpis["percentual_conciliado"]),
-                     classe="destaque-amarelo"),
-        ]
-        render_cards(cards1)
-
-        # Linha 2: Falta Conciliar (vertical) + Falta Lançar + Divergência + Investimentos
-        sub_falta_conciliar = _card_falta_conciliar_vertical(
-            kpis["falta_conciliar_receitas"],
-            kpis["falta_conciliar_despesas"],
-        )
-        fonte_fl = (
-            "via Sankhya 'Conciliado=Não'"
-            if kpis["fonte_falta_lancar"] == "sankhya_conciliado_nao"
-            else "pendência do sistema"
-        )
-        sub_falta_lancar = _card_falta_conciliar_vertical(
-            kpis["falta_lancar_receitas"],
-            kpis["falta_lancar_despesas"],
-        )
-        investimentos_html = _card_investimentos(resultado)
-
-        cards2 = [
-            card_kpi_html("Falta Conciliar", fmt_brl(kpis["falta_conciliar"]),
-                          sub_falta_conciliar, classe="destaque-vermelho"),
-            card_kpi_html("Divergência (Sankhya × Banco)",
-                          fmt_brl(kpis["divergencia_sankhya_banco"]),
-                          _card_falta_conciliar_vertical(
-                              kpis["divergencia_sankhya_banco_receitas"],
-                              kpis["divergencia_sankhya_banco_despesas"],
-                          ),
-                          classe="destaque-vermelho"),
-            card_kpi("Qtd Divergências", fmt_int(kpis["qtd_divergencia_sankhya_banco"]),
-                     "lançamentos do Sankhya sem par no banco",
-                     classe="destaque-amarelo" if kpis["qtd_divergencia_sankhya_banco"] > 0 else ""),
-            investimentos_html,
-        ]
-        render_cards(cards2)
-
-        # Linha 3: contagens (sem 'Pendentes Banco' e 'Pendentes Sistema' — v3.3)
-        cards3 = [
-            card_kpi("Registros Banco", fmt_int(kpis["qtd_registros_banco"]),
-                     f"{fmt_int(kpis['qtd_movimentacoes_banco'])} movimentações"),
-            card_kpi("Registros Sistema", fmt_int(kpis["qtd_registros_sistema"]),
-                     f"{fmt_int(kpis['qtd_movimentacoes_sistema'])} movimentações"),
-            card_kpi("Conciliados", fmt_int(kpis["qtd_conciliados"]),
-                     "pares Banco × Sankhya", classe="destaque-verde"),
-            card_kpi("Contas processadas", fmt_int(len(resultado.contas_processadas))),
-        ]
-        render_cards(cards3)
-
-        # v5.0: linha 4 — estornos e cartão TOP 1722 (só se há dados)
-        qtd_est_anu = kpis.get("qtd_estornos_anulados", 0)
-        qtd_est_par = kpis.get("qtd_estornos_parciais", 0)
-        qtd_top1722 = kpis.get("qtd_top1722_grupos", 0)
-        if qtd_est_anu > 0 or qtd_est_par > 0 or qtd_top1722 > 0:
-            cards4 = [
-                card_kpi("♻️ Anulados por Estorno", fmt_int(qtd_est_anu),
-                         f"valor bruto: {fmt_brl(kpis.get('valor_estornos_anulados', 0.0))}",
-                         classe="destaque-verde" if qtd_est_anu > 0 else ""),
-                card_kpi("⚖️ Estornos Parciais", fmt_int(qtd_est_par),
-                         f"saldo restante: {fmt_brl(kpis.get('saldo_estornos_parciais', 0.0))}",
-                         classe="destaque-amarelo" if qtd_est_par > 0 else ""),
-                card_kpi("🃏 Cartão TOP 1722", fmt_int(qtd_top1722),
-                         f"valor: {fmt_brl(kpis.get('valor_top1722_conciliado', 0.0))}",
-                         classe="destaque-verde" if qtd_top1722 > 0 else ""),
-                card_kpi("", "", ""),  # espaço vazio
-            ]
-            render_cards(cards4)
+        # v5.12 Fase 1: novo Resumo Executivo no estilo editorial
+        # (substitui os ~50 linhas de cards retangulares anteriores)
+        render_resumo_executivo_editorial(resultado, kpis)
 
         st.divider()
 
@@ -2112,7 +2806,11 @@ def render_subabas_tipo(resultado: ResultadoConciliacao, conta: str | None = Non
             else:
                 df = df_unif[df_unif["tipo"] == tipo].copy()
 
-            if df.empty:
+            # v5.12: Aba Cartão — quando regra TOP 1722 esvazia tudo, mostra a visão
+            # banco × sankhya do agrupamento (mesmas linhas que sumiram de Pendentes/Diverg).
+            mostrar_top1722_aqui = (tipo == "Cartão")
+
+            if df.empty and not mostrar_top1722_aqui:
                 if tipo == "Outros":
                     st.info(
                         "🎉 Nenhum lançamento sem categoria. "
@@ -2124,48 +2822,140 @@ def render_subabas_tipo(resultado: ResultadoConciliacao, conta: str | None = Non
                     st.info(f"Nenhum lançamento do tipo **{tipo}**.")
                 continue
 
-            # KPIs do tipo
-            qtd = len(df)
-            valor_total = float(df["valor"].abs().sum())
-            receitas = float(df[df["valor"] > 0]["valor"].sum())
-            despesas = float(df[df["valor"] < 0]["valor"].abs().sum())
+            # KPIs do tipo (só se houver lançamentos regulares)
+            if not df.empty:
+                qtd = len(df)
+                valor_total = float(df["valor"].abs().sum())
+                receitas = float(df[df["valor"] > 0]["valor"].sum())
+                despesas = float(df[df["valor"] < 0]["valor"].abs().sum())
 
-            sub_rec_desp = _card_total_com_rec_desp(receitas, despesas)
+                sub_rec_desp = _card_total_com_rec_desp(receitas, despesas)
 
-            # Contagens por status
-            qtd_conciliado = int((df["status"] == "Conciliado").sum())
-            qtd_pend_b = int((df["status"] == "Pendente Banco").sum())
-            qtd_pend_s = int((df["status"] == "Pendente Sankhya").sum())
+                # Contagens por status
+                qtd_conciliado = int((df["status"] == "Conciliado").sum())
+                qtd_pend_b = int((df["status"] == "Pendente Banco").sum())
+                qtd_pend_s = int((df["status"] == "Pendente Sankhya").sum())
 
-            label_qtd = f"Lançamentos {tipo}" if tipo not in ("Todos", "Outros") else f"Lançamentos {tipo.lower()}"
-            cards = [
-                card_kpi(label_qtd, fmt_int(qtd),
-                         f"Conciliados: {qtd_conciliado} · Pend. Banco: {qtd_pend_b} · Pend. Sankhya: {qtd_pend_s}"),
-                card_kpi_html("Valor total (absoluto)", fmt_brl(valor_total),
-                              sub_rec_desp, classe="destaque-amarelo"),
-                card_kpi("Contas envolvidas",
-                         fmt_int(df["conta"].nunique())),
-            ]
-            render_cards(cards)
+                label_qtd = f"Lançamentos {tipo}" if tipo not in ("Todos", "Outros") else f"Lançamentos {tipo.lower()}"
+                cards = [
+                    card_kpi(label_qtd, fmt_int(qtd),
+                             f"Conciliados: {qtd_conciliado} · Pend. Banco: {qtd_pend_b} · Pend. Sankhya: {qtd_pend_s}"),
+                    card_kpi_html("Valor total (absoluto)", fmt_brl(valor_total),
+                                  sub_rec_desp, classe="destaque-amarelo"),
+                    card_kpi("Contas envolvidas",
+                             fmt_int(df["conta"].nunique())),
+                ]
+                render_cards(cards)
 
-            # Tabela: status + origem + dados padronizados
-            if tipo == "Recebimentos":
-                st.caption(
-                    "💡 Esta aba mostra todos os recebimentos — separados por status "
-                    "(Conciliado / Pendente no Banco / Pendente no Sankhya)."
-                )
-            elif tipo == "Outros":
-                st.caption(
-                    "📌 Lançamentos cujo histórico não bateu com nenhuma categoria conhecida. "
-                    "Use esta lista para identificar termos que valem regras novas."
-                )
+                # Tabela: status + origem + dados padronizados
+                if tipo == "Recebimentos":
+                    st.caption(
+                        "💡 **Recebimentos** = qualquer entrada na conta (TED/DOC de cliente, "
+                        "transferência recebida, depósito, crédito de cartão, devolução, etc.). "
+                        "Use os tipos específicos (Pix, Boleto, Cartão, TED/DOC) pra ver "
+                        "categorias isoladas."
+                    )
+                elif tipo == "Outros":
+                    st.caption(
+                        "📌 Lançamentos cujo histórico não bateu com nenhuma categoria conhecida. "
+                        "Use esta lista para identificar termos que valem regras novas."
+                    )
 
-            cols_show = ["status", "origem", "data", "conta", "historico",
-                         "documento", "valor", "tipo", "natureza"]
-            cols_show = [c for c in cols_show if c in df.columns]
-            out = df[cols_show].copy()
-            out.columns = [c.title() for c in out.columns]
-            _exibir_df(out, f"tipo_{tipo.lower().replace(' ', '_').replace('/', '_')}")
+                cols_show = ["status", "origem", "data", "conta", "historico",
+                             "documento", "valor", "tipo", "natureza"]
+                cols_show = [c for c in cols_show if c in df.columns]
+                out = df[cols_show].copy()
+                out.columns = [c.title() for c in out.columns]
+                _exibir_df(out, f"tipo_{tipo.lower().replace(' ', '_').replace('/', '_')}")
+
+            # v5.12: Bloco TOP 1722 (banco × sankhya) — aparece na aba Cartão
+            if mostrar_top1722_aqui:
+                _render_bloco_top1722_banco_sankhya(resultado, conta, mostrou_acima=(not df.empty))
+
+
+def _render_bloco_top1722_banco_sankhya(
+    resultado: ResultadoConciliacao,
+    conta: str | None,
+    mostrou_acima: bool,
+):
+    """v5.12: Mostra os lançamentos do agrupamento TOP 1722 em visão banco × sankhya
+    (lado a lado). Esses lançamentos foram removidos de Pendentes/Divergências pela
+    regra de agrupamento, então a aba Cartão ficaria vazia sem este bloco.
+    """
+    linhas_banco = getattr(resultado, "top1722_linhas_banco", pd.DataFrame())
+    linhas_sank = getattr(resultado, "top1722_linhas", pd.DataFrame())
+
+    # Filtra por conta se informado
+    if conta is not None:
+        if not linhas_banco.empty and "conta" in linhas_banco.columns:
+            linhas_banco = linhas_banco[linhas_banco["conta"] == conta]
+        if not linhas_sank.empty and "conta" in linhas_sank.columns:
+            linhas_sank = linhas_sank[linhas_sank["conta"] == conta]
+
+    if linhas_banco.empty and linhas_sank.empty:
+        if not mostrou_acima:
+            st.info(
+                "Nenhum lançamento do tipo **Cartão**. "
+                "Se houver crédito de cartão no banco, ele aparece aqui "
+                "(agrupado com vendas TOP 1722 do Sankhya)."
+            )
+        return
+
+    if mostrou_acima:
+        st.divider()
+
+    qtd_b = len(linhas_banco)
+    qtd_s = len(linhas_sank)
+    val_b = float(linhas_banco["valor"].abs().sum()) if not linhas_banco.empty and "valor" in linhas_banco.columns else 0.0
+    val_s = float(linhas_sank["valor"].abs().sum()) if not linhas_sank.empty and "valor" in linhas_sank.columns else 0.0
+    diff = val_b - val_s
+
+    st.success(
+        f"🃏 **Cartão TOP 1722 — Agrupamento Banco × Sankhya**\n\n"
+        f"Esses lançamentos foram conciliados por **soma agrupada** (não 1-pra-1): "
+        f"{qtd_b} créditos no banco ({fmt_brl(val_b)}) × {qtd_s} vendas TOP 1722 no Sankhya "
+        f"({fmt_brl(val_s)}). Diferença: **{fmt_brl(diff)}**."
+    )
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Créditos no Banco", fmt_int(qtd_b), fmt_brl(val_b))
+    with col2:
+        st.metric("Vendas TOP 1722 Sankhya", fmt_int(qtd_s), fmt_brl(val_s))
+    with col3:
+        st.metric("Diferença", fmt_brl(diff), "R$ 0,00" if diff == 0 else None)
+
+    # Tabelas lado a lado
+    col_a, col_b = st.columns(2)
+    with col_a:
+        st.markdown("**🏦 Banco — Créditos de Cartão**")
+        if linhas_banco.empty:
+            st.info("Sem créditos no banco para o filtro atual.")
+        else:
+            lb = linhas_banco.copy()
+            if "data" in lb.columns:
+                lb["data"] = pd.to_datetime(lb["data"], errors="coerce").dt.strftime("%d/%m/%Y")
+            if "valor" in lb.columns:
+                lb["valor"] = lb["valor"].apply(fmt_brl)
+            cols_b = [c for c in ("data", "conta", "historico", "documento", "valor") if c in lb.columns]
+            lb = lb[cols_b]
+            lb.columns = [c.replace("_", " ").title() for c in lb.columns]
+            st.dataframe(lb, use_container_width=True, hide_index=True)
+
+    with col_b:
+        st.markdown("**📋 Sankhya — Vendas TOP 1722**")
+        if linhas_sank.empty:
+            st.info("Sem vendas TOP 1722 no Sankhya para o filtro atual.")
+        else:
+            ls = linhas_sank.copy()
+            if "data" in ls.columns:
+                ls["data"] = pd.to_datetime(ls["data"], errors="coerce").dt.strftime("%d/%m/%Y")
+            if "valor" in ls.columns:
+                ls["valor"] = ls["valor"].apply(fmt_brl)
+            cols_s = [c for c in ("data", "conta", "historico", "documento", "valor") if c in ls.columns]
+            ls = ls[cols_s]
+            ls.columns = [c.replace("_", " ").title() for c in ls.columns]
+            st.dataframe(ls, use_container_width=True, hide_index=True)
 
 
 def _montar_visao_unificada(resultado: ResultadoConciliacao) -> pd.DataFrame:
