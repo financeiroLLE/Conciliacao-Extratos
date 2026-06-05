@@ -885,6 +885,289 @@ table {{ color: {CORES["branco"]}; }}
 .editorial-lista-status.verde {{ color: #7DD87D; }}
 .editorial-lista-status.amarelo {{ color: {CORES["amarelo"]}; }}
 
+/* ============================================================
+   v5.13 — Estilo OPÇÃO A (cards generosos)
+   Cards modernos com hierarquia visual, gradientes sutis,
+   bordas superiores semânticas, donut SVG pro %.
+   ============================================================ */
+
+/* Grid principal: 3 colunas com proporção 1.4 / 1 / 1 (card âncora maior) */
+.opa-grid-hero {{
+    display: grid;
+    grid-template-columns: 1.4fr 1fr 1fr;
+    gap: 16px;
+    margin-bottom: 16px;
+}}
+.opa-grid-secundario {{
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+}}
+@media (max-width: 900px) {{
+    .opa-grid-hero, .opa-grid-secundario {{
+        grid-template-columns: 1fr;
+    }}
+}}
+
+/* Card âncora (gradiente + glow sutil no canto) */
+.opa-card-ancora {{
+    background: linear-gradient(135deg, #16335F 0%, #0F2548 100%);
+    padding: 24px 22px;
+    border-radius: 18px;
+    position: relative;
+    overflow: hidden;
+}}
+.opa-card-ancora::before {{
+    content: "";
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: 140px;
+    height: 140px;
+    background: radial-gradient(circle, rgba(250,195,24,0.08) 0%, transparent 70%);
+    pointer-events: none;
+}}
+.opa-card-ancora-label {{
+    color: #8BA3C7;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+}}
+.opa-card-ancora-valor {{
+    color: {CORES["branco"]};
+    font-size: 30px;
+    font-weight: 500;
+    margin-top: 14px;
+    letter-spacing: -0.5px;
+}}
+.opa-rec-desp-row {{
+    display: flex;
+    gap: 28px;
+    margin-top: 18px;
+    padding-top: 14px;
+    border-top: 1px solid rgba(255,255,255,0.08);
+}}
+.opa-rec-desp-item .marker {{
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11px;
+    font-weight: 500;
+}}
+.opa-rec-desp-item .marker.verde {{ color: #7DD87D; }}
+.opa-rec-desp-item .marker.vermelho {{ color: #FF8A8A; }}
+.opa-rec-desp-item .marker .dot {{
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+}}
+.opa-rec-desp-item .marker.verde .dot {{ background: #7DD87D; }}
+.opa-rec-desp-item .marker.vermelho .dot {{ background: #FF8A8A; }}
+.opa-rec-desp-item .valor {{
+    color: {CORES["branco"]};
+    font-size: 15px;
+    font-weight: 500;
+    margin-top: 4px;
+}}
+
+/* Card verde translúcido (Conciliado) */
+.opa-card-conciliado {{
+    background: linear-gradient(135deg, rgba(125,216,125,0.12) 0%, rgba(125,216,125,0.04) 100%);
+    padding: 24px 22px;
+    border-radius: 18px;
+    border: 1px solid rgba(125,216,125,0.18);
+}}
+.opa-card-conciliado-label {{
+    color: #A8D8A8;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+}}
+.opa-card-conciliado-valor {{
+    color: #7DD87D;
+    font-size: 30px;
+    font-weight: 500;
+    margin-top: 14px;
+    letter-spacing: -0.5px;
+}}
+.opa-card-conciliado-sub {{
+    color: #8BA3C7;
+    font-size: 12px;
+    margin-top: 14px;
+    padding-top: 14px;
+    border-top: 1px solid rgba(255,255,255,0.06);
+}}
+.opa-card-conciliado-sub i {{
+    color: #7DD87D;
+    vertical-align: -2px;
+    margin-right: 4px;
+}}
+
+/* Card donut (percentual) */
+.opa-card-donut {{
+    background: #0F2548;
+    padding: 24px 22px;
+    border-radius: 18px;
+    border: 1px solid rgba(250,195,24,0.2);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+    min-height: 160px;
+}}
+.opa-card-donut svg {{
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+}}
+.opa-card-donut-text {{
+    position: relative;
+    z-index: 1;
+    text-align: center;
+}}
+.opa-card-donut-pct {{
+    color: {CORES["amarelo"]};
+    font-size: 30px;
+    font-weight: 500;
+    letter-spacing: -0.5px;
+}}
+.opa-card-donut-label {{
+    color: #8BA3C7;
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+    margin-top: 2px;
+}}
+
+/* Cards secundários (Falta, Divergência, Contas) */
+.opa-card-secundario {{
+    background: #0F2548;
+    padding: 18px 20px;
+    border-radius: 14px;
+    border-top: 2px solid #888;
+}}
+.opa-card-secundario.vermelho {{ border-top-color: #FF6B6B; }}
+.opa-card-secundario.amarelo {{ border-top-color: {CORES["amarelo"]}; }}
+.opa-card-secundario.verde {{ border-top-color: #7DD87D; }}
+
+.opa-card-sec-head {{
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+}}
+.opa-card-sec-label {{
+    color: #8BA3C7;
+    font-size: 11px;
+    font-weight: 500;
+    letter-spacing: 0.6px;
+    text-transform: uppercase;
+}}
+.opa-card-sec-valor {{
+    color: {CORES["branco"]};
+    font-size: 24px;
+    font-weight: 500;
+    margin-top: 8px;
+    letter-spacing: -0.3px;
+}}
+.opa-card-sec-valor.vermelho {{ color: #FF8A8A; }}
+.opa-card-sec-valor.amarelo {{ color: {CORES["amarelo"]}; }}
+.opa-card-sec-valor.verde {{ color: #7DD87D; }}
+
+.opa-card-sec-icon {{
+    padding: 6px;
+    border-radius: 8px;
+}}
+.opa-card-sec-icon.vermelho {{ background: rgba(255,107,107,0.12); color: #FF8A8A; }}
+.opa-card-sec-icon.amarelo {{ background: rgba(250,195,24,0.12); color: {CORES["amarelo"]}; }}
+.opa-card-sec-icon.verde {{ background: rgba(125,216,125,0.12); color: #7DD87D; }}
+.opa-card-sec-icon i {{ font-size: 14px; }}
+
+.opa-card-sec-sub {{
+    font-size: 11px;
+    color: #8BA3C7;
+    margin-top: 14px;
+}}
+.opa-card-sec-sub .label {{ color: #8BA3C7; }}
+.opa-card-sec-sub .verde-text {{ color: #7DD87D; }}
+.opa-card-sec-sub .vermelho-text {{ color: #FF8A8A; }}
+.opa-card-sec-sub .item {{ display: inline-block; margin-right: 14px; }}
+
+/* Seção Exceções (chips horizontais leves) */
+.opa-excecoes-head {{
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    margin: 28px 0 14px;
+    padding-top: 20px;
+    border-top: 1px dashed rgba(255,255,255,0.08);
+}}
+.opa-excecoes-head-label {{
+    color: #8BA3C7;
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+}}
+.opa-excecoes-head-line {{
+    flex: 1;
+    height: 1px;
+    background: rgba(255,255,255,0.06);
+}}
+
+.opa-excecoes-grid {{
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 12px;
+}}
+
+.opa-chip {{
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    padding: 12px 14px;
+    border-radius: 12px;
+    background: rgba(139,163,199,0.06);
+}}
+.opa-chip.verde {{ background: rgba(125,216,125,0.06); }}
+.opa-chip.amarelo {{ background: rgba(250,195,24,0.06); }}
+.opa-chip-icon {{
+    width: 34px;
+    height: 34px;
+    border-radius: 50%;
+    background: rgba(139,163,199,0.15);
+    color: #8BA3C7;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+}}
+.opa-chip-icon.verde {{ background: rgba(125,216,125,0.15); color: #7DD87D; }}
+.opa-chip-icon.amarelo {{ background: rgba(250,195,24,0.15); color: {CORES["amarelo"]}; }}
+.opa-chip-icon i {{ font-size: 16px; }}
+.opa-chip-label {{
+    color: #8BA3C7;
+    font-size: 10px;
+    font-weight: 500;
+    letter-spacing: 0.6px;
+    text-transform: uppercase;
+}}
+.opa-chip-valor {{
+    color: {CORES["branco"]};
+    font-size: 16px;
+    font-weight: 500;
+    margin-top: 2px;
+}}
+.opa-chip-valor .light {{
+    color: #8BA3C7;
+    font-size: 11px;
+    font-weight: 400;
+}}
+
 </style>
 """
 )
@@ -1602,6 +1885,294 @@ def _render_excecoes_editorial(resultado: ResultadoConciliacao, kpis: dict):
 
 
 # ============================================================
+# v5.13 — Componentes OPÇÃO A (cards generosos)
+# Layout moderno com hierarquia: card âncora grande + secundários
+# com borda superior semântica + chips de exceção.
+# ============================================================
+
+def _formata_valor_curto(valor: float) -> str:
+    """Formata sem o 'R$ ' (usado em sub-textos do card âncora)."""
+    return fmt_brl(valor).replace("R$ ", "")
+
+
+def opa_card_ancora(label: str, valor: float, receitas: float, despesas: float) -> str:
+    """Card âncora (maior, com gradiente): Total Movimentado, com receitas/despesas."""
+    return f"""
+    <div class="opa-card-ancora">
+        <div class="opa-card-ancora-label">{label}</div>
+        <div class="opa-card-ancora-valor">{fmt_brl(valor)}</div>
+        <div class="opa-rec-desp-row">
+            <div class="opa-rec-desp-item">
+                <div class="marker verde">
+                    <span class="dot"></span>
+                    Receitas
+                </div>
+                <div class="valor">{fmt_brl(receitas)}</div>
+            </div>
+            <div class="opa-rec-desp-item">
+                <div class="marker vermelho">
+                    <span class="dot"></span>
+                    Despesas
+                </div>
+                <div class="valor">{fmt_brl(despesas)}</div>
+            </div>
+        </div>
+    </div>
+    """
+
+
+def opa_card_conciliado(valor: float, sub_texto: str = "Match Banco × Sankhya") -> str:
+    """Card verde translúcido (Total Conciliado)."""
+    return f"""
+    <div class="opa-card-conciliado">
+        <div class="opa-card-conciliado-label">Total conciliado</div>
+        <div class="opa-card-conciliado-valor">{fmt_brl(valor)}</div>
+        <div class="opa-card-conciliado-sub">
+            <i class="ti ti-check"></i>{sub_texto}
+        </div>
+    </div>
+    """
+
+
+def opa_card_donut(percentual: float) -> str:
+    """Card com donut SVG do percentual conciliado.
+    Círculo de raio 50, perímetro = 2*pi*50 ≈ 314.16.
+    O 'offset' faz a parte amarela = percentual%.
+    """
+    raio = 50
+    perimetro = 2 * 3.14159265 * raio  # ≈ 314.16
+    pct_clamped = max(0.0, min(100.0, percentual))
+    # dashoffset: 0 = círculo cheio. perimetro = vazio.
+    dash_offset = perimetro * (1 - pct_clamped / 100)
+    pct_str = f"{percentual:.1f}".replace(".", ",")
+    return f"""
+    <div class="opa-card-donut">
+        <svg width="140" height="140" viewBox="0 0 120 120">
+            <circle cx="60" cy="60" r="{raio}" fill="none" stroke="rgba(255,255,255,0.06)" stroke-width="6"/>
+            <circle cx="60" cy="60" r="{raio}" fill="none" stroke="{CORES['amarelo']}" stroke-width="6"
+                stroke-linecap="round" stroke-dasharray="{perimetro:.2f}"
+                stroke-dashoffset="{dash_offset:.2f}"
+                transform="rotate(-90 60 60)"/>
+        </svg>
+        <div class="opa-card-donut-text">
+            <div class="opa-card-donut-pct">{pct_str}%</div>
+            <div class="opa-card-donut-label">Conciliado</div>
+        </div>
+    </div>
+    """
+
+
+def opa_card_secundario(
+    label: str,
+    valor: str,
+    sub_html: str = "",
+    cor: str = "",
+    icone_tabler: str = "",
+) -> str:
+    """Card secundário com borda superior semântica + ícone em pílula.
+    cor: '' | 'vermelho' | 'amarelo' | 'verde'
+    """
+    icone_html = ""
+    if icone_tabler:
+        icone_html = f"""
+        <div class="opa-card-sec-icon {cor}">
+            <i class="ti {icone_tabler}"></i>
+        </div>
+        """
+    sub = f'<div class="opa-card-sec-sub">{sub_html}</div>' if sub_html else ""
+    return f"""
+    <div class="opa-card-secundario {cor}">
+        <div class="opa-card-sec-head">
+            <div>
+                <div class="opa-card-sec-label">{label}</div>
+                <div class="opa-card-sec-valor {cor}">{valor}</div>
+            </div>
+            {icone_html}
+        </div>
+        {sub}
+    </div>
+    """
+
+
+def opa_render_chip_excecao(icone: str, label: str, valor_principal: str, valor_sub: str = "", cor: str = "") -> str:
+    """Chip horizontal pra Exceções (ícone redondo + label + valor inline)."""
+    sub_html = f'<span class="light">· {valor_sub}</span>' if valor_sub else ""
+    return f"""
+    <div class="opa-chip {cor}">
+        <div class="opa-chip-icon {cor}">
+            <i class="ti {icone}"></i>
+        </div>
+        <div>
+            <div class="opa-chip-label">{label}</div>
+            <div class="opa-chip-valor">{valor_principal} {sub_html}</div>
+        </div>
+    </div>
+    """
+
+
+def render_resumo_executivo_opcao_a(resultado: ResultadoConciliacao, kpis: dict):
+    """v5.13: Resumo Executivo no estilo Opção A.
+    Layout em camadas:
+    1) Section title clássico
+    2) Linha hero: Card âncora (1.4fr) + Conciliado (1fr) + Donut % (1fr)
+    3) Linha secundária: Falta + Divergência + Contas (3 cards iguais)
+    4) Seção Exceções e Regras Aplicadas (chips horizontais)
+    """
+    section_title("RESUMO EXECUTIVO")
+
+    # Linha 1: hero (3 cards com proporção 1.4 / 1 / 1)
+    card_ancora = opa_card_ancora(
+        label="Total movimentado · banco",
+        valor=float(kpis["total_movimentado_banco"]),
+        receitas=float(kpis["receitas_banco"]),
+        despesas=float(kpis["despesas_banco"]),
+    )
+    card_conc = opa_card_conciliado(
+        valor=float(kpis["total_conciliado"]),
+        sub_texto="Match Banco × Sankhya",
+    )
+    card_donut = opa_card_donut(float(kpis["percentual_conciliado"]))
+
+    st.html(
+        f'<div class="opa-grid-hero">{card_ancora}{card_conc}{card_donut}</div>'
+    )
+
+    # Linha 2: secundários (3 cards iguais)
+    falta = float(kpis["falta_conciliar"])
+    falta_r = float(kpis["falta_conciliar_receitas"])
+    falta_d = float(kpis["falta_conciliar_despesas"])
+    diverg = float(kpis["divergencia_sankhya_banco"])
+    qtd_div = int(kpis.get("qtd_divergencia_sankhya_banco", 0))
+    n_contas = len(resultado.contas_processadas)
+
+    sub_falta = (
+        f'<span class="item"><span class="label">Receitas:</span> '
+        f'<span class="{"vermelho-text" if falta_r > 0 else ""}">{fmt_brl(falta_r)}</span></span>'
+        f'<span class="item"><span class="label">Despesas:</span> '
+        f'<span class="{"vermelho-text" if falta_d > 0 else ""}">{fmt_brl(falta_d)}</span></span>'
+    )
+
+    sub_div = f"Sankhya × Banco · {qtd_div} lançamento{'s' if qtd_div != 1 else ''}"
+
+    # Conta(s)
+    nome_contas = ", ".join(resultado.contas_processadas[:2])
+    if n_contas > 2:
+        nome_contas += f" + {n_contas - 2}"
+    sub_contas = nome_contas if n_contas > 0 else "—"
+
+    card_falta = opa_card_secundario(
+        label="Falta conciliar",
+        valor=fmt_brl(falta),
+        sub_html=sub_falta,
+        cor="vermelho" if falta > 0 else "",
+        icone_tabler="ti-alert-triangle",
+    )
+    card_diverg = opa_card_secundario(
+        label="Divergência",
+        valor=fmt_brl(diverg),
+        sub_html=sub_div,
+        cor="vermelho" if diverg > 0 else "",
+        icone_tabler="ti-git-compare",
+    )
+    card_contas = opa_card_secundario(
+        label="Contas processadas",
+        valor=str(n_contas),
+        sub_html=sub_contas,
+        cor="amarelo",
+        icone_tabler="ti-building-bank",
+    )
+
+    st.html(
+        f'<div class="opa-grid-secundario">{card_falta}{card_diverg}{card_contas}</div>'
+    )
+
+    # Linha 3: contagens (mantém o estilo antigo dos cards, mas com cards menores e arejados)
+    cards_contagem = [
+        card_kpi("Registros Banco", fmt_int(kpis["qtd_registros_banco"]),
+                 f"{fmt_int(kpis['qtd_movimentacoes_banco'])} movimentações"),
+        card_kpi("Registros Sistema", fmt_int(kpis["qtd_registros_sistema"]),
+                 f"{fmt_int(kpis['qtd_movimentacoes_sistema'])} movimentações"),
+        card_kpi("Conciliados", fmt_int(kpis["qtd_conciliados"]),
+                 "pares Banco × Sankhya", classe="destaque-verde"),
+        card_kpi("", "", ""),
+    ]
+    st.write("")  # respiro
+    render_cards(cards_contagem)
+
+    # Seção Exceções
+    _render_excecoes_opcao_a(resultado, kpis)
+
+
+def _render_excecoes_opcao_a(resultado: ResultadoConciliacao, kpis: dict):
+    """Exceções no estilo Opção A — chips horizontais leves (não cards)."""
+    qtd_est_anu = kpis.get("qtd_estornos_anulados", 0)
+    qtd_est_par = kpis.get("qtd_estornos_parciais", 0)
+    qtd_top1722 = kpis.get("qtd_top1722_grupos", 0)
+    df_inv = resultado.aplicacoes_resgates
+    tem_invest = not df_inv.empty
+
+    # Se nenhuma exceção, esconde a seção (não polui)
+    if not (qtd_est_anu > 0 or qtd_est_par > 0 or qtd_top1722 > 0 or tem_invest):
+        return
+
+    # Header da seção
+    st.html(
+        """
+        <div class="opa-excecoes-head">
+            <span class="opa-excecoes-head-label">Exceções e regras aplicadas</span>
+            <span class="opa-excecoes-head-line"></span>
+        </div>
+        """
+    )
+
+    chips = []
+
+    # TOP 1722
+    if qtd_top1722 > 0:
+        valor_top = float(kpis.get("valor_top1722_conciliado", 0.0))
+        chips.append(opa_render_chip_excecao(
+            icone="ti-credit-card",
+            label="Cartão TOP 1722",
+            valor_principal=str(qtd_top1722),
+            valor_sub=fmt_brl(valor_top),
+            cor="verde",
+        ))
+
+    # Investimentos
+    if tem_invest:
+        val_total = float(df_inv["valor"].abs().sum())
+        chips.append(opa_render_chip_excecao(
+            icone="ti-trending-up",
+            label="Investimentos",
+            valor_principal=str(len(df_inv)),
+            valor_sub=fmt_brl(val_total),
+            cor="amarelo",
+        ))
+
+    # Anulados por Estorno
+    if qtd_est_anu > 0:
+        chips.append(opa_render_chip_excecao(
+            icone="ti-refresh",
+            label="Anulados por estorno",
+            valor_principal=str(qtd_est_anu),
+            valor_sub=fmt_brl(float(kpis.get("valor_estornos_anulados", 0.0))),
+            cor="verde",
+        ))
+
+    # Estornos Parciais
+    if qtd_est_par > 0:
+        chips.append(opa_render_chip_excecao(
+            icone="ti-scale",
+            label="Estornos parciais",
+            valor_principal=str(qtd_est_par),
+            valor_sub=fmt_brl(float(kpis.get("saldo_estornos_parciais", 0.0))),
+            cor="amarelo",
+        ))
+
+    st.html(f'<div class="opa-excecoes-grid">{"".join(chips)}</div>')
+
+
+# ============================================================
 # Validações
 # ============================================================
 NOMES_PROIBIDOS = {"data", "valor", "histórico", "historico", "conta", "—", ""}
@@ -2091,11 +2662,64 @@ def tela_resultado():
     # Quando o usuário entra no detalhamento de uma conta específica, mostra direto
     # o detalhe da conta — evita confundir KPIs globais com KPIs da conta selecionada.
     if not st.session_state.banco_conta_selecionada:
-        # v5.12 Fase 1: novo Resumo Executivo no estilo editorial
-        # (substitui os ~50 linhas de cards retangulares anteriores)
-        render_resumo_executivo_editorial(resultado, kpis)
+        # KPIs executivos
+        section_title("RESUMO EXECUTIVO")
+
+        # Linha 1: principais (com receitas/despesas embaixo dos 2 totais)
+        sub_banco = _card_total_com_rec_desp(kpis["receitas_banco"], kpis["despesas_banco"])
+        sub_sankhya = _card_total_com_rec_desp(kpis["receitas_sistema"], kpis["despesas_sistema"])
+        cards1 = [
+            card_kpi_html("Total Movimentado no Banco", fmt_brl(kpis["total_movimentado_banco"]),
+                          sub_banco),
+            card_kpi_html("Total Extrato Sankhya", fmt_brl(kpis["total_extrato_sistema"]),
+                          sub_sankhya),
+            card_kpi("Total Conciliado", fmt_brl(kpis["total_conciliado"]),
+                     "match Banco × Sankhya", classe="destaque-verde"),
+            card_kpi("Percentual Conciliado", fmt_pct(kpis["percentual_conciliado"]),
+                     classe="destaque-amarelo"),
+        ]
+        render_cards(cards1)
+
+        # Linha 2: Falta Conciliar + Divergência + Qtd Divergências + Contas
+        sub_falta_conciliar = _card_falta_conciliar_vertical(
+            kpis["falta_conciliar_receitas"],
+            kpis["falta_conciliar_despesas"],
+        )
+
+        cards2 = [
+            card_kpi_html("Falta Conciliar", fmt_brl(kpis["falta_conciliar"]),
+                          sub_falta_conciliar, classe="destaque-vermelho"),
+            card_kpi_html("Divergência (Sankhya × Banco)",
+                          fmt_brl(kpis["divergencia_sankhya_banco"]),
+                          _card_falta_conciliar_vertical(
+                              kpis["divergencia_sankhya_banco_receitas"],
+                              kpis["divergencia_sankhya_banco_despesas"],
+                          ),
+                          classe="destaque-vermelho"),
+            card_kpi("Qtd Divergências", fmt_int(kpis["qtd_divergencia_sankhya_banco"]),
+                     "lançamentos do Sankhya sem par no banco",
+                     classe="destaque-amarelo" if kpis["qtd_divergencia_sankhya_banco"] > 0 else ""),
+            card_kpi("Contas processadas", fmt_int(len(resultado.contas_processadas))),
+        ]
+        render_cards(cards2)
+
+        # Linha 3: contagens
+        cards3 = [
+            card_kpi("Registros Banco", fmt_int(kpis["qtd_registros_banco"]),
+                     f"{fmt_int(kpis['qtd_movimentacoes_banco'])} movimentações"),
+            card_kpi("Registros Sistema", fmt_int(kpis["qtd_registros_sistema"]),
+                     f"{fmt_int(kpis['qtd_movimentacoes_sistema'])} movimentações"),
+            card_kpi("Conciliados", fmt_int(kpis["qtd_conciliados"]),
+                     "pares Banco × Sankhya", classe="destaque-verde"),
+            card_kpi("", "", ""),
+        ]
+        render_cards(cards3)
 
         st.divider()
+
+        # v5.12: Exceções e Regras Aplicadas (estornos, TOP 1722, investimentos)
+        # ficam em seção separada — não poluem mais o Resumo Executivo.
+        render_secao_excecoes_regras(resultado, kpis, conta=None)
 
     # Painel de bancos OU detalhe do banco selecionado
     if st.session_state.banco_conta_selecionada:
