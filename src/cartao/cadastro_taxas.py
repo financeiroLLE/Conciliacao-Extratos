@@ -98,6 +98,13 @@ def carregar_cadastro_taxas(arquivo: Any) -> pd.DataFrame:
     out["modalidade"] = df_raw["modalidade"].apply(_normalizar_modalidade)
     out["parcelas"] = pd.to_numeric(df_raw["parcelas"], errors="coerce").fillna(1).astype(int)
     out["taxa_mdr"] = df_raw["taxa_mdr"].apply(_parse_taxa)
+    # v5.17: coluna 'bandeira' opcional (Visa, Mastercard, Elo, etc).
+    # Quando presente, refina o match: taxas variam por bandeira mesmo com mesma
+    # modalidade/parcelas. Quando ausente (cadastro antigo), funciona como antes.
+    out["bandeira"] = (
+        df_raw["bandeira"].astype(str).str.strip()
+        if "bandeira" in df_raw.columns else ""
+    )
     out["taxa_antecipacao"] = (
         df_raw["taxa_antecipacao"].apply(_parse_taxa)
         if "taxa_antecipacao" in df_raw.columns else 0.0
@@ -129,11 +136,16 @@ def encontrar_taxa_vigente(
     modalidade: str,
     parcelas: int,
     data_venda: pd.Timestamp,
+    bandeira: str | None = None,
 ) -> dict | None:
     """Procura a taxa vigente para a venda específica.
 
-    Retorna dict com {taxa_mdr, taxa_antecipacao, prazo_dias, vigencia_inicio, vigencia_fim}
-    ou None se não encontrar contrato vigente.
+    v5.17: Aceita parâmetro `bandeira` opcional. Quando o cadastro tem coluna
+    'bandeira' E o caller passa bandeira, refina o match. Caso contrário, faz
+    match só por adquirente/modalidade/parcelas (comportamento original).
+
+    Retorna dict com {taxa_mdr, taxa_antecipacao, prazo_dias, vigencia_inicio,
+    vigencia_fim, bandeira} ou None se não encontrar contrato vigente.
     """
     if cadastro.empty:
         return None
@@ -148,6 +160,28 @@ def encontrar_taxa_vigente(
     ]
     if cand.empty:
         return None
+
+    # v5.17: refina por bandeira quando disponível
+    cadastro_tem_bandeira = (
+        "bandeira" in cadastro.columns
+        and (cadastro["bandeira"].astype(str).str.strip() != "").any()
+    )
+    if bandeira and cadastro_tem_bandeira:
+        bnd_norm = str(bandeira).strip().lower()
+        cand_bnd = cand[cand["bandeira"].astype(str).str.lower() == bnd_norm]
+        if not cand_bnd.empty:
+            cand = cand_bnd
+        # Se não bateu por bandeira mas tem linhas SEM bandeira (cadastro genérico),
+        # usa elas como fallback. Evita "Sem contrato" quando o cadastro é misto.
+        else:
+            cand_sem_bandeira = cand[
+                cand["bandeira"].astype(str).str.strip() == ""
+            ]
+            if not cand_sem_bandeira.empty:
+                cand = cand_sem_bandeira
+            else:
+                # Não tem nem específico nem genérico → sem contrato
+                return None
 
     # Filtra por vigência
     data_v = pd.to_datetime(data_venda, errors="coerce")
@@ -176,4 +210,5 @@ def _linha_para_dict(linha: pd.Series) -> dict:
         "prazo_dias": int(linha.get("prazo_dias", 0) or 0),
         "vigencia_inicio": linha.get("vigencia_inicio"),
         "vigencia_fim": linha.get("vigencia_fim"),
+        "bandeira": str(linha.get("bandeira", "")) if "bandeira" in linha.index else "",
     }
