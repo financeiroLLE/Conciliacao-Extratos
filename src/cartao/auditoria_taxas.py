@@ -1,358 +1,214 @@
-"""Auditoria de Taxas: cruza relatório da adquirente com o cadastro contratual."""
+"""Cadastro de Taxas: parser do taxas.xlsx e busca de vigência."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Any
 import pandas as pd
 
-from .cadastro_taxas import (
-    _normalizar_modalidade,
-    _parse_taxa,
-    _normalizar_cabecalho,
-    encontrar_taxa_vigente,
-)
+
+# Modalidades aceitas (caixa exata como aparece na UI)
+MODALIDADES_VALIDAS = ["Débito", "Crédito à vista", "Crédito parcelado", "Pix QR Code"]
 
 
-# Tolerância 0% — taxa precisa bater exatamente (com epsilon para erro de float)
-EPSILON = 0.00001
+def _normalizar_modalidade(s: str) -> str:
+    """Normaliza variações comuns ('debito', 'CREDITO A VISTA', etc) → caixa canônica."""
+    if not isinstance(s, str):
+        return ""
+    chave = s.strip().lower().replace("á", "a").replace("é", "e").replace("í", "i")
+    chave = chave.replace("ó", "o").replace("ú", "u").replace("â", "a").replace("ê", "e")
+    chave = chave.replace("ô", "o").replace("ç", "c")
+    mapa = {
+        "debito": "Débito",
+        "credito": "Crédito à vista",
+        "credito a vista": "Crédito à vista",
+        "credito à vista": "Crédito à vista",
+        "credito vista": "Crédito à vista",
+        "credito parcelado": "Crédito parcelado",
+        "parcelado": "Crédito parcelado",
+        "pix": "Pix QR Code",
+        "pix qr": "Pix QR Code",
+        "pix qr code": "Pix QR Code",
+        "pix maquininha": "Pix QR Code",
+    }
+    return mapa.get(chave, s.strip())
 
 
-@dataclass
-class ResultadoAuditoriaTaxas:
-    """Resultado da auditoria das taxas de cartão."""
-    detalhado: pd.DataFrame  # todas as linhas auditadas com status
-    divergentes: pd.DataFrame  # subconjunto com status != 'OK'
-    kpis: dict[str, Any] = field(default_factory=dict)
+def _parse_taxa(v: Any) -> float:
+    """Aceita '1,39%', '1.39%', '0.0139', '1.39'. Retorna fração (0.0139).
 
-    def divergentes_por_adquirente(self) -> pd.DataFrame:
-        if self.divergentes.empty:
-            return pd.DataFrame()
-        return (
-            self.divergentes.groupby("adquirente").agg(
-                qtd=("status", "count"),
-                impacto=("diferenca_rs", "sum"),
-            ).reset_index()
-        )
-
-
-def carregar_relatorio_adquirente(arquivo: Any) -> pd.DataFrame:
-    """Lê o relatório padronizado das adquirentes.
-
-    Colunas esperadas (case-insensitive):
-        data_venda, adquirente, modalidade, parcelas, valor_bruto,
-        taxa_aplicada, valor_liquido (opcional), data_prevista_recebimento (opcional)
+    Regra:
+    - Se a string contém '%', SEMPRE divide por 100 (ex: '0,49%' → 0.0049).
+    - Se é número puro > 1, assume percentual (ex: 1.39 → 0.0139).
+    - Se é número puro ≤ 1, assume fração (ex: 0.0139 → 0.0139).
     """
-    df_raw = pd.read_excel(arquivo, dtype=str)
-    df_raw.columns = [_normalizar_cabecalho(c) for c in df_raw.columns]
-
-    obrigatorias = {"data_venda", "adquirente", "modalidade", "parcelas", "valor_bruto", "taxa_aplicada"}
-    faltando = obrigatorias - set(df_raw.columns)
-    if faltando:
-        raise ValueError(
-            f"Relatório da adquirente: colunas obrigatórias faltando: {sorted(faltando)}. "
-            f"Encontradas: {sorted(df_raw.columns)}"
-        )
-
-    out = pd.DataFrame()
-    out["data_venda"] = pd.to_datetime(df_raw["data_venda"], errors="coerce", dayfirst=True)
-    out["adquirente"] = df_raw["adquirente"].astype(str).str.strip()
-    out["modalidade"] = df_raw["modalidade"].apply(_normalizar_modalidade)
-    out["parcelas"] = pd.to_numeric(df_raw["parcelas"], errors="coerce").fillna(1).astype(int)
-    out["valor_bruto"] = df_raw["valor_bruto"].apply(_parse_valor_brl)
-    out["taxa_aplicada"] = df_raw["taxa_aplicada"].apply(_parse_taxa)
-    out["valor_liquido"] = (
-        df_raw["valor_liquido"].apply(_parse_valor_brl)
-        if "valor_liquido" in df_raw.columns else pd.Series([None] * len(df_raw))
-    )
-    out["data_prevista_recebimento"] = (
-        pd.to_datetime(df_raw["data_prevista_recebimento"], errors="coerce", dayfirst=True)
-        if "data_prevista_recebimento" in df_raw.columns else pd.NaT
-    )
-
-    out = out.dropna(subset=["data_venda", "adquirente", "modalidade"]).reset_index(drop=True)
-    return out
-
-
-def _parse_valor_brl(v: Any) -> float:
-    """Aceita 'R$ 1.234,56', '1234.56', '1234,56', 1234.56."""
     if v is None or (isinstance(v, float) and pd.isna(v)):
         return 0.0
     if isinstance(v, (int, float)):
-        return float(v)
-    s = str(v).strip().replace("R$", "").replace(" ", "")
+        return float(v) / 100.0 if abs(v) > 1 else float(v)
+    s_original = str(v).strip()
+    if not s_original:
+        return 0.0
+    tem_pct = "%" in s_original
+    s = s_original.replace("%", "").replace(",", ".").strip()
     if not s:
         return 0.0
-    # Detecta formato BRL (vírgula decimal) vs ISO (ponto decimal)
-    if "," in s and "." in s:
-        # Provavelmente '1.234,56' — remove pontos, troca vírgula
-        s = s.replace(".", "").replace(",", ".")
-    elif "," in s:
-        s = s.replace(",", ".")
     try:
-        return float(s)
+        n = float(s)
+        if tem_pct:
+            return n / 100.0  # SEMPRE divide quando tem %
+        return n / 100.0 if abs(n) > 1 else n
     except ValueError:
         return 0.0
 
 
-def auditar_taxas(
-    relatorio: pd.DataFrame,
-    cadastro: pd.DataFrame,
-    historico: pd.DataFrame | None = None,
-) -> ResultadoAuditoriaTaxas:
-    """Audita o relatório das adquirentes contra o cadastro de taxas.
-
-    Critério v4.0 (Jeito B): comparação em CENTAVOS no valor da taxa.
-    - Esperado em R$: round(valor_bruto × taxa_contratada, 2)
-    - Cobrado em R$: round(valor_bruto × taxa_aplicada, 2)
-    - Divergente se: esperado_rs != cobrado_rs
-
-    Esse critério evita falso positivo de arredondamento (a adquirente
-    arredonda no centavo, fazendo a taxa efetiva oscilar em milésimos).
-
-    Args:
-        relatorio: DataFrame do relatório da adquirente do período atual.
-        cadastro: DataFrame do cadastro de taxas (taxas.xlsx).
-        historico: DataFrame com auditorias anteriores acumuladas (opcional).
-            Quando fornecido, é concatenado ao relatório do período atual
-            para gerar KPIs e tabelas acumuladas.
-
-    Returns:
-        ResultadoAuditoriaTaxas com detalhado, divergentes e KPIs.
-    """
-    if relatorio.empty and (historico is None or historico.empty):
-        return ResultadoAuditoriaTaxas(
-            detalhado=pd.DataFrame(),
-            divergentes=pd.DataFrame(),
-            kpis=_kpis_vazios(),
-        )
-
-    # Auditoria do relatório atual
-    detalhe_atual = _auditar_dataframe(relatorio, cadastro) if not relatorio.empty else pd.DataFrame()
-    if not detalhe_atual.empty:
-        detalhe_atual["origem"] = "Atual"
-
-    # Combina com histórico (já vem auditado, só adiciona)
-    if historico is not None and not historico.empty:
-        hist = historico.copy()
-        if "origem" not in hist.columns:
-            hist["origem"] = "Histórico"
-        if detalhe_atual.empty:
-            detalhe = hist
-        else:
-            detalhe = pd.concat([hist, detalhe_atual], ignore_index=True)
-    else:
-        detalhe = detalhe_atual
-
-    divergentes = detalhe[detalhe["status"] == "Divergente"].copy() if not detalhe.empty else pd.DataFrame()
-
-    kpis = _calcular_kpis(detalhe)
-    return ResultadoAuditoriaTaxas(detalhado=detalhe, divergentes=divergentes, kpis=kpis)
-
-
-def _auditar_dataframe(relatorio: pd.DataFrame, cadastro: pd.DataFrame) -> pd.DataFrame:
-    """Audita um único DataFrame de relatório (sem histórico) usando critério Jeito B."""
-    detalhe = relatorio.copy()
-    detalhe["taxa_esperada"] = None
-    detalhe["prazo_esperado"] = None
-    detalhe["esperado_rs"] = None
-    detalhe["cobrado_rs"] = None
-    detalhe["diferenca_rs"] = None
-    detalhe["diferenca_pp"] = None
-    detalhe["status"] = ""
-    detalhe["motivo"] = ""
-
-    for idx, linha in detalhe.iterrows():
-        cfg = encontrar_taxa_vigente(
-            cadastro,
-            linha["adquirente"],
-            linha["modalidade"],
-            int(linha["parcelas"]),
-            linha["data_venda"],
-        )
-        bruto = float(linha["valor_bruto"])
-        taxa_aplicada = float(linha["taxa_aplicada"])
-        # Quanto a adquirente cobrou (em centavos, arredondado)
-        cobrado_rs = round(bruto * taxa_aplicada, 2)
-        detalhe.at[idx, "cobrado_rs"] = cobrado_rs
-
-        if cfg is None:
-            detalhe.at[idx, "status"] = "Sem contrato"
-            detalhe.at[idx, "motivo"] = (
-                f"Sem taxa cadastrada para {linha['adquirente']} / "
-                f"{linha['modalidade']} / {int(linha['parcelas'])}x na data {linha['data_venda'].date()}"
-            )
-            continue
-
-        taxa_esperada = cfg["taxa_mdr"]
-        esperado_rs = round(bruto * taxa_esperada, 2)
-        detalhe.at[idx, "taxa_esperada"] = taxa_esperada
-        detalhe.at[idx, "prazo_esperado"] = cfg["prazo_dias"]
-        detalhe.at[idx, "esperado_rs"] = esperado_rs
-        detalhe.at[idx, "diferenca_rs"] = round(cobrado_rs - esperado_rs, 2)
-        detalhe.at[idx, "diferenca_pp"] = round((taxa_aplicada - taxa_esperada) * 100, 4)
-
-        # CRITÉRIO JEITO B: compara em centavos no R$
-        if abs(cobrado_rs - esperado_rs) < 0.005:  # < meio centavo
-            detalhe.at[idx, "status"] = "OK"
-            detalhe.at[idx, "motivo"] = (
-                f"Taxa cobrada conforme contrato (R$ {cobrado_rs:.2f})"
-            )
-        else:
-            diff = cobrado_rs - esperado_rs
-            sinal = "ACIMA do contratado" if diff > 0 else "ABAIXO do contratado"
-            detalhe.at[idx, "status"] = "Divergente"
-            detalhe.at[idx, "motivo"] = (
-                f"Cobrança {sinal} em R$ {abs(diff):.2f} "
-                f"(esperado R$ {esperado_rs:.2f}, cobrado R$ {cobrado_rs:.2f})"
-            )
-
-    # Se valor_liquido estava vazio, calcula
-    sem_liq = detalhe["valor_liquido"].isna() | (detalhe["valor_liquido"] == 0)
-    detalhe.loc[sem_liq, "valor_liquido"] = (
-        detalhe.loc[sem_liq, "valor_bruto"] * (1 - detalhe.loc[sem_liq, "taxa_aplicada"])
+def _normalizar_cabecalho(col: str) -> str:
+    return (
+        str(col).strip().lower()
+        .replace(" ", "_").replace("-", "_")
+        .replace("ç", "c").replace("ã", "a").replace("á", "a")
+        .replace("é", "e").replace("ê", "e").replace("í", "i")
+        .replace("ó", "o").replace("ô", "o").replace("ú", "u")
     )
 
-    return detalhe
 
+def carregar_cadastro_taxas(arquivo: Any) -> pd.DataFrame:
+    """Lê o arquivo taxas.xlsx e retorna DataFrame normalizado.
 
-def _calcular_kpis(detalhe: pd.DataFrame) -> dict[str, Any]:
-    if detalhe.empty:
-        return _kpis_vazios()
+    Colunas esperadas (case-insensitive, com normalização):
+        adquirente, modalidade, parcelas, taxa_mdr, taxa_antecipacao,
+        prazo_dias, vigencia_inicio, vigencia_fim
 
-    volume_bruto = float(detalhe["valor_bruto"].sum())
-    liquido = float(detalhe["valor_liquido"].sum())
-    taxas_pagas = volume_bruto - liquido
-    taxa_media = (taxas_pagas / volume_bruto) if volume_bruto > 0 else 0.0
-
-    qtd_div = int((detalhe["status"] == "Divergente").sum())
-    qtd_sem_contrato = int((detalhe["status"] == "Sem contrato").sum())
-    qtd_ok = int((detalhe["status"] == "OK").sum())
-
-    div_df = detalhe[detalhe["status"] == "Divergente"]
-    impacto_acumulado = float(div_df["diferenca_rs"].sum()) if not div_df.empty else 0.0
-    impacto_voce_pagou_mais = float(
-        div_df[div_df["diferenca_rs"] > 0]["diferenca_rs"].sum()
-    ) if not div_df.empty else 0.0
-
-    return {
-        "volume_bruto": volume_bruto,
-        "valor_liquido": liquido,
-        "taxas_pagas": taxas_pagas,
-        "taxa_media_efetiva": taxa_media,
-        "qtd_divergencias": qtd_div,
-        "qtd_sem_contrato": qtd_sem_contrato,
-        "qtd_ok": qtd_ok,
-        "qtd_total": len(detalhe),
-        "impacto_acumulado": impacto_acumulado,
-        "impacto_pagou_mais": impacto_voce_pagou_mais,
-    }
-
-
-def _kpis_vazios() -> dict[str, Any]:
-    return {
-        "volume_bruto": 0.0,
-        "valor_liquido": 0.0,
-        "taxas_pagas": 0.0,
-        "taxa_media_efetiva": 0.0,
-        "qtd_divergencias": 0,
-        "qtd_sem_contrato": 0,
-        "qtd_ok": 0,
-        "qtd_total": 0,
-        "impacto_acumulado": 0.0,
-        "impacto_pagou_mais": 0.0,
-    }
-
-
-# ============================================================
-# Histórico Acumulado (v4.0)
-# ============================================================
-
-def carregar_auditoria_anterior(arquivo: Any) -> pd.DataFrame:
-    """Lê um Excel de auditoria anterior gerado pelo próprio sistema.
-
-    Espera-se que o arquivo tenha as colunas geradas por _auditar_dataframe.
-    Retorna DataFrame vazio se o arquivo não for válido (ignora silenciosamente).
+    Retorna DataFrame com:
+        adquirente (str), modalidade (str canônica), parcelas (int),
+        taxa_mdr (float 0..1), taxa_antecipacao (float 0..1),
+        prazo_dias (int), vigencia_inicio (Timestamp), vigencia_fim (Timestamp ou NaT)
     """
-    try:
-        df = pd.read_excel(arquivo)
-    except Exception:
-        return pd.DataFrame()
+    df_raw = pd.read_excel(arquivo, dtype=str)
+    df_raw.columns = [_normalizar_cabecalho(c) for c in df_raw.columns]
 
-    # Normaliza cabeçalhos (caso o usuário tenha editado o arquivo)
-    df.columns = [_normalizar_cabecalho(c) for c in df.columns]
-
-    # Colunas mínimas para considerar válido
-    obrig = {"data_venda", "adquirente", "modalidade", "parcelas", "valor_bruto", "taxa_aplicada", "status"}
-    if not obrig.issubset(df.columns):
-        return pd.DataFrame()
-
-    # Converte tipos
-    df["data_venda"] = pd.to_datetime(df["data_venda"], errors="coerce", dayfirst=True)
-    df["parcelas"] = pd.to_numeric(df["parcelas"], errors="coerce").fillna(1).astype(int)
-    for col in ("valor_bruto", "valor_liquido", "esperado_rs", "cobrado_rs", "diferenca_rs"):
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-    for col in ("taxa_aplicada", "taxa_esperada", "diferenca_pp"):
-        if col in df.columns:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-
-    return df.dropna(subset=["data_venda"]).reset_index(drop=True)
-
-
-def consolidar_historico(arquivos: list[Any]) -> tuple[pd.DataFrame, list[str]]:
-    """Consolida várias auditorias anteriores em um único DataFrame.
-
-    Returns:
-        (df_consolidado, avisos):
-        - df_consolidado: linhas de todas as auditorias.
-        - avisos: lista de mensagens (ex.: 'Arquivo X tem N duplicatas com Y').
-    """
-    if not arquivos:
-        return pd.DataFrame(), []
-
-    frames = []
-    nomes = []
-    for arq in arquivos:
-        df = carregar_auditoria_anterior(arq)
-        if df.empty:
-            continue
-        nome = getattr(arq, "name", "arquivo")
-        df["_origem_arquivo"] = nome
-        frames.append(df)
-        nomes.append(nome)
-
-    if not frames:
-        return pd.DataFrame(), []
-
-    consolidado = pd.concat(frames, ignore_index=True)
-    avisos = _detectar_duplicatas(consolidado)
-    return consolidado, avisos
-
-
-def _detectar_duplicatas(df: pd.DataFrame) -> list[str]:
-    """Identifica linhas duplicadas (mesma data+adquirente+modalidade+parcelas+valor_bruto+taxa_aplicada)."""
-    if df.empty:
-        return []
-    chave_cols = ["data_venda", "adquirente", "modalidade", "parcelas", "valor_bruto", "taxa_aplicada"]
-    chave_cols = [c for c in chave_cols if c in df.columns]
-    if len(chave_cols) < 4:
-        return []
-
-    duplicadas = df[df.duplicated(subset=chave_cols, keep=False)]
-    if duplicadas.empty:
-        return []
-
-    qtd = int(duplicadas.duplicated(subset=chave_cols, keep="first").sum())
-    if qtd > 0:
-        arquivos_envolvidos = []
-        if "_origem_arquivo" in duplicadas.columns:
-            arquivos_envolvidos = sorted(duplicadas["_origem_arquivo"].dropna().unique().tolist())
-        msg = (
-            f"⚠️ {qtd} lançamento(s) duplicado(s) detectado(s) entre os arquivos: "
-            f"{', '.join(arquivos_envolvidos) if arquivos_envolvidos else 'múltiplos'}. "
-            f"Critério: mesma data+adquirente+modalidade+parcelas+valor+taxa. "
-            f"Revise antes de prosseguir — o sistema não removerá automaticamente."
+    obrigatorias = {"adquirente", "modalidade", "parcelas", "taxa_mdr"}
+    faltando = obrigatorias - set(df_raw.columns)
+    if faltando:
+        raise ValueError(
+            f"Cadastro de taxas: colunas obrigatórias faltando: {sorted(faltando)}. "
+            f"Encontradas: {sorted(df_raw.columns)}"
         )
-        return [msg]
-    return []
+
+    out = pd.DataFrame()
+    out["adquirente"] = df_raw["adquirente"].astype(str).str.strip()
+    out["modalidade"] = df_raw["modalidade"].apply(_normalizar_modalidade)
+    out["parcelas"] = pd.to_numeric(df_raw["parcelas"], errors="coerce").fillna(1).astype(int)
+    out["taxa_mdr"] = df_raw["taxa_mdr"].apply(_parse_taxa)
+    # v5.17: coluna 'bandeira' opcional (Visa, Mastercard, Elo, etc).
+    # Quando presente, refina o match: taxas variam por bandeira mesmo com mesma
+    # modalidade/parcelas. Quando ausente (cadastro antigo), funciona como antes.
+    out["bandeira"] = (
+        df_raw["bandeira"].astype(str).str.strip()
+        if "bandeira" in df_raw.columns else ""
+    )
+    out["taxa_antecipacao"] = (
+        df_raw["taxa_antecipacao"].apply(_parse_taxa)
+        if "taxa_antecipacao" in df_raw.columns else 0.0
+    )
+    out["prazo_dias"] = (
+        pd.to_numeric(df_raw["prazo_dias"], errors="coerce").fillna(0).astype(int)
+        if "prazo_dias" in df_raw.columns else 0
+    )
+    out["vigencia_inicio"] = (
+        pd.to_datetime(df_raw["vigencia_inicio"], errors="coerce", dayfirst=True)
+        if "vigencia_inicio" in df_raw.columns else pd.NaT
+    )
+    out["vigencia_fim"] = (
+        pd.to_datetime(df_raw["vigencia_fim"], errors="coerce", dayfirst=True)
+        if "vigencia_fim" in df_raw.columns else pd.NaT
+    )
+
+    # Remove linhas inválidas (sem adquirente ou sem modalidade)
+    out = out[
+        (out["adquirente"].str.len() > 0)
+        & (out["modalidade"].str.len() > 0)
+    ].reset_index(drop=True)
+    return out
+
+
+def encontrar_taxa_vigente(
+    cadastro: pd.DataFrame,
+    adquirente: str,
+    modalidade: str,
+    parcelas: int,
+    data_venda: pd.Timestamp,
+    bandeira: str | None = None,
+) -> dict | None:
+    """Procura a taxa vigente para a venda específica.
+
+    v5.17: Aceita parâmetro `bandeira` opcional. Quando o cadastro tem coluna
+    'bandeira' E o caller passa bandeira, refina o match. Caso contrário, faz
+    match só por adquirente/modalidade/parcelas (comportamento original).
+
+    Retorna dict com {taxa_mdr, taxa_antecipacao, prazo_dias, vigencia_inicio,
+    vigencia_fim, bandeira} ou None se não encontrar contrato vigente.
+    """
+    if cadastro.empty:
+        return None
+
+    adq_norm = str(adquirente).strip().lower()
+    mod_norm = _normalizar_modalidade(str(modalidade))
+
+    cand = cadastro[
+        (cadastro["adquirente"].str.lower() == adq_norm)
+        & (cadastro["modalidade"] == mod_norm)
+        & (cadastro["parcelas"] == int(parcelas))
+    ]
+    if cand.empty:
+        return None
+
+    # v5.17: refina por bandeira quando disponível
+    cadastro_tem_bandeira = (
+        "bandeira" in cadastro.columns
+        and (cadastro["bandeira"].astype(str).str.strip() != "").any()
+    )
+    if bandeira and cadastro_tem_bandeira:
+        bnd_norm = str(bandeira).strip().lower()
+        cand_bnd = cand[cand["bandeira"].astype(str).str.lower() == bnd_norm]
+        if not cand_bnd.empty:
+            cand = cand_bnd
+        # Se não bateu por bandeira mas tem linhas SEM bandeira (cadastro genérico),
+        # usa elas como fallback. Evita "Sem contrato" quando o cadastro é misto.
+        else:
+            cand_sem_bandeira = cand[
+                cand["bandeira"].astype(str).str.strip() == ""
+            ]
+            if not cand_sem_bandeira.empty:
+                cand = cand_sem_bandeira
+            else:
+                # Não tem nem específico nem genérico → sem contrato
+                return None
+
+    # Filtra por vigência
+    data_v = pd.to_datetime(data_venda, errors="coerce")
+    if pd.isna(data_v):
+        # Sem data, retorna a primeira linha encontrada
+        linha = cand.iloc[0]
+        return _linha_para_dict(linha)
+
+    # Vigência: inicio <= data_venda AND (fim vazio OR fim >= data_venda)
+    vigente = cand[
+        (cand["vigencia_inicio"].isna() | (cand["vigencia_inicio"] <= data_v))
+        & (cand["vigencia_fim"].isna() | (cand["vigencia_fim"] >= data_v))
+    ]
+    if vigente.empty:
+        return None
+    # Se mais de uma, pega a com vigencia_inicio mais recente
+    vigente = vigente.sort_values("vigencia_inicio", ascending=False, na_position="last")
+    linha = vigente.iloc[0]
+    return _linha_para_dict(linha)
+
+
+def _linha_para_dict(linha: pd.Series) -> dict:
+    return {
+        "taxa_mdr": float(linha["taxa_mdr"]),
+        "taxa_antecipacao": float(linha.get("taxa_antecipacao", 0.0)),
+        "prazo_dias": int(linha.get("prazo_dias", 0) or 0),
+        "vigencia_inicio": linha.get("vigencia_inicio"),
+        "vigencia_fim": linha.get("vigencia_fim"),
+        "bandeira": str(linha.get("bandeira", "")) if "bandeira" in linha.index else "",
+    }
