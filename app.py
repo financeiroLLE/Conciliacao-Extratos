@@ -1168,6 +1168,41 @@ table {{ color: {CORES["branco"]}; }}
     font-weight: 400;
 }}
 
+/* ===== v5.22: Dropdown do data_editor (SelectboxColumn) =====
+   O dropdown da SelectboxColumn herdava cor branca do tema escuro, ficando
+   texto branco em fundo branco (invisível). Força contraste alto. */
+[data-baseweb="popover"] {{
+    z-index: 9999 !important;
+}}
+[data-baseweb="popover"] [role="listbox"],
+[data-baseweb="menu"] [role="listbox"],
+[data-baseweb="popover"] ul {{
+    background-color: #FFFFFF !important;
+    color: #1A2E5A !important;
+    border: 1px solid {CORES["azul"]} !important;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25) !important;
+}}
+[data-baseweb="popover"] [role="option"],
+[data-baseweb="menu"] [role="option"],
+[data-baseweb="popover"] li {{
+    background-color: #FFFFFF !important;
+    color: #1A2E5A !important;
+    padding: 8px 12px !important;
+    font-family: 'Montserrat', sans-serif !important;
+    font-size: 13px !important;
+}}
+[data-baseweb="popover"] [role="option"]:hover,
+[data-baseweb="menu"] [role="option"]:hover,
+[data-baseweb="popover"] li:hover {{
+    background-color: {CORES["amarelo"]} !important;
+    color: {CORES["azul_escuro"]} !important;
+}}
+[data-baseweb="popover"] [role="option"][aria-selected="true"],
+[data-baseweb="menu"] [role="option"][aria-selected="true"] {{
+    background-color: {CORES["azul"]} !important;
+    color: #FFFFFF !important;
+}}
+
 </style>
 """
 )
