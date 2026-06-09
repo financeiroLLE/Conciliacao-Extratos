@@ -49,7 +49,7 @@ RE_SALDO = re.compile(
 # Aplicação financeira (saída para investimento)
 RE_APLICACAO = re.compile(
     r"\b("
-    r"APLIC(A[CÇ][AÃ]O)?\s+AUT|"  # APLIC AUT, APLICAÇÃO AUTOM
+    r"APLIC(A[CÇ][AÃ]O)?\.?\s+AUT|"  # APLIC AUT, APLIC. AUT (v5.24), APLICAÇÃO AUTOM
     r"APLICA[CÇ][AÃ]O|"
     r"INVESTIMENTO|"
     r"COMPRA\s+(CDB|RDB|LCI|LCA|TESOURO)|"
