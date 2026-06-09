@@ -4189,8 +4189,10 @@ def pagina_auditoria_taxas():
         "📋 Tudo",
     ])
 
+    # v5.18: 'bandeira' incluída pra facilitar identificar a origem da divergência
+    # (Visa, Mastercard, Elo, etc — vem do parser GETNET).
     cols_show = [
-        "data_venda", "adquirente", "modalidade", "parcelas",
+        "data_venda", "adquirente", "bandeira", "modalidade", "parcelas",
         "valor_bruto", "taxa_aplicada", "taxa_esperada",
         "diferenca_pp", "diferenca_rs", "status", "motivo",
     ]
