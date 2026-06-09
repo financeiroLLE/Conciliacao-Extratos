@@ -597,6 +597,21 @@ def executar_pipeline(
             index=[i for i in res_top1722.indices_sankhya_casados if i < len(pend_sistema)]
         ).reset_index(drop=True)
 
+    # v5.21: conciliação por agrupamento FOLHA DE PAGAMENTO (SISPAG SALARIOS).
+    # Mesma ideia do TOP 1722 mas INVERSA: N linhas no banco → 1 linha no sankhya.
+    # Banco lança 1 SISPAG por funcionário; Sankhya tem 1 folha consolidada.
+    from src.matching.folha_pagamento import detectar_folha_pagamento
+    res_folha = detectar_folha_pagamento(pend_banco, pend_sistema)
+    if res_folha.indices_banco_casados or res_folha.indices_sankhya_casados:
+        pend_banco = pend_banco.reset_index(drop=True)
+        pend_sistema = pend_sistema.reset_index(drop=True)
+        pend_banco = pend_banco.drop(
+            index=[i for i in res_folha.indices_banco_casados if i < len(pend_banco)]
+        ).reset_index(drop=True)
+        pend_sistema = pend_sistema.drop(
+            index=[i for i in res_folha.indices_sankhya_casados if i < len(pend_sistema)]
+        ).reset_index(drop=True)
+
     if not conciliados.empty:
         # Preserva a categoria_mov no resultado conciliado (pra dashboards)
         pass
