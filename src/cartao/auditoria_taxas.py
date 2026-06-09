@@ -370,4 +370,3 @@ def _detectar_duplicatas(df: pd.DataFrame) -> list[str]:
         )
         return [msg]
     return []
- 
