@@ -27,7 +27,9 @@ import pandas as pd
 
 
 TOL_VALOR = 0.01
-MAX_LINHAS_COMBINACAO = 8  # limite de busca combinatória
+MAX_LINHAS_COMBINACAO = 4  # v5.25: reduzido de 8 → 4 pra evitar explosão combinatória
+MAX_CANDIDATOS_POR_GRUPO = 15  # se mais que isso na mesma data+conta, pula (caos)
+MAX_ITERACOES_TOTAL = 5000  # circuit breaker global
 
 
 @dataclass
@@ -93,8 +95,12 @@ def detectar_depositos_abertos(
     linhas_banco_rows = []
     linhas_sankhya_rows = []
     id_grupo = 0
+    iteracoes = 0  # v5.25: circuit breaker pra evitar travamento
 
     for idx_b, linha_b in pb.iterrows():
+        iteracoes += 1
+        if iteracoes > MAX_ITERACOES_TOTAL:
+            break  # circuit breaker — evita travar com volumes absurdos
         if idx_b in indices_banco_consumidos:
             continue
         data_b = linha_b["data"]
@@ -115,6 +121,12 @@ def detectar_depositos_abertos(
 
         candidatos = ps[mask].copy()
         if candidatos.empty:
+            continue
+
+        # v5.25: se houver muitos candidatos na mesma data+conta+sinal, PULA.
+        # Provavelmente é dia de muita movimentação onde a busca combinatória
+        # exploderia (C(40,4) = 91k tentativas só pra esse banco_idx).
+        if len(candidatos) > MAX_CANDIDATOS_POR_GRUPO:
             continue
 
         valores = candidatos["valor"].astype(float).tolist()
