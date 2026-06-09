@@ -96,7 +96,11 @@ def carregar_relatorio_sistema(
         "data": ["dtlancamento", "datalancamento", "data"],
         "historico": ["historico", "descricao"],
         "valor": ["vlrlancamento", "valorlancamento", "valor"],
-        "receita_despesa": ["receitadespesa", "tipo"],
+        # v5.19: removido alias "tipo" — no Sankhya da LLE existe uma coluna chamada
+        # "Tipo" que contém "Financeiro" (não Receita/Despesa). O alias capturava a
+        # coluna errada, fazendo todas as despesas virarem valor positivo (zerando
+        # o card Despesas do Sankhya e quebrando a conciliação).
+        "receita_despesa": ["receitadespesa"],
         "documento": ["numdocumento", "numerodocumento", "documento", "doc"],
         "num_unico_bancario": ["numunicobancario", "numunico"],
         "conciliado": ["conciliado"],
