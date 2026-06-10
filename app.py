@@ -1168,41 +1168,6 @@ table {{ color: {CORES["branco"]}; }}
     font-weight: 400;
 }}
 
-/* ===== v5.22: Dropdown do data_editor (SelectboxColumn) =====
-   O dropdown da SelectboxColumn herdava cor branca do tema escuro, ficando
-   texto branco em fundo branco (invisível). Força contraste alto. */
-[data-baseweb="popover"] {{
-    z-index: 9999 !important;
-}}
-[data-baseweb="popover"] [role="listbox"],
-[data-baseweb="menu"] [role="listbox"],
-[data-baseweb="popover"] ul {{
-    background-color: #FFFFFF !important;
-    color: #1A2E5A !important;
-    border: 1px solid {CORES["azul"]} !important;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25) !important;
-}}
-[data-baseweb="popover"] [role="option"],
-[data-baseweb="menu"] [role="option"],
-[data-baseweb="popover"] li {{
-    background-color: #FFFFFF !important;
-    color: #1A2E5A !important;
-    padding: 8px 12px !important;
-    font-family: 'Montserrat', sans-serif !important;
-    font-size: 13px !important;
-}}
-[data-baseweb="popover"] [role="option"]:hover,
-[data-baseweb="menu"] [role="option"]:hover,
-[data-baseweb="popover"] li:hover {{
-    background-color: {CORES["amarelo"]} !important;
-    color: {CORES["azul_escuro"]} !important;
-}}
-[data-baseweb="popover"] [role="option"][aria-selected="true"],
-[data-baseweb="menu"] [role="option"][aria-selected="true"] {{
-    background-color: {CORES["azul"]} !important;
-    color: #FFFFFF !important;
-}}
-
 </style>
 """
 )
@@ -1404,23 +1369,21 @@ def _card_investimentos_da_conta(resultado: ResultadoConciliacao, conta: str) ->
 
 
 def _card_investimentos_de_df(df: pd.DataFrame) -> str:
-    """v5.15: conserto duplo no card de Investimentos.
+    """v5.26: card Investimentos com saldo líquido + 3 categorias + alerta.
 
-    Bug anterior: o df vinha com lançamentos do banco E do sankhya, e a soma
-    contava o mesmo movimento duas vezes (R$ 27.698 virava R$ 55.396).
+    Mudanças desta versão:
+    - Total exibido = Resgates - Aplicações (saldo líquido, faz sentido financeiro).
+    - 3 linhas no detalhe: Aplicações, Resgates, Rendimentos.
+    - Se qtd Aplicações ≠ qtd Resgates, mostra alerta de descasamento.
 
-    Correções:
-    1) DEDUP: agrupa por (data + valor + conta + tipo_aplicacao), preferindo
-       o lado Sankhya quando ambos existem (ERP é a verdade contábil).
-    2) Ignora SALDO defensivamente — saldo aplicado não é movimento, não
-       deveria nem chegar aqui, mas se chegar (bug em src/), é filtrado.
+    DEDUP banco × sankhya: prefere Sankhya quando ambos existem.
     """
     if df.empty:
         return card_kpi("Investimentos", "—", "sem aplicações/resgates")
 
     df = df.copy()
 
-    # (2) Filtro defensivo: SALDO não é aplicação nem resgate
+    # Filtro defensivo: SALDO não é aplicação nem resgate
     if "historico" in df.columns:
         mask_saldo = df["historico"].astype(str).str.upper().str.contains("SALDO", na=False)
         df = df[~mask_saldo]
@@ -1428,30 +1391,49 @@ def _card_investimentos_de_df(df: pd.DataFrame) -> str:
     if df.empty:
         return card_kpi("Investimentos", "—", "sem aplicações/resgates")
 
-    # (1) DEDUP banco × sankhya: preferir Sankhya quando ambos existem
+    # DEDUP banco × sankhya: preferir Sankhya quando ambos existem
     cols_chave = [c for c in ["data", "valor", "conta", "tipo_aplicacao"] if c in df.columns]
     if cols_chave and "origem" in df.columns:
-        # Ordena pra Sankhya vir antes de Banco, depois drop_duplicates mantém o primeiro
         df["_ord_origem"] = df["origem"].apply(lambda x: 0 if "Sankhya" in str(x) else 1)
         df = df.sort_values("_ord_origem").drop_duplicates(subset=cols_chave, keep="first")
         df = df.drop(columns=["_ord_origem"])
 
     aplic = df[df["tipo_aplicacao"] == "Aplicação"] if "tipo_aplicacao" in df.columns else pd.DataFrame()
     resg = df[df["tipo_aplicacao"] == "Resgate"] if "tipo_aplicacao" in df.columns else pd.DataFrame()
+    rend = df[df["tipo_aplicacao"] == "Rendimento"] if "tipo_aplicacao" in df.columns else pd.DataFrame()
+
     qtd_a = len(aplic)
     val_a = float(aplic["valor"].abs().sum()) if not aplic.empty else 0.0
     qtd_r = len(resg)
     val_r = float(resg["valor"].abs().sum()) if not resg.empty else 0.0
-    total = val_a + val_r
+    qtd_rend = len(rend)
+    val_rend = float(rend["valor"].abs().sum()) if not rend.empty else 0.0
+
+    # v5.26: saldo líquido = Resgates - Aplicações (faz sentido contábil)
+    saldo_liquido = val_r - val_a
+
+    # Alerta de descasamento (qtd aplicações ≠ qtd resgates)
+    alerta = ""
+    if qtd_a != qtd_r and (qtd_a > 0 or qtd_r > 0):
+        if qtd_r > qtd_a:
+            diff = qtd_r - qtd_a
+            alerta = f'<div class="lle-kpi-sub-label" style="color:#FAC318; margin-top:4px;">⚠ {diff} resgate(s) sem aplicação correspondente</div>'
+        else:
+            diff = qtd_a - qtd_r
+            alerta = f'<div class="lle-kpi-sub-label" style="color:#FAC318; margin-top:4px;">⚠ {diff} aplicação(ões) sem resgate correspondente</div>'
+
     sub = f"""
     <div class="lle-kpi-sub-stack">
         <div class="lle-kpi-sub-label">Aplicações:</div>
         <div class="lle-kpi-sub-valor">{fmt_int(qtd_a)} mov. · {fmt_brl(val_a)}</div>
         <div class="lle-kpi-sub-label">Resgates:</div>
         <div class="lle-kpi-sub-valor">{fmt_int(qtd_r)} mov. · {fmt_brl(val_r)}</div>
+        <div class="lle-kpi-sub-label">Rendimentos:</div>
+        <div class="lle-kpi-sub-valor">{fmt_int(qtd_rend)} mov. · {fmt_brl(val_rend)}</div>
+        {alerta}
     </div>
     """
-    return card_kpi_html("Investimentos", fmt_brl(total), sub, classe="destaque-amarelo")
+    return card_kpi_html("Investimentos", fmt_brl(saldo_liquido), sub, classe="destaque-amarelo")
 
 
 def render_cards(cards: list[str]):
