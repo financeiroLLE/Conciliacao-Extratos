@@ -616,13 +616,143 @@ def executar_pipeline(
             index=[i for i in res_top1722.indices_sankhya_casados if i < len(pend_sistema)]
         ).reset_index(drop=True)
 
+    # v5.21: conciliação por agrupamento FOLHA DE PAGAMENTO (SISPAG SALARIOS).
+    # Mesma ideia do TOP 1722 mas INVERSA: N linhas no banco → 1 linha no sankhya.
+    # Banco lança 1 SISPAG por funcionário; Sankhya tem 1 folha consolidada.
+    from src.matching.folha_pagamento import detectar_folha_pagamento
+    res_folha = detectar_folha_pagamento(pend_banco, pend_sistema)
+    if res_folha.indices_banco_casados or res_folha.indices_sankhya_casados:
+        pend_banco = pend_banco.reset_index(drop=True)
+        pend_sistema = pend_sistema.reset_index(drop=True)
+        pend_banco = pend_banco.drop(
+            index=[i for i in res_folha.indices_banco_casados if i < len(pend_banco)]
+        ).reset_index(drop=True)
+        pend_sistema = pend_sistema.drop(
+            index=[i for i in res_folha.indices_sankhya_casados if i < len(pend_sistema)]
+        ).reset_index(drop=True)
+
+    # v5.24: depósitos abertos no Sankhya (1 banco → N sankhya).
+    # Quando o banco recebe 1 PIX/TED de R$ X mas o Sankhya abre esse depósito em
+    # várias notas (cada NFD lançada separadamente), o match 1-pra-1 não acha par.
+    # Esta regra agrupa as pendências do Sankhya por data+conta+sinal e procura
+    # combinações que somem o valor do lançamento do banco.
+    from src.matching.depositos_abertos import detectar_depositos_abertos
+    res_depositos = detectar_depositos_abertos(pend_banco, pend_sistema)
+    if res_depositos.indices_banco_casados or res_depositos.indices_sankhya_casados:
+        pend_banco = pend_banco.reset_index(drop=True)
+        pend_sistema = pend_sistema.reset_index(drop=True)
+        pend_banco = pend_banco.drop(
+            index=[i for i in res_depositos.indices_banco_casados if i < len(pend_banco)]
+        ).reset_index(drop=True)
+        pend_sistema = pend_sistema.drop(
+            index=[i for i in res_depositos.indices_sankhya_casados if i < len(pend_sistema)]
+        ).reset_index(drop=True)
+
+    # v5.27: tarifas/pagamentos repetidos N pra N.
+    # Quando o banco tem N linhas idênticas (data + valor) E o Sankhya tem a mesma
+    # quantidade na mesma data + valor, NÃO é duplicidade — é casamento legítimo.
+    # Ex: 4× TAR C/C SISPAG -R$0,32 no banco vs 4× tarifa -R$0,32 no Sankhya.
+    from src.matching.tarifas_repetidas import detectar_tarifas_repetidas
+    res_tarifas = detectar_tarifas_repetidas(pend_banco, pend_sistema)
+    if res_tarifas.indices_banco_casados or res_tarifas.indices_sankhya_casados:
+        pend_banco = pend_banco.reset_index(drop=True)
+        pend_sistema = pend_sistema.reset_index(drop=True)
+        pend_banco = pend_banco.drop(
+            index=[i for i in res_tarifas.indices_banco_casados if i < len(pend_banco)]
+        ).reset_index(drop=True)
+        pend_sistema = pend_sistema.drop(
+            index=[i for i in res_tarifas.indices_sankhya_casados if i < len(pend_sistema)]
+        ).reset_index(drop=True)
+
     if not conciliados.empty:
         # Preserva a categoria_mov no resultado conciliado (pra dashboards)
         pass
 
+    # v5.24: AUT MAIS sem par no banco — antes de detectar divergências.
+    # O XLS bancário não exporta APL APLIC AUT MAIS / RES APLIC AUT MAIS (só o PDF exporta).
+    # Como o Sankhya tem esses lançamentos e o XLS não, eles ficavam em "Divergência
+    # sem par no banco" como falso positivo. Movemos pro card Investimentos.
+    from src.matching.aut_mais import detectar_aut_mais_sem_par
+    res_aut_mais = detectar_aut_mais_sem_par(pend_banco, pend_sistema)
+    if res_aut_mais.indices_sankhya_consumidos:
+        pend_sistema = pend_sistema.reset_index(drop=True)
+        pend_sistema = pend_sistema.drop(
+            index=[i for i in res_aut_mais.indices_sankhya_consumidos if i < len(pend_sistema)]
+        ).reset_index(drop=True)
+
     divergencias = detectar_divergencia_valor(pend_banco, pend_sistema)
     duplicidades = detectar_duplicidades(banco_mov, sistema_mov)
-    possiveis_dup = detectar_possiveis_duplicidades(banco_mov, sistema_mov)
+
+    # v5.23: antes de detectar possíveis duplicidades, remove do escopo as linhas
+    # que JÁ FORAM consumidas pelos agrupamentos (TOP 1722 cartão + Folha N→1).
+    # Sem isso, os 150 SISPAG SALARIOS conciliados em bloco apareciam como
+    # "possíveis duplicidades" (mesma data + histórico), gerando alarme falso.
+    # Filtra por CONTEÚDO (data + valor + histórico) — não por índice — porque o
+    # banco_mov/sistema_mov originais têm índices diferentes dos pend_banco/pend_sistema.
+    def _chave_conteudo(df: pd.DataFrame) -> pd.Series:
+        return (
+            df["data"].astype(str)
+            + "|" + df["historico"].fillna("").astype(str)
+            + "|" + df["valor"].round(2).astype(str)
+        )
+
+    banco_para_dup = banco_mov.copy()
+    sistema_para_dup = sistema_mov.copy()
+
+    # Constrói set de chaves já consumidas no banco
+    chaves_banco_consumidas: set[str] = set()
+    if not res_top1722.linhas_banco_casadas.empty:
+        chaves_banco_consumidas.update(_chave_conteudo(res_top1722.linhas_banco_casadas).tolist())
+    if not res_folha.linhas_banco_casadas.empty:
+        chaves_banco_consumidas.update(_chave_conteudo(res_folha.linhas_banco_casadas).tolist())
+    # v5.27: também exclui linhas consumidas por depósitos abertos e tarifas repetidas
+    if not res_depositos.linhas_banco_casadas.empty:
+        chaves_banco_consumidas.update(_chave_conteudo(res_depositos.linhas_banco_casadas).tolist())
+    if not res_tarifas.linhas_banco_casadas.empty:
+        chaves_banco_consumidas.update(_chave_conteudo(res_tarifas.linhas_banco_casadas).tolist())
+
+    # Constrói set de chaves já consumidas no sankhya
+    chaves_sistema_consumidas: set[str] = set()
+    if not res_top1722.linhas_sankhya_casadas.empty:
+        chaves_sistema_consumidas.update(_chave_conteudo(res_top1722.linhas_sankhya_casadas).tolist())
+    if not res_folha.linhas_sankhya_casadas.empty:
+        chaves_sistema_consumidas.update(_chave_conteudo(res_folha.linhas_sankhya_casadas).tolist())
+    # v5.27: idem pra sankhya
+    if not res_depositos.linhas_sankhya_casadas.empty:
+        chaves_sistema_consumidas.update(_chave_conteudo(res_depositos.linhas_sankhya_casadas).tolist())
+    if not res_tarifas.linhas_sankhya_casadas.empty:
+        chaves_sistema_consumidas.update(_chave_conteudo(res_tarifas.linhas_sankhya_casadas).tolist())
+
+    # v5.27: TAMBÉM exclui linhas conciliadas no match 1-pra-1 (exact_match/fuzzy).
+    # Sem isso, tarifas TAR C/C SISPAG que já casaram 1-pra-1 com pares no Sankhya
+    # apareciam em "Possíveis Duplicidades" — alarme falso.
+    if not conciliados.empty:
+        # Os conciliados têm colunas banco_data, banco_historico, banco_valor etc.
+        if all(c in conciliados.columns for c in ["banco_data", "banco_historico", "banco_valor"]):
+            conc_banco_keys = (
+                conciliados["banco_data"].astype(str)
+                + "|" + conciliados["banco_historico"].fillna("").astype(str)
+                + "|" + conciliados["banco_valor"].round(2).astype(str)
+            )
+            chaves_banco_consumidas.update(conc_banco_keys.tolist())
+        if all(c in conciliados.columns for c in ["sistema_data", "sistema_historico", "sistema_valor"]):
+            conc_sis_keys = (
+                conciliados["sistema_data"].astype(str)
+                + "|" + conciliados["sistema_historico"].fillna("").astype(str)
+                + "|" + conciliados["sistema_valor"].round(2).astype(str)
+            )
+            chaves_sistema_consumidas.update(conc_sis_keys.tolist())
+
+    if chaves_banco_consumidas:
+        banco_para_dup = banco_para_dup[
+            ~_chave_conteudo(banco_para_dup).isin(chaves_banco_consumidas)
+        ].reset_index(drop=True)
+    if chaves_sistema_consumidas:
+        sistema_para_dup = sistema_para_dup[
+            ~_chave_conteudo(sistema_para_dup).isin(chaves_sistema_consumidas)
+        ].reset_index(drop=True)
+
+    possiveis_dup = detectar_possiveis_duplicidades(banco_para_dup, sistema_para_dup)
 
     # v3.1: excesso_sankhya considera APENAS as pendências do sistema (o que não casou).
     # Conta quantas linhas pendentes do Sankhya excedem as pendências do banco

@@ -1369,12 +1369,12 @@ def _card_investimentos_da_conta(resultado: ResultadoConciliacao, conta: str) ->
 
 
 def _card_investimentos_de_df(df: pd.DataFrame) -> str:
-    """v5.26: card Investimentos com saldo líquido + 3 categorias + alerta.
+    """v5.27: card Investimentos simplificado, mesmo tamanho dos outros cards.
 
     Mudanças desta versão:
-    - Total exibido = Resgates - Aplicações (saldo líquido, faz sentido financeiro).
-    - 3 linhas no detalhe: Aplicações, Resgates, Rendimentos.
-    - Se qtd Aplicações ≠ qtd Resgates, mostra alerta de descasamento.
+    - Card mostra saldo líquido + 2 linhas (Aplicações e Resgates).
+    - Rendimentos e alerta de descasamento vão pra dentro da aba 'Aplicações e
+      Resgates' — não poluem o card principal.
 
     DEDUP banco × sankhya: prefere Sankhya quando ambos existem.
     """
@@ -1400,27 +1400,14 @@ def _card_investimentos_de_df(df: pd.DataFrame) -> str:
 
     aplic = df[df["tipo_aplicacao"] == "Aplicação"] if "tipo_aplicacao" in df.columns else pd.DataFrame()
     resg = df[df["tipo_aplicacao"] == "Resgate"] if "tipo_aplicacao" in df.columns else pd.DataFrame()
-    rend = df[df["tipo_aplicacao"] == "Rendimento"] if "tipo_aplicacao" in df.columns else pd.DataFrame()
 
     qtd_a = len(aplic)
     val_a = float(aplic["valor"].abs().sum()) if not aplic.empty else 0.0
     qtd_r = len(resg)
     val_r = float(resg["valor"].abs().sum()) if not resg.empty else 0.0
-    qtd_rend = len(rend)
-    val_rend = float(rend["valor"].abs().sum()) if not rend.empty else 0.0
 
-    # v5.26: saldo líquido = Resgates - Aplicações (faz sentido contábil)
+    # Saldo líquido = Resgates - Aplicações (faz sentido contábil)
     saldo_liquido = val_r - val_a
-
-    # Alerta de descasamento (qtd aplicações ≠ qtd resgates)
-    alerta = ""
-    if qtd_a != qtd_r and (qtd_a > 0 or qtd_r > 0):
-        if qtd_r > qtd_a:
-            diff = qtd_r - qtd_a
-            alerta = f'<div class="lle-kpi-sub-label" style="color:#FAC318; margin-top:4px;">⚠ {diff} resgate(s) sem aplicação correspondente</div>'
-        else:
-            diff = qtd_a - qtd_r
-            alerta = f'<div class="lle-kpi-sub-label" style="color:#FAC318; margin-top:4px;">⚠ {diff} aplicação(ões) sem resgate correspondente</div>'
 
     sub = f"""
     <div class="lle-kpi-sub-stack">
@@ -1428,9 +1415,6 @@ def _card_investimentos_de_df(df: pd.DataFrame) -> str:
         <div class="lle-kpi-sub-valor">{fmt_int(qtd_a)} mov. · {fmt_brl(val_a)}</div>
         <div class="lle-kpi-sub-label">Resgates:</div>
         <div class="lle-kpi-sub-valor">{fmt_int(qtd_r)} mov. · {fmt_brl(val_r)}</div>
-        <div class="lle-kpi-sub-label">Rendimentos:</div>
-        <div class="lle-kpi-sub-valor">{fmt_int(qtd_rend)} mov. · {fmt_brl(val_rend)}</div>
-        {alerta}
     </div>
     """
     return card_kpi_html("Investimentos", fmt_brl(saldo_liquido), sub, classe="destaque-amarelo")
