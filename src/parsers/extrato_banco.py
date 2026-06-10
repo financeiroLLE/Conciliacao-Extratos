@@ -85,11 +85,30 @@ def _parse_data_robusto(serie: pd.Series, ano_referencia: int | None = None) -> 
     Datas brasileiras: 04/05/2026 → 4 de maio.
     Datas ISO: 2026-05-04 ou 2026-05-04 00:00:00 → 4 de maio.
     Datas SEM ano: 04/05 → completa com `ano_referencia` (ou ano corrente).
+    Datas serial Excel: 46162 (número) → converte usando origem 1899-12-30.
     Datetimes nativos passam direto.
     """
     if pd.api.types.is_datetime64_any_dtype(serie):
         return pd.to_datetime(serie, errors="coerce")
+
+    # v5.28: trata datas serial do Excel (números 30000-80000 = anos 1982-2119)
+    if pd.api.types.is_numeric_dtype(serie):
+        try:
+            return pd.to_datetime(serie, origin="1899-12-30", unit="D", errors="coerce")
+        except Exception:
+            pass
+
     str_serie = serie.astype(str).str.strip()
+
+    # v5.28: detecta serial Excel em forma de string ("46162", "46150" etc)
+    parece_serial = str_serie.str.match(r"^\d{4,5}(\.\d+)?$", na=False)
+    if parece_serial.any() and not str_serie.str.contains("/", na=False).any():
+        # se TUDO parece serial e nada tem barra, trata como serial
+        try:
+            nums = pd.to_numeric(str_serie, errors="coerce")
+            return pd.to_datetime(nums, origin="1899-12-30", unit="D", errors="coerce")
+        except Exception:
+            pass
 
     # Detecta padrão DD/MM (sem ano) — extrai-se das datas SEM ano e adiciona o ano de referência
     padrao_sem_ano = r"^\d{1,2}/\d{1,2}\s*$"
