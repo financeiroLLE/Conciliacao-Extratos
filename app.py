@@ -3142,13 +3142,13 @@ def render_tab_pendentes(resultado: ResultadoConciliacao, conta: str):
                     novas_edicoes[chave] = row["tipo"]
         st.session_state[chave_edicoes] = novas_edicoes
         if len(novas_edicoes) > len(edicoes):
-            st.toast(f"\u2705 {len(novas_edicoes) - len(edicoes)} classifica\u00e7\u00f5es atualizadas", icon="\u2705")
+            st.toast(f"✅ {len(novas_edicoes) - len(edicoes)} classificações atualizadas", icon="✅")
 
     # Bot\u00e3o pra resetar edi\u00e7\u00f5es
     if edicoes:
         col_a, col_b = st.columns([3, 1])
         with col_b:
-            if st.button(f"\ud83d\udd04 Resetar edi\u00e7\u00f5es ({len(edicoes)})",
+            if st.button(f"🔄 Resetar edições ({len(edicoes)})",
                          key=f"reset_edicoes_{conta}", use_container_width=True):
                 st.session_state[chave_edicoes] = {}
                 st.rerun()
