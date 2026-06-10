@@ -309,19 +309,37 @@ def _calcular_kpis(
     banco_mov = _eh_movimentado(banco_completo)
     sistema_mov = _eh_movimentado(sistema_completo)
 
-    total_banco = _soma_abs(banco_mov)
-    total_sistema = _soma_abs(sistema_mov)
+    # v5.26: total movimentado NÃO deve incluir aplicação/resgate/rendimento AUT MAIS.
+    # Aplicações AUT MAIS não são despesa real (dinheiro fica na empresa, só aplicado).
+    # Resgates AUT MAIS não são receita real (mesmo dinheiro retorna pra conta).
+    # Esses lançamentos têm seu próprio card "Investimentos" pra contabilizar.
+    if "categoria_mov" in banco_mov.columns:
+        banco_mov_real = banco_mov[
+            ~banco_mov["categoria_mov"].isin(["aplicacao", "resgate", "rendimento"])
+        ]
+    else:
+        banco_mov_real = banco_mov
 
-    # Receitas e Despesas absolutas
-    if not banco_mov.empty:
-        receitas_banco = float(banco_mov[banco_mov["valor"] > 0]["valor"].sum())
-        despesas_banco = float(banco_mov[banco_mov["valor"] < 0]["valor"].abs().sum())
+    if "categoria_mov" in sistema_mov.columns:
+        sistema_mov_real = sistema_mov[
+            ~sistema_mov["categoria_mov"].isin(["aplicacao", "resgate", "rendimento"])
+        ]
+    else:
+        sistema_mov_real = sistema_mov
+
+    total_banco = _soma_abs(banco_mov_real)
+    total_sistema = _soma_abs(sistema_mov_real)
+
+    # Receitas e Despesas absolutas (também sem investimentos)
+    if not banco_mov_real.empty:
+        receitas_banco = float(banco_mov_real[banco_mov_real["valor"] > 0]["valor"].sum())
+        despesas_banco = float(banco_mov_real[banco_mov_real["valor"] < 0]["valor"].abs().sum())
     else:
         receitas_banco = despesas_banco = 0.0
 
-    if not sistema_mov.empty:
-        receitas_sistema = float(sistema_mov[sistema_mov["valor"] > 0]["valor"].sum())
-        despesas_sistema = float(sistema_mov[sistema_mov["valor"] < 0]["valor"].abs().sum())
+    if not sistema_mov_real.empty:
+        receitas_sistema = float(sistema_mov_real[sistema_mov_real["valor"] > 0]["valor"].sum())
+        despesas_sistema = float(sistema_mov_real[sistema_mov_real["valor"] < 0]["valor"].abs().sum())
     else:
         receitas_sistema = despesas_sistema = 0.0
 
@@ -520,7 +538,7 @@ def _extrair_aplicacoes_resgates(banco: pd.DataFrame, sistema: pd.DataFrame) -> 
         if df.empty or "categoria_mov" not in df.columns:
             continue
         d = df[df["categoria_mov"].isin(
-            ["aplicacao", "resgate", "investimento_outro"]
+            ["aplicacao", "resgate", "investimento_outro", "rendimento"]
         )].copy()
         if d.empty:
             continue
@@ -529,6 +547,7 @@ def _extrair_aplicacoes_resgates(banco: pd.DataFrame, sistema: pd.DataFrame) -> 
             "aplicacao": "Aplicação",
             "resgate": "Resgate",
             "investimento_outro": "Investimento",
+            "rendimento": "Rendimento",
         }).fillna("Indefinido")
         frames.append(d)
     if not frames:
@@ -612,6 +631,23 @@ def executar_pipeline(
             index=[i for i in res_folha.indices_sankhya_casados if i < len(pend_sistema)]
         ).reset_index(drop=True)
 
+    # v5.28: SALÁRIOS pagos avulsos no Sankhya (N→M).
+    # Quando o Sankhya não consolida em FOLHA DE PAGAMENTO mas lança cada
+    # salário individualmente (ex: 6 SISPAG no banco vs 2 lançamentos individuais
+    # no Sankhya somando o mesmo valor). Busca combinações que somem o total dos
+    # SISPAG do banco na mesma data.
+    from src.matching.salarios_n_m import detectar_salarios_n_m
+    res_salarios_nm = detectar_salarios_n_m(pend_banco, pend_sistema)
+    if res_salarios_nm.indices_banco_casados or res_salarios_nm.indices_sankhya_casados:
+        pend_banco = pend_banco.reset_index(drop=True)
+        pend_sistema = pend_sistema.reset_index(drop=True)
+        pend_banco = pend_banco.drop(
+            index=[i for i in res_salarios_nm.indices_banco_casados if i < len(pend_banco)]
+        ).reset_index(drop=True)
+        pend_sistema = pend_sistema.drop(
+            index=[i for i in res_salarios_nm.indices_sankhya_casados if i < len(pend_sistema)]
+        ).reset_index(drop=True)
+
     # v5.24: depósitos abertos no Sankhya (1 banco → N sankhya).
     # Quando o banco recebe 1 PIX/TED de R$ X mas o Sankhya abre esse depósito em
     # várias notas (cada NFD lançada separadamente), o match 1-pra-1 não acha par.
@@ -629,6 +665,22 @@ def executar_pipeline(
             index=[i for i in res_depositos.indices_sankhya_casados if i < len(pend_sistema)]
         ).reset_index(drop=True)
 
+    # v5.27: tarifas/pagamentos repetidos N pra N.
+    # Quando o banco tem N linhas idênticas (data + valor) E o Sankhya tem a mesma
+    # quantidade na mesma data + valor, NÃO é duplicidade — é casamento legítimo.
+    # Ex: 4× TAR C/C SISPAG -R$0,32 no banco vs 4× tarifa -R$0,32 no Sankhya.
+    from src.matching.tarifas_repetidas import detectar_tarifas_repetidas
+    res_tarifas = detectar_tarifas_repetidas(pend_banco, pend_sistema)
+    if res_tarifas.indices_banco_casados or res_tarifas.indices_sankhya_casados:
+        pend_banco = pend_banco.reset_index(drop=True)
+        pend_sistema = pend_sistema.reset_index(drop=True)
+        pend_banco = pend_banco.drop(
+            index=[i for i in res_tarifas.indices_banco_casados if i < len(pend_banco)]
+        ).reset_index(drop=True)
+        pend_sistema = pend_sistema.drop(
+            index=[i for i in res_tarifas.indices_sankhya_casados if i < len(pend_sistema)]
+        ).reset_index(drop=True)
+
     if not conciliados.empty:
         # Preserva a categoria_mov no resultado conciliado (pra dashboards)
         pass
@@ -643,6 +695,18 @@ def executar_pipeline(
         pend_sistema = pend_sistema.reset_index(drop=True)
         pend_sistema = pend_sistema.drop(
             index=[i for i in res_aut_mais.indices_sankhya_consumidos if i < len(pend_sistema)]
+        ).reset_index(drop=True)
+
+    # v5.28: tarifas de adquirente (TARIFA ALUGUEL GETNET) já descontadas pela GETNET.
+    # No Sankhya essas tarifas são lançadas separadamente, mas no banco elas vêm
+    # JÁ DESCONTADAS do valor líquido. Por isso jamais terão par individual no
+    # extrato. Removemos das pendências do Sankhya pra não virarem divergência.
+    from src.matching.tarifas_adquirente import detectar_tarifas_adquirente
+    res_tarifas_adq = detectar_tarifas_adquirente(pend_sistema)
+    if res_tarifas_adq.indices_sankhya_consumidos:
+        pend_sistema = pend_sistema.reset_index(drop=True)
+        pend_sistema = pend_sistema.drop(
+            index=[i for i in res_tarifas_adq.indices_sankhya_consumidos if i < len(pend_sistema)]
         ).reset_index(drop=True)
 
     divergencias = detectar_divergencia_valor(pend_banco, pend_sistema)
@@ -670,6 +734,14 @@ def executar_pipeline(
         chaves_banco_consumidas.update(_chave_conteudo(res_top1722.linhas_banco_casadas).tolist())
     if not res_folha.linhas_banco_casadas.empty:
         chaves_banco_consumidas.update(_chave_conteudo(res_folha.linhas_banco_casadas).tolist())
+    # v5.27: também exclui linhas consumidas por depósitos abertos e tarifas repetidas
+    if not res_depositos.linhas_banco_casadas.empty:
+        chaves_banco_consumidas.update(_chave_conteudo(res_depositos.linhas_banco_casadas).tolist())
+    if not res_tarifas.linhas_banco_casadas.empty:
+        chaves_banco_consumidas.update(_chave_conteudo(res_tarifas.linhas_banco_casadas).tolist())
+    # v5.28: idem para Salários N→M
+    if not res_salarios_nm.linhas_banco_casadas.empty:
+        chaves_banco_consumidas.update(_chave_conteudo(res_salarios_nm.linhas_banco_casadas).tolist())
 
     # Constrói set de chaves já consumidas no sankhya
     chaves_sistema_consumidas: set[str] = set()
@@ -677,6 +749,34 @@ def executar_pipeline(
         chaves_sistema_consumidas.update(_chave_conteudo(res_top1722.linhas_sankhya_casadas).tolist())
     if not res_folha.linhas_sankhya_casadas.empty:
         chaves_sistema_consumidas.update(_chave_conteudo(res_folha.linhas_sankhya_casadas).tolist())
+    # v5.27: idem pra sankhya
+    if not res_depositos.linhas_sankhya_casadas.empty:
+        chaves_sistema_consumidas.update(_chave_conteudo(res_depositos.linhas_sankhya_casadas).tolist())
+    if not res_tarifas.linhas_sankhya_casadas.empty:
+        chaves_sistema_consumidas.update(_chave_conteudo(res_tarifas.linhas_sankhya_casadas).tolist())
+    # v5.28: idem para Salários N→M
+    if not res_salarios_nm.linhas_sankhya_casadas.empty:
+        chaves_sistema_consumidas.update(_chave_conteudo(res_salarios_nm.linhas_sankhya_casadas).tolist())
+
+    # v5.27: TAMBÉM exclui linhas conciliadas no match 1-pra-1 (exact_match/fuzzy).
+    # Sem isso, tarifas TAR C/C SISPAG que já casaram 1-pra-1 com pares no Sankhya
+    # apareciam em "Possíveis Duplicidades" — alarme falso.
+    if not conciliados.empty:
+        # Os conciliados têm colunas banco_data, banco_historico, banco_valor etc.
+        if all(c in conciliados.columns for c in ["banco_data", "banco_historico", "banco_valor"]):
+            conc_banco_keys = (
+                conciliados["banco_data"].astype(str)
+                + "|" + conciliados["banco_historico"].fillna("").astype(str)
+                + "|" + conciliados["banco_valor"].round(2).astype(str)
+            )
+            chaves_banco_consumidas.update(conc_banco_keys.tolist())
+        if all(c in conciliados.columns for c in ["sistema_data", "sistema_historico", "sistema_valor"]):
+            conc_sis_keys = (
+                conciliados["sistema_data"].astype(str)
+                + "|" + conciliados["sistema_historico"].fillna("").astype(str)
+                + "|" + conciliados["sistema_valor"].round(2).astype(str)
+            )
+            chaves_sistema_consumidas.update(conc_sis_keys.tolist())
 
     if chaves_banco_consumidas:
         banco_para_dup = banco_para_dup[
