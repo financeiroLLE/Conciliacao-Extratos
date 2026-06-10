@@ -120,24 +120,6 @@ def carregar_relatorio_sistema(
                 mapa[canonico] = col_real
                 break
 
-    # v5.20: detecção de Receita/Despesa por CONTEÚDO quando o nome do cabeçalho
-    # não bate (ex: Sankhya exporta a coluna como "Tipo" — duplicada com outra
-    # coluna que também se chama "Tipo"). Itera por índice pra não pular colunas
-    # com nomes repetidos, e procura uma coluna cujos valores únicos sejam
-    # "Receita" e/ou "Despesa".
-    if "receita_despesa" not in mapa:
-        for i in range(len(df.columns)):
-            try:
-                serie = df.iloc[:, i]
-                valores = serie.dropna().astype(str).str.strip().str.lower().unique()
-                valores_relevantes = [v for v in valores if v in ("receita", "despesa")]
-                if len(valores_relevantes) >= 1 and len(valores) <= 5:
-                    # Guarda o ÍNDICE (não o nome), porque pode haver duplicatas
-                    mapa["receita_despesa_idx"] = i
-                    break
-            except Exception:
-                continue
-
     if "data" not in mapa or "valor" not in mapa:
         raise ValueError(
             "Relatório do sistema sem colunas obrigatórias. "
@@ -170,20 +152,38 @@ def carregar_relatorio_sistema(
     )
     valor_abs = df[mapa["valor"]].apply(_parse_valor_brl)
 
-    # Aplicar sinal: no ERP o valor vem positivo + coluna Receita/Despesa
-    # v5.20: usa receita_despesa_idx (por posição) se foi detectado por conteúdo,
-    # senão usa o nome do alias.
-    col_rd = None
-    if "receita_despesa_idx" in mapa:
-        col_rd = df.iloc[:, mapa["receita_despesa_idx"]]
-    elif "receita_despesa" in mapa:
-        col_rd = df[mapa["receita_despesa"]]
-        # Se ainda assim vier DataFrame (coluna duplicada), pega a primeira
-        if isinstance(col_rd, pd.DataFrame):
-            col_rd = col_rd.iloc[:, 0]
+    # v5.20: se o alias "receitadespesa" não casou (porque o Sankhya tem 2 colunas
+    # chamadas "Tipo" — a primeira é "Financeiro" e a segunda é "Despesa/Receita"),
+    # tenta detectar a coluna correta pelo CONTEÚDO (procura coluna cujos valores
+    # únicos sejam "Receita" e/ou "Despesa"). Usa posição (iloc) em vez de nome
+    # pra evitar problema com colunas duplicadas.
+    receita_despesa_idx: int | None = None
+    if "receita_despesa" not in mapa:
+        for i in range(len(df.columns)):
+            try:
+                serie = df.iloc[:, i]
+                valores = (
+                    serie.dropna()
+                    .astype(str)
+                    .str.strip()
+                    .str.lower()
+                    .unique()
+                )
+                valores_rd = [v for v in valores if v in ("receita", "despesa")]
+                if len(valores_rd) >= 1 and len(valores) <= 5:
+                    receita_despesa_idx = i
+                    break
+            except Exception:
+                continue
 
-    if col_rd is not None:
-        tipo = col_rd.fillna("").astype(str).str.strip().str.upper()
+    # Aplicar sinal: no ERP o valor vem positivo + coluna Receita/Despesa
+    if "receita_despesa" in mapa:
+        tipo = df[mapa["receita_despesa"]].fillna("").astype(str).str.strip().str.upper()
+        sinal = tipo.apply(lambda x: -1.0 if x.startswith("D") else 1.0)
+        out["valor"] = valor_abs * sinal
+    elif receita_despesa_idx is not None:
+        # v5.20: usa coluna detectada por conteúdo
+        tipo = df.iloc[:, receita_despesa_idx].fillna("").astype(str).str.strip().str.upper()
         sinal = tipo.apply(lambda x: -1.0 if x.startswith("D") else 1.0)
         out["valor"] = valor_abs * sinal
     else:
