@@ -157,6 +157,8 @@ def carregar_relatorio_sistema(
     # tenta detectar a coluna correta pelo CONTEÚDO (procura coluna cujos valores
     # únicos sejam "Receita" e/ou "Despesa"). Usa posição (iloc) em vez de nome
     # pra evitar problema com colunas duplicadas.
+    # ATENÇÃO: este bloco é CRÍTICO e tem se perdido em refatorações. Sem ele,
+    # todos os valores do Sankhya vêm POSITIVOS e a conciliação quebra.
     receita_despesa_idx: int | None = None
     if "receita_despesa" not in mapa:
         for i in range(len(df.columns)):
