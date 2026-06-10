@@ -49,7 +49,7 @@ RE_SALDO = re.compile(
 # Aplicação financeira (saída para investimento)
 RE_APLICACAO = re.compile(
     r"\b("
-    r"APLIC(A[CÇ][AÃ]O)?\.?\s+AUT|"  # APLIC AUT, APLIC. AUT (v5.24), APLICAÇÃO AUTOM
+    r"APLIC(A[CÇ][AÃ]O)?\.?\s+AUT|"  # APLIC AUT, APLIC. AUT (v5.26), APLICAÇÃO AUTOM
     r"APLICA[CÇ][AÃ]O|"
     r"INVESTIMENTO|"
     r"COMPRA\s+(CDB|RDB|LCI|LCA|TESOURO)|"
@@ -117,9 +117,9 @@ def classificar_movimentacao(historico: str) -> str:
     # 1. SALDO primeiro (cobre 'SDO APLIC AUT' que tem APLIC mas é saldo)
     if RE_SALDO.search(norm):
         return "saldo"
-    # 2. RENDIMENTO (REND PAGO) é movimentação normal, não investimento
+    # 2. RENDIMENTO (REND PAGO) — v5.26: categoria própria, não conta no Total Movimentado
     if RE_RENDIMENTO.search(norm):
-        return "movimentacao"
+        return "rendimento"
     # 3. Resgate antes de aplicação ('RES APLIC' tem ambos, mas é resgate)
     if RE_RESGATE.search(norm):
         return "resgate"
