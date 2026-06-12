@@ -151,6 +151,32 @@ def _parse_valor_brl(v: Any) -> float:
         return 0.0
 
 
+def _eh_pdf(arquivo: Any) -> bool:
+    """True se o arquivo é um PDF (por extensão .pdf ou bytes mágicos '%PDF')."""
+    nome = getattr(arquivo, "name", None) or (arquivo if isinstance(arquivo, str) else "")
+    if str(nome).lower().endswith(".pdf"):
+        return True
+    if hasattr(arquivo, "read"):
+        try:
+            pos = arquivo.tell()
+        except Exception:
+            pos = None
+        try:
+            arquivo.seek(0)
+            cabecalho = arquivo.read(5)
+            if isinstance(cabecalho, str):
+                cabecalho = cabecalho.encode("latin-1", "ignore")
+        except Exception:
+            cabecalho = b""
+        finally:
+            try:
+                arquivo.seek(pos if pos is not None else 0)
+            except Exception:
+                pass
+        return cabecalho.startswith(b"%PDF")
+    return False
+
+
 def carregar_extrato_banco(
     arquivo: Any,
     conta: str,
@@ -162,7 +188,16 @@ def carregar_extrato_banco(
     do extrato (datas diferentes geralmente).
 
     Retorna DataFrame com colunas: data, historico, documento, valor, conta.
+
+    v5.30: detecta PDF (por extensão .pdf ou pelos bytes mágicos "%PDF") e
+    delega ao parser do extrato mensal Itaú. XLS/XLSX seguem o caminho normal.
     """
+    if _eh_pdf(arquivo):
+        from .extrato_pdf_itau import carregar_extrato_pdf_itau
+        return carregar_extrato_pdf_itau(
+            arquivo, conta=conta, ano_referencia=ano_referencia
+        )
+
     # Aceita tanto file_uploader do streamlit quanto path
     if hasattr(arquivo, "read"):
         # UploadedFile do Streamlit
