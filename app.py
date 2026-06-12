@@ -2248,8 +2248,7 @@ def pagina_dashboard():
                       sub_banco),
         card_kpi_html("Total Extrato Sankhya", fmt_brl(kpis["total_extrato_sistema"]),
                       sub_sankhya),
-        card_kpi("Total Conciliado", fmt_brl(kpis["total_conciliado"]),
-                 "match Banco × Sankhya", classe="destaque-verde"),
+        _card_investimentos(resultado),
         card_kpi("Percentual Conciliado", fmt_pct(kpis["percentual_conciliado"]),
                  classe="destaque-amarelo"),
     ]
@@ -2380,11 +2379,11 @@ def tela_upload():
 
     with col1:
         section_title("EXTRATO BANCÁRIO")
-        st.caption("Formato padronizado: Data, Histórico, Documento, Valor (R$).")
+        st.caption("Formato padronizado: Data, Histórico, Documento, Valor (R$). Aceita XLS, XLSX ou PDF mensal do Itaú.")
         if modo == "1 conta por vez":
             arquivo_banco = st.file_uploader(
                 "Arraste o extrato",
-                type=["xlsx", "xls"],
+                type=["xlsx", "xls", "pdf"],
                 key="banco_single",
             )
             # v5.8: auto-preenche o nome da conta a partir do nome do arquivo.
@@ -2409,7 +2408,7 @@ def tela_upload():
             st.caption("Use o nome do arquivo como identificador da conta (ex: `Bradesco-12345.xlsx`).")
             arquivos_multi = st.file_uploader(
                 "Arraste os extratos (um por conta)",
-                type=["xlsx", "xls"],
+                type=["xlsx", "xls", "pdf"],
                 accept_multiple_files=True,
                 key="banco_multi",
             )
@@ -2704,8 +2703,7 @@ def tela_resultado():
                           sub_banco),
             card_kpi_html("Total Extrato Sankhya", fmt_brl(kpis["total_extrato_sistema"]),
                           sub_sankhya),
-            card_kpi("Total Conciliado", fmt_brl(kpis["total_conciliado"]),
-                     "match Banco × Sankhya", classe="destaque-verde"),
+            _card_investimentos(resultado),
             card_kpi("Percentual Conciliado", fmt_pct(kpis["percentual_conciliado"]),
                      classe="destaque-amarelo"),
         ]
@@ -2734,8 +2732,7 @@ def tela_resultado():
         ]
         render_cards(cards2)
 
-        # Linha 3: contagens (v5.14: Investimentos no 4º card no lugar do placeholder vazio)
-        investimentos_html_lin3 = _card_investimentos(resultado)
+        # Linha 3: contagens (Investimentos foi pra linha 1; aqui entra o Conciliado em R$)
         cards3 = [
             card_kpi("Registros Banco", fmt_int(kpis["qtd_registros_banco"]),
                      f"{fmt_int(kpis['qtd_movimentacoes_banco'])} movimentações"),
@@ -2743,7 +2740,7 @@ def tela_resultado():
                      f"{fmt_int(kpis['qtd_movimentacoes_sistema'])} movimentações"),
             card_kpi("Conciliados", fmt_int(kpis["qtd_conciliados"]),
                      "pares Banco × Sankhya", classe="destaque-verde"),
-            investimentos_html_lin3,
+            card_kpi("Total Conciliado", fmt_brl(kpis["total_conciliado"]), classe="destaque-verde"),
         ]
         render_cards(cards3)
 
@@ -2781,7 +2778,7 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
                       sub_banco_c),
         card_kpi_html("Total Sankhya", fmt_brl(k["total_extrato_sistema"]),
                       sub_sankhya_c),
-        card_kpi("Conciliado", fmt_brl(k["total_conciliado"]), classe="destaque-verde"),
+        _card_investimentos_da_conta(resultado, conta),
         card_kpi("% Conciliado", fmt_pct(k["percentual_conciliado"]), classe="destaque-amarelo"),
     ]
     render_cards(cards)
@@ -2794,9 +2791,6 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
     fonte_fl = ("via Sankhya 'Conciliado=Não'"
                 if k["fonte_falta_lancar"] == "sankhya_conciliado_nao"
                 else "pendência do sistema")
-    # Investimentos filtrados por conta
-    investimentos_conta_html = _card_investimentos_da_conta(resultado, conta)
-
     cards2 = [
         card_kpi_html("Falta Conciliar", fmt_brl(k["falta_conciliar"]),
                       sub_fc, classe="destaque-vermelho"),
@@ -2810,7 +2804,7 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
         card_kpi("Qtd Divergências", fmt_int(k["qtd_divergencia_sankhya_banco"]),
                  "lançamentos do Sankhya sem par no banco",
                  classe="destaque-amarelo" if k["qtd_divergencia_sankhya_banco"] > 0 else ""),
-        investimentos_conta_html,
+        card_kpi("Conciliado", fmt_brl(k["total_conciliado"]), classe="destaque-verde"),
     ]
     render_cards(cards2)
 
