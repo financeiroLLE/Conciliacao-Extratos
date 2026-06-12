@@ -120,45 +120,18 @@ class ResultadoConciliacao:
         """
         frames = []
 
-        # 1) Sem par no banco
-        # v3.11 BUGFIX: se a fonte é 'Conciliado=Não do Sankhya', precisamos REMOVER
-        # as linhas que JÁ casaram no nosso match automático. Caso contrário, uma
-        # linha pode aparecer ao mesmo tempo como 'Conciliada' (porque bateu com o
-        # banco) e como 'Divergência - Sem par no banco' (porque o Sankhya marca
-        # ela como Conciliado=Não no campo do ERP).
-        if self.usa_conciliado_sankhya and not self.falta_lancar_sankhya.empty:
-            df_origem = _eh_movimentado(self.falta_lancar_sankhya)
-            # Remove linhas que aparecem em 'conciliados' (lado sistema)
-            if not self.conciliados.empty and not df_origem.empty:
-                # Identifica chaves (data, valor, conta) que já casaram
-                sis_cols = [c for c in self.conciliados.columns if c.startswith("sistema_")]
-                if sis_cols:
-                    chaves_casadas = set()
-                    for _, row in self.conciliados.iterrows():
-                        data_v = row.get("sistema_data")
-                        valor_v = row.get("sistema_valor")
-                        conta_v = row.get("sistema_conta")
-                        hist_v = row.get("sistema_historico", "")
-                        if data_v is not None and valor_v is not None:
-                            chaves_casadas.add(
-                                (str(data_v), round(float(valor_v), 2),
-                                 str(conta_v), str(hist_v))
-                            )
-                    def _esta_casada(linha):
-                        return (
-                            str(linha.get("data")),
-                            round(float(linha.get("valor", 0)), 2),
-                            str(linha.get("conta", "")),
-                            str(linha.get("historico", "")),
-                        ) in chaves_casadas
-                    df_origem = df_origem[~df_origem.apply(_esta_casada, axis=1)]
-            df = df_origem
-        else:
-            df = _eh_movimentado(self.pendentes_sistema)
+        # 1) Sem par no banco — Fase 1 (v6.0): a fonte é SEMPRE o resultado do nosso
+        # match (pendências do Sankhya pós-conciliação), NUNCA a flag 'Conciliado=Não'
+        # do ERP. Quem decide a conciliação é o app, comparando banco × Sankhya; a
+        # marcação do Sankhya é dado de entrada, não veredito. Isso remove a antiga
+        # fonte circular (uma linha podia ser 'Conciliada' e 'Divergência' ao mesmo
+        # tempo só porque o ERP a marcava como Conciliado=Não).
+        df = _eh_movimentado(self.pendentes_sistema)
         if not df.empty:
             d = df[["data", "valor", "historico", "conta"]].copy()
             d["documento"] = df.get("documento", "")
             d["origem_divergencia"] = "Sem par no banco"
+            d["origem"] = "Sankhya"
             frames.append(d)
 
         # 2) Excesso no Sankhya
@@ -166,6 +139,7 @@ class ResultadoConciliacao:
             d = self.excesso_sankhya[["data", "valor", "historico", "conta"]].copy()
             d["documento"] = self.excesso_sankhya.get("documento", "")
             d["origem_divergencia"] = "Excesso no Sankhya"
+            d["origem"] = "Sankhya"
             frames.append(d)
 
         # 3) Valor diferente
@@ -175,11 +149,12 @@ class ResultadoConciliacao:
             d["conta"] = self.divergencias.get("conta", "")
             d["documento"] = self.divergencias.get("documento_sistema", "")
             d["origem_divergencia"] = "Valor diferente"
+            d["origem"] = "Banco × Sankhya"
             frames.append(d)
 
         if not frames:
             return pd.DataFrame(columns=[
-                "data", "valor", "historico", "documento", "conta", "origem_divergencia"
+                "data", "valor", "historico", "documento", "conta", "origem_divergencia", "origem"
             ])
         out = pd.concat(frames, ignore_index=True)
         out = out.drop_duplicates(subset=["data", "valor", "historico", "conta"])
