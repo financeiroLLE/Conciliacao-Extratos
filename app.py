@@ -2587,6 +2587,10 @@ def tela_upload():
                     rodar_fuzzy=rodar_fuzzy,
                 )
 
+                # Fase 1: rede de segurança — avisa se banco e Sankhya cobrem períodos
+                # diferentes (descasamento infla a 'Falta Conciliar', como no susto do PDF).
+                st.session_state.aviso_periodo = _checar_periodo(banco, sistema)
+
                 id_exec = novo_id_execucao()
 
                 # Gera o Excel já para snapshot
@@ -2644,9 +2648,36 @@ def tela_upload():
 # ============================================================
 # Tela de RESULTADO (única, pós-upload)
 # ============================================================
+def _checar_periodo(banco: pd.DataFrame, sistema: pd.DataFrame) -> str | None:
+    """Compara o intervalo de datas do banco e do Sankhya; retorna um aviso se
+    cobrirem períodos diferentes (causa comum de 'Falta Conciliar' inflada)."""
+    try:
+        if "data" not in banco.columns or "data" not in sistema.columns:
+            return None
+        bmin, bmax = banco["data"].min(), banco["data"].max()
+        smin, smax = sistema["data"].min(), sistema["data"].max()
+        if pd.isna(bmin) or pd.isna(bmax) or pd.isna(smin) or pd.isna(smax):
+            return None
+        if abs((bmax - smax).days) > 3 or abs((bmin - smin).days) > 3:
+            return (
+                f"⚠️ **Períodos diferentes.** O extrato do banco vai de "
+                f"{bmin:%d/%m/%Y} a {bmax:%d/%m/%Y} e o Sankhya de "
+                f"{smin:%d/%m/%Y} a {smax:%d/%m/%Y}. Quando os dois não cobrem o "
+                f"mesmo período, sobram lançamentos sem par e a 'Falta Conciliar' "
+                f"sobe. Confira se os arquivos são do mesmo mês."
+            )
+    except Exception:
+        return None
+    return None
+
+
 def tela_resultado():
     resultado: ResultadoConciliacao = st.session_state.resultado
     kpis = resultado.kpis_globais()
+
+    aviso_periodo = st.session_state.get("aviso_periodo")
+    if aviso_periodo:
+        st.warning(aviso_periodo)
 
     # Topo: botão voltar (menor) + ações principais (em destaque, amarelas)
     col_top1, col_top2, col_top3 = st.columns([1, 2, 2])
@@ -2855,7 +2886,7 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
     top1722_grupos_conta = _filtrar_conta_seguro("top1722_grupos")
     top1722_diff_conta = _filtrar_conta_seguro("top1722_diferencas")
 
-    tabs_nomes = ["✅ Conciliadas", "⏳ Pendentes",
+    tabs_nomes = ["✅ Conciliadas", "⏳ Sem baixa no Sankhya",
                   "⚠️ Divergências (Sankhya × Banco)",
                   "🏦 Não Pertence à Conta"]
     if not div_conta.empty:
@@ -3376,8 +3407,9 @@ def render_tab_divergencia_consolidada(df: pd.DataFrame, conta: str):
     st.info(
         "📌 **DIVERGÊNCIA = tudo o que o Sankhya tem a mais que o extrato bancário.** "
         "O banco é a base da verdade. Inclui 3 origens:\n\n"
-        "- **Sem par no banco**: lançamentos do Sankhya que não casaram com nenhuma linha do banco "
-        "(marcados como `Conciliado=Não` ou pendentes pós-match).\n"
+        "- **Sem par no banco**: lançamentos do Sankhya que o app não conseguiu casar com "
+        "nenhuma linha do banco (decisão da comparação banco × Sankhya — não depende mais da "
+        "flag `Conciliado` do ERP).\n"
         "- **Excesso no Sankhya**: mesma data+valor+conta aparece mais vezes no Sankhya do que no banco.\n"
         "- **Valor diferente**: mesma chave (data+histórico+conta) com valor diferente entre Sankhya e Banco."
     )
@@ -3397,7 +3429,7 @@ def render_tab_divergencia_consolidada(df: pd.DataFrame, conta: str):
         st.dataframe(resumo, use_container_width=True, hide_index=True)
         st.write("")
 
-    cols = ["origem_divergencia", "data", "historico", "documento", "valor", "conta"]
+    cols = ["origem_divergencia", "origem", "data", "historico", "documento", "valor", "conta"]
     cols = [c for c in cols if c in df.columns]
     out = df[cols].copy()
     out.columns = [c.replace("_", " ").title() for c in out.columns]
