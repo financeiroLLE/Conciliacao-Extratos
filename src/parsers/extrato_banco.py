@@ -39,7 +39,7 @@ def _mapear_colunas(df: pd.DataFrame) -> dict[str, str]:
     """Mapeia colunas do arquivo para nomes canônicos."""
     canonicos = {
         "data": ["data", "datalancamento", "dtlancamento"],
-        "historico": ["historico", "descricao", "memo"],
+        "historico": ["historico", "descricao", "memo", "lancamento", "movimentacao"],
         "documento": ["documento", "doc", "numdoc", "numerodoc"],
         # "valorr" cobre 'Valor (R$)' depois da normalização que remove parênteses
         "valor": ["valor", "valorr", "valorrs", "vlrlancamento", "vlr"],
@@ -54,47 +54,97 @@ def _mapear_colunas(df: pd.DataFrame) -> dict[str, str]:
     return encontrados
 
 
-def _parse_data_robusto(serie: pd.Series) -> pd.Series:
+def _detectar_linha_cabecalho(df: pd.DataFrame, max_linhas: int = 20) -> int | None:
+    """v3.7: Procura nas primeiras `max_linhas` qual contém o cabeçalho real.
+
+    Critério: linha onde pelo menos 2 células batem com nomes canônicos
+    (data + valor, ou data + lançamento/histórico).
+    """
+    canonicos_aceitos = {
+        "data", "datalancamento", "dtlancamento",
+        "historico", "descricao", "memo", "lancamento", "movimentacao",
+        "documento", "doc", "numdoc", "numerodoc",
+        "valor", "valorr", "valorrs", "vlrlancamento", "vlr",
+    }
+    n = min(len(df), max_linhas)
+    for i in range(n):
+        linha = df.iloc[i]
+        batidas = 0
+        for celula in linha:
+            norm = _normalizar_nome_coluna(str(celula))
+            if norm in canonicos_aceitos:
+                batidas += 1
+                if batidas >= 2:
+                    return i
+    return None
+
+
+def _parse_data_robusto(serie: pd.Series, ano_referencia: int | None = None) -> pd.Series:
     """Parser de data que respeita formato brasileiro (DD/MM/YYYY) E formato ISO.
 
     Datas brasileiras: 04/05/2026 → 4 de maio.
     Datas ISO: 2026-05-04 ou 2026-05-04 00:00:00 → 4 de maio.
+    Datas SEM ano: 04/05 → completa com `ano_referencia` (ou ano corrente).
+    Datas serial Excel: 46162 (número) → converte usando origem 1899-12-30.
     Datetimes nativos passam direto.
-
-    BUGFIX CRÍTICO (v3.x): a versão anterior decidia o formato da coluna INTEIRA
-    com `parece_iso.all()`. Bastava UMA célula vazia/'nan' para o `.all()` virar
-    False e mandar TODA a coluna pro ramo dayfirst. Aí datas ISO eram lidas como
-    dia/mês: '2026-05-08' virava 2026-08-05 (mês e dia trocados, sobrevive errado)
-    e '2026-05-18' virava NaT (mês 18 não existe → a linha era descartada no
-    dropna). Efeito prático: ~metade do Sankhya sumia e a outra metade ficava com
-    a data trocada, gerando "contas divergentes" e conciliação instável.
-
-    Agora cada linha é parseada conforme o SEU próprio formato:
-      - linhas ISO (YYYY-MM-DD...) → parse sem dayfirst (ordem é inequívoca);
-      - demais (DD/MM/YYYY)        → parse com dayfirst.
     """
-    # Se já é datetime/timestamp, retorna direto
     if pd.api.types.is_datetime64_any_dtype(serie):
         return pd.to_datetime(serie, errors="coerce")
 
-    str_serie = serie.astype(str).str.strip()
-    resultado = pd.Series(pd.NaT, index=str_serie.index, dtype="datetime64[ns]")
+    # v5.28: trata datas serial do Excel (números 30000-80000 = anos 1982-2119)
+    if pd.api.types.is_numeric_dtype(serie):
+        try:
+            return pd.to_datetime(serie, origin="1899-12-30", unit="D", errors="coerce")
+        except Exception:
+            pass
 
-    # ISO: 4 dígitos + '-' no começo (YYYY-MM-DD, com ou sem hora)
-    mask_iso = str_serie.str.match(r"^\d{4}-\d{2}-\d{2}", na=False)
-    if mask_iso.any():
-        # dayfirst NÃO se aplica a ISO — ordem ano-mês-dia é inequívoca
-        resultado.loc[mask_iso] = pd.to_datetime(
-            str_serie[mask_iso], errors="coerce"
+    str_serie = serie.astype(str).str.strip()
+
+    # v5.28: detecta serial Excel em forma de string ("46162", "46150" etc)
+    parece_serial = str_serie.str.match(r"^\d{4,5}(\.\d+)?$", na=False)
+    if parece_serial.any() and not str_serie.str.contains("/", na=False).any():
+        # se TUDO parece serial e nada tem barra, trata como serial
+        try:
+            nums = pd.to_numeric(str_serie, errors="coerce")
+            return pd.to_datetime(nums, origin="1899-12-30", unit="D", errors="coerce")
+        except Exception:
+            pass
+
+    # Detecta padrão DD/MM (sem ano) — extrai-se das datas SEM ano e adiciona o ano de referência
+    padrao_sem_ano = r"^\d{1,2}/\d{1,2}\s*$"
+    parece_sem_ano = str_serie.str.match(padrao_sem_ano, na=False)
+    if parece_sem_ano.any():
+        if ano_referencia is None:
+            from datetime import date
+            ano_referencia = date.today().year
+        str_serie = str_serie.where(
+            ~parece_sem_ano,
+            str_serie + f"/{ano_referencia}",
         )
 
-    # Restante: formato brasileiro DD/MM/YYYY (dayfirst só para o que NÃO é ISO)
+    # BUGFIX: não decidir o formato da coluna INTEIRA com parece_iso.all() — bastava
+    # UMA célula vazia/'nan' para o `.all()` virar False e jogar TODAS as datas no
+    # ramo dayfirst, que trocava mês/dia das ISO ('2026-05-08' virava ago/2026) e
+    # descartava dia >= 13 ('2026-05-18' → mês 18 → NaT, linha perdida no dropna).
+    # Agora cada linha é parseada conforme o SEU próprio formato.
+    resultado = pd.Series(pd.NaT, index=str_serie.index, dtype="datetime64[ns]")
+    mask_iso = str_serie.str.match(r"^\d{4}-\d{2}-\d{2}", na=False)
+    if mask_iso.any():
+        # ISO (YYYY-MM-DD...): ordem ano-mês-dia é inequívoca, dayfirst não se aplica.
+        # format="ISO8601" parseia com e sem hora ('2026-05-29' e '2026-05-29 00:00:00')
+        # sem o pandas tentar inferir UM único formato pro conjunto (o que viraria NaT
+        # nas linhas sem hora quando misturadas com linhas com hora).
+        try:
+            iso_vals = pd.to_datetime(str_serie[mask_iso], format="ISO8601", errors="coerce")
+        except (ValueError, TypeError):
+            iso_vals = pd.to_datetime(str_serie[mask_iso], errors="coerce")
+        resultado.loc[mask_iso] = iso_vals
     mask_br = ~mask_iso
     if mask_br.any():
+        # Brasileiro DD/MM/YYYY (inclui datas que receberam o ano de referência acima)
         resultado.loc[mask_br] = pd.to_datetime(
             str_serie[mask_br], dayfirst=True, errors="coerce"
         )
-
     return resultado
 
 
@@ -121,14 +171,53 @@ def _parse_valor_brl(v: Any) -> float:
         return 0.0
 
 
-def carregar_extrato_banco(arquivo: Any, conta: str) -> pd.DataFrame:
+def _eh_pdf(arquivo: Any) -> bool:
+    """True se o arquivo é um PDF (por extensão .pdf ou bytes mágicos '%PDF')."""
+    nome = getattr(arquivo, "name", None) or (arquivo if isinstance(arquivo, str) else "")
+    if str(nome).lower().endswith(".pdf"):
+        return True
+    if hasattr(arquivo, "read"):
+        try:
+            pos = arquivo.tell()
+        except Exception:
+            pos = None
+        try:
+            arquivo.seek(0)
+            cabecalho = arquivo.read(5)
+            if isinstance(cabecalho, str):
+                cabecalho = cabecalho.encode("latin-1", "ignore")
+        except Exception:
+            cabecalho = b""
+        finally:
+            try:
+                arquivo.seek(pos if pos is not None else 0)
+            except Exception:
+                pass
+        return cabecalho.startswith(b"%PDF")
+    return False
+
+
+def carregar_extrato_banco(
+    arquivo: Any,
+    conta: str,
+    ano_referencia: int | None = None,
+) -> pd.DataFrame:
     """Lê o(s) extrato(s) bancário(s) padronizado(s) e retorna DataFrame canônico.
 
     Aceita arquivo .xlsx/.xls com 1 ou mais abas. Cada aba é tratada como um pedaço
     do extrato (datas diferentes geralmente).
 
     Retorna DataFrame com colunas: data, historico, documento, valor, conta.
+
+    v5.30: detecta PDF (por extensão .pdf ou pelos bytes mágicos "%PDF") e
+    delega ao parser do extrato mensal Itaú. XLS/XLSX seguem o caminho normal.
     """
+    if _eh_pdf(arquivo):
+        from .extrato_pdf_itau import carregar_extrato_pdf_itau
+        return carregar_extrato_pdf_itau(
+            arquivo, conta=conta, ano_referencia=ano_referencia
+        )
+
     # Aceita tanto file_uploader do streamlit quanto path
     if hasattr(arquivo, "read"):
         # UploadedFile do Streamlit
@@ -143,10 +232,6 @@ def carregar_extrato_banco(arquivo: Any, conta: str) -> pd.DataFrame:
         engine = "xlrd" if str(arquivo).lower().endswith(".xls") else "openpyxl"
         sheets = pd.read_excel(arquivo, sheet_name=None, engine=engine, dtype=str)
 
-    # Normaliza a chave da conta (colapsa espaços, preserva caixa) para casar com o
-    # mesmo nome vindo do Sankhya (coluna "Descrição", ex.: "ITAU PISA").
-    conta_norm = " ".join(str(conta).split()) if conta is not None else conta
-
     frames: list[pd.DataFrame] = []
     for _, df_aba in sheets.items():
         if df_aba.empty:
@@ -155,27 +240,36 @@ def carregar_extrato_banco(arquivo: Any, conta: str) -> pd.DataFrame:
         if df_aba.empty:
             continue
 
-        # Se a primeira linha contém os cabeçalhos (planilha sem header)
-        # tenta detectar tentando mapear; se não rolar, usa a primeira linha como header
+        # Remove colunas totalmente vazias (alguns extratos têm colunas-fantasma)
+        df_aba = df_aba.dropna(axis=1, how="all")
+        if df_aba.empty or len(df_aba.columns) == 0:
+            continue
+
+        # v3.7: alguns extratos (ex: Itaú PDF→XLS) têm várias linhas de metadados
+        # antes do cabeçalho real. Vamos procurar dinamicamente a linha que contém
+        # o cabeçalho (presença de 'Data' + 'Valor' ou 'Lançamento'/'Histórico').
         mapa = _mapear_colunas(df_aba)
         if "data" not in mapa or "valor" not in mapa:
-            # promove primeira linha a cabeçalho
-            df_aba.columns = [str(c) for c in df_aba.iloc[0].tolist()]
-            df_aba = df_aba.iloc[1:].reset_index(drop=True)
-            mapa = _mapear_colunas(df_aba)
+            # Procura nas primeiras 20 linhas qual delas é o cabeçalho real
+            header_linha = _detectar_linha_cabecalho(df_aba, max_linhas=20)
+            if header_linha is not None:
+                df_aba.columns = [str(c) for c in df_aba.iloc[header_linha].tolist()]
+                df_aba = df_aba.iloc[header_linha + 1:].reset_index(drop=True)
+                df_aba = df_aba.dropna(axis=1, how="all")
+                mapa = _mapear_colunas(df_aba)
 
         if "data" not in mapa or "valor" not in mapa:
             # aba não parece ser extrato — pula
             continue
 
         out = pd.DataFrame()
-        out["data"] = _parse_data_robusto(df_aba[mapa["data"]])
+        out["data"] = _parse_data_robusto(df_aba[mapa["data"]], ano_referencia=ano_referencia)
         out["historico"] = df_aba[mapa["historico"]].fillna("") if "historico" in mapa else ""
         out["documento"] = (
             df_aba[mapa["documento"]].fillna("") if "documento" in mapa else ""
         )
         out["valor"] = df_aba[mapa["valor"]].apply(_parse_valor_brl)
-        out["conta"] = conta_norm
+        out["conta"] = conta
 
         # remove linhas sem data ou valor zero/sem valor
         out = out.dropna(subset=["data"])
