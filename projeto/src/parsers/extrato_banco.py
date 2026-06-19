@@ -60,18 +60,42 @@ def _parse_data_robusto(serie: pd.Series) -> pd.Series:
     Datas brasileiras: 04/05/2026 → 4 de maio.
     Datas ISO: 2026-05-04 ou 2026-05-04 00:00:00 → 4 de maio.
     Datetimes nativos passam direto.
+
+    BUGFIX CRÍTICO (v3.x): a versão anterior decidia o formato da coluna INTEIRA
+    com `parece_iso.all()`. Bastava UMA célula vazia/'nan' para o `.all()` virar
+    False e mandar TODA a coluna pro ramo dayfirst. Aí datas ISO eram lidas como
+    dia/mês: '2026-05-08' virava 2026-08-05 (mês e dia trocados, sobrevive errado)
+    e '2026-05-18' virava NaT (mês 18 não existe → a linha era descartada no
+    dropna). Efeito prático: ~metade do Sankhya sumia e a outra metade ficava com
+    a data trocada, gerando "contas divergentes" e conciliação instável.
+
+    Agora cada linha é parseada conforme o SEU próprio formato:
+      - linhas ISO (YYYY-MM-DD...) → parse sem dayfirst (ordem é inequívoca);
+      - demais (DD/MM/YYYY)        → parse com dayfirst.
     """
     # Se já é datetime/timestamp, retorna direto
     if pd.api.types.is_datetime64_any_dtype(serie):
         return pd.to_datetime(serie, errors="coerce")
-    # Converte para string para inspeção
+
     str_serie = serie.astype(str).str.strip()
-    # Detecta ISO (4 dígitos no começo separados por '-')
-    parece_iso = str_serie.str.match(r"^\d{4}-\d{2}-\d{2}", na=False)
-    if parece_iso.all():
-        return pd.to_datetime(str_serie, errors="coerce")
-    # Senão, usa formato brasileiro
-    return pd.to_datetime(str_serie, dayfirst=True, errors="coerce")
+    resultado = pd.Series(pd.NaT, index=str_serie.index, dtype="datetime64[ns]")
+
+    # ISO: 4 dígitos + '-' no começo (YYYY-MM-DD, com ou sem hora)
+    mask_iso = str_serie.str.match(r"^\d{4}-\d{2}-\d{2}", na=False)
+    if mask_iso.any():
+        # dayfirst NÃO se aplica a ISO — ordem ano-mês-dia é inequívoca
+        resultado.loc[mask_iso] = pd.to_datetime(
+            str_serie[mask_iso], errors="coerce"
+        )
+
+    # Restante: formato brasileiro DD/MM/YYYY (dayfirst só para o que NÃO é ISO)
+    mask_br = ~mask_iso
+    if mask_br.any():
+        resultado.loc[mask_br] = pd.to_datetime(
+            str_serie[mask_br], dayfirst=True, errors="coerce"
+        )
+
+    return resultado
 
 
 def _parse_valor_brl(v: Any) -> float:
@@ -119,6 +143,10 @@ def carregar_extrato_banco(arquivo: Any, conta: str) -> pd.DataFrame:
         engine = "xlrd" if str(arquivo).lower().endswith(".xls") else "openpyxl"
         sheets = pd.read_excel(arquivo, sheet_name=None, engine=engine, dtype=str)
 
+    # Normaliza a chave da conta (colapsa espaços, preserva caixa) para casar com o
+    # mesmo nome vindo do Sankhya (coluna "Descrição", ex.: "ITAU PISA").
+    conta_norm = " ".join(str(conta).split()) if conta is not None else conta
+
     frames: list[pd.DataFrame] = []
     for _, df_aba in sheets.items():
         if df_aba.empty:
@@ -147,7 +175,7 @@ def carregar_extrato_banco(arquivo: Any, conta: str) -> pd.DataFrame:
             df_aba[mapa["documento"]].fillna("") if "documento" in mapa else ""
         )
         out["valor"] = df_aba[mapa["valor"]].apply(_parse_valor_brl)
-        out["conta"] = conta
+        out["conta"] = conta_norm
 
         # remove linhas sem data ou valor zero/sem valor
         out = out.dropna(subset=["data"])
