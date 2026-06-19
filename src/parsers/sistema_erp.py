@@ -1,13 +1,20 @@
 """Leitura do relatório de Conciliação Bancária exportado do ERP (Sankhya).
 
-Layout típico:
-- Linha 1: título "Conciliação Bancária"
+Layout típico (relatório "Conciliação Bancária" da LLE):
+- Linha 1: título
 - Linha 2: emissão/usuário/total de registros
 - Linha 3: cabeçalho
 - Linha 4+: dados
 
-Colunas obrigatórias: Dt. Lançamento, Histórico, Vlr. Lançamento, Receita/Despesa.
-Coluna de conta tem nome variável (passada por parâmetro ou auto-detectada).
+Colunas: Tipo | Dt Lançamento | Conta | Descrição | Receita/Despesa | NUBCO |
+         Vlr. Lançamento | Cód.Usuário | Usuário | TOPBAIXA | Dh.Conciliação |
+         Histórico | Saldo Bco | Saldo Real | Conciliado
+
+Pontos de atenção desse layout:
+- "Conta"      → NÚMERO interno da conta no ERP (ex.: 4)
+- "Descrição"  → NOME do banco/conta (ex.: "ITAU PISA")  ← é a chave que casa com o extrato
+- "Histórico"  → memo do lançamento (cliente/fornecedor)
+- "Receita/Despesa" → sinal do valor (o Vlr. Lançamento pode vir com ou sem sinal)
 """
 
 from __future__ import annotations
@@ -21,7 +28,7 @@ from .extrato_banco import _normalizar_nome_coluna, _parse_valor_brl, _parse_dat
 
 
 COLUNAS_ESPERADAS_SISTEMA = [
-    "data", "historico", "documento", "valor", "conta",
+    "data", "historico", "documento", "valor", "conta", "conta_numero",
     "tipo_movimento", "conciliado", "usuario", "num_unico_bancario",
 ]
 
@@ -38,7 +45,7 @@ def _detectar_linha_cabecalho(df: pd.DataFrame) -> int:
 
 
 def _detectar_coluna_conta(colunas: list[str]) -> str | None:
-    """Tenta achar a coluna que identifica a conta bancária."""
+    """Tenta achar a coluna do NÚMERO da conta no ERP (coluna 'Conta')."""
     candidatos = [
         "contabancaria", "contabancária",
         "conta", "agenciaconta", "agconta",
@@ -52,6 +59,13 @@ def _detectar_coluna_conta(colunas: list[str]) -> str | None:
     for col in colunas:
         norm = _normalizar_nome_coluna(col)
         if "conta" in norm and "contabil" not in norm:
+            return col
+    return None
+
+
+def _achar_coluna(colunas: list[str], alvos: set[str]) -> str | None:
+    for col in colunas:
+        if _normalizar_nome_coluna(str(col)) in alvos:
             return col
     return None
 
@@ -75,10 +89,10 @@ def carregar_relatorio_sistema(
             arquivo.seek(0)
         except Exception:
             pass
-        raw = pd.read_excel(arquivo, sheet_name=0, engine=engine, header=None)
+        raw = pd.read_excel(arquivo, sheet_name=0, engine=engine, header=None, dtype=str)
     else:
         engine = "xlrd" if str(arquivo).lower().endswith(".xls") else "openpyxl"
-        raw = pd.read_excel(arquivo, sheet_name=0, engine=engine, header=None)
+        raw = pd.read_excel(arquivo, sheet_name=0, engine=engine, header=None, dtype=str)
 
     if raw.empty:
         return pd.DataFrame(columns=COLUNAS_ESPERADAS_SISTEMA)
@@ -90,27 +104,27 @@ def carregar_relatorio_sistema(
     df.columns = header
     df = df.dropna(how="all").reset_index(drop=True)
 
-    # Mapeamento de colunas conhecidas
+    # Mapeamento de colunas conhecidas.
+    # ATENÇÃO: 'historico' e 'conta' (nome/número) NÃO entram aqui — são detectados
+    # separadamente mais abaixo, porque neste relatório existem DUAS colunas
+    # "descritivas" (Histórico = memo; Descrição = nome da conta) e o alias genérico
+    # confundia uma com a outra (Descrição era capturada como histórico).
     mapa: dict[str, str] = {}
     aliases = {
         "data": ["dtlancamento", "datalancamento", "data"],
-        "historico": ["historico", "descricao"],
         "valor": ["vlrlancamento", "valorlancamento", "valor"],
-        # v5.19: removido alias "tipo" — no Sankhya da LLE existe uma coluna chamada
-        # "Tipo" que contém "Financeiro" (não Receita/Despesa). O alias capturava a
-        # coluna errada, fazendo todas as despesas virarem valor positivo (zerando
-        # o card Despesas do Sankhya e quebrando a conciliação).
+        # v5.19: NÃO usar alias "tipo" — a coluna "Tipo" do Sankhya é "Financeiro",
+        # não Receita/Despesa.
         "receita_despesa": ["receitadespesa"],
         "documento": ["numdocumento", "numerodocumento", "documento", "doc"],
-        "num_unico_bancario": ["numunicobancario", "numunico"],
+        "num_unico_bancario": ["numunicobancario", "numunico", "nubco"],
         "conciliado": ["conciliado"],
         "tipo_movimento": ["tipodemovimento", "tipomovimento"],
         "usuario": ["usuario"],
         "agencia": ["agencia", "ag", "numagencia", "numeroagencia"],
         "num_conta": ["numconta", "numeroconta", "ccorrente", "contacorrente"],
         "banco_nome": ["banco", "nomebanco", "nomedobanco"],
-        # v5.0: TOP é o código da operação no Sankhya (TOP 1722 = recebimento cartão de crédito)
-        # v5.10: adicionado 'topbaixa' — forma real como o Sankhya da LLE exporta ("Top Baixa")
+        # v5.0/v5.10: TOP de baixa. 1722 = recebimento cartão de crédito.
         "top_baixa": ["topdebaixa", "topbaixa", "top", "codtop", "codigotop", "tipooperacao", "codtipooperacao"],
     }
     for col_real in df.columns:
@@ -127,50 +141,56 @@ def carregar_relatorio_sistema(
             f"Colunas detectadas: {list(df.columns)[:10]}"
         )
 
-    # Detectar coluna de conta
-    col_conta_real: str | None = None
+    # --- Histórico (memo) vs Descrição (nome da conta) -----------------------
+    # Regra: se existem AS DUAS colunas → Histórico=memo e Descrição=nome da conta.
+    #        se existe só "Descrição"  → ela é o memo (layout antigo, sem nome de conta).
+    col_historico = _achar_coluna(list(df.columns), {"historico"})
+    col_descricao = _achar_coluna(list(df.columns), {"descricao"})
+    if col_historico is not None and col_descricao is not None:
+        col_memo = col_historico
+        col_conta_nome = col_descricao
+    elif col_descricao is not None:
+        col_memo = col_descricao
+        col_conta_nome = None
+    else:
+        col_memo = col_historico
+        col_conta_nome = None
+
+    # --- Número da conta (coluna "Conta") ------------------------------------
+    col_conta_num: str | None = None
     if coluna_conta:
-        # match exato (com strip e case-insensitive)
         alvo = coluna_conta.strip().lower()
         for c in df.columns:
             if str(c).strip().lower() == alvo:
-                col_conta_real = c
+                col_conta_num = c
                 break
-    if not col_conta_real:
-        col_conta_real = _detectar_coluna_conta([str(c) for c in df.columns])
+    if not col_conta_num:
+        col_conta_num = _detectar_coluna_conta([str(c) for c in df.columns])
 
     out = pd.DataFrame()
-    # CRÍTICO: dayfirst=True (datas brasileiras), com fallback para ISO
+    # CRÍTICO: parser de data robusto (trata ISO e BR linha a linha — ver bugfix
+    # em extrato_banco._parse_data_robusto).
     out["data"] = _parse_data_robusto(df[mapa["data"]])
     out["historico"] = (
-        df[mapa["historico"]].fillna("").astype(str).str.strip()
-        if "historico" in mapa else ""
+        df[col_memo].fillna("").astype(str).str.strip()
+        if col_memo is not None else ""
     )
     out["documento"] = (
         df[mapa["documento"]].fillna("").astype(str).str.strip()
         if "documento" in mapa else ""
     )
-    valor_abs = df[mapa["valor"]].apply(_parse_valor_brl)
 
-    # v5.20: se o alias "receitadespesa" não casou (porque o Sankhya tem 2 colunas
-    # chamadas "Tipo" — a primeira é "Financeiro" e a segunda é "Despesa/Receita"),
-    # tenta detectar a coluna correta pelo CONTEÚDO (procura coluna cujos valores
-    # únicos sejam "Receita" e/ou "Despesa"). Usa posição (iloc) em vez de nome
-    # pra evitar problema com colunas duplicadas.
-    # ATENÇÃO CRÍTICA: este bloco se perde toda vez que alguém refatora o parser.
-    # Sem ele, TODOS os valores do Sankhya vêm POSITIVOS e a conciliação quebra.
-    # NÃO REMOVA!
+    valor_parsed = df[mapa["valor"]].apply(_parse_valor_brl)
+
+    # Detecção da coluna Receita/Despesa por CONTEÚDO, caso o alias não tenha casado
+    # (defesa contra variações de cabeçalho). Usa posição (iloc) por segurança.
     receita_despesa_idx: int | None = None
     if "receita_despesa" not in mapa:
         for i in range(len(df.columns)):
             try:
                 serie = df.iloc[:, i]
                 valores = (
-                    serie.dropna()
-                    .astype(str)
-                    .str.strip()
-                    .str.lower()
-                    .unique()
+                    serie.dropna().astype(str).str.strip().str.lower().unique()
                 )
                 valores_rd = [v for v in valores if v in ("receita", "despesa")]
                 if len(valores_rd) >= 1 and len(valores) <= 5:
@@ -179,23 +199,39 @@ def carregar_relatorio_sistema(
             except Exception:
                 continue
 
-    # Aplicar sinal: no ERP o valor vem positivo + coluna Receita/Despesa
+    # Sinal a partir de Receita/Despesa.
+    # BUGFIX recorrente: aplicamos o sinal sobre |valor| (abs). Assim o resultado é
+    # correto INDEPENDENTE de o Vlr. Lançamento já vir com sinal ou não. A versão
+    # anterior multiplicava o valor "como veio": quando o ERP já exportava despesa
+    # negativa, o ×(-1) reinvertia para POSITIVO, zerando o card Despesas e
+    # transformando tudo em Receita.
     if "receita_despesa" in mapa:
         tipo = df[mapa["receita_despesa"]].fillna("").astype(str).str.strip().str.upper()
         sinal = tipo.apply(lambda x: -1.0 if x.startswith("D") else 1.0)
-        out["valor"] = valor_abs * sinal
+        out["valor"] = valor_parsed.abs() * sinal
     elif receita_despesa_idx is not None:
-        # v5.20: usa coluna detectada por conteúdo
         tipo = df.iloc[:, receita_despesa_idx].fillna("").astype(str).str.strip().str.upper()
         sinal = tipo.apply(lambda x: -1.0 if x.startswith("D") else 1.0)
-        out["valor"] = valor_abs * sinal
+        out["valor"] = valor_parsed.abs() * sinal
     else:
-        out["valor"] = valor_abs
+        # Sem coluna Receita/Despesa: confia no sinal que veio no valor.
+        out["valor"] = valor_parsed
 
-    out["conta"] = (
-        df[col_conta_real].fillna("—").astype(str).str.strip()
-        if col_conta_real else "—"
+    # --- Conta: usa o NOME (Descrição) como chave, casando com o extrato bancário.
+    #     O número interno do ERP fica em 'conta_numero' para referência/exibição.
+    n = len(df)
+    serie_num = (
+        df[col_conta_num].fillna("").astype(str).str.strip().str.replace(r"\.0$", "", regex=True)
+        if col_conta_num else pd.Series([""] * n, index=df.index)
     )
+    serie_nome = (
+        df[col_conta_nome].fillna("").astype(str).str.strip().map(lambda x: " ".join(x.split()))
+        if col_conta_nome else pd.Series([""] * n, index=df.index)
+    )
+    out["conta_numero"] = serie_num.values
+    conta_final = serie_nome.where(serie_nome.str.len() > 0, serie_num).replace("", "—")
+    out["conta"] = conta_final.values
+
     out["tipo_movimento"] = (
         df[mapa["tipo_movimento"]].fillna("").astype(str).str.strip()
         if "tipo_movimento" in mapa else ""
@@ -224,7 +260,6 @@ def carregar_relatorio_sistema(
         df[mapa["banco_nome"]].fillna("").astype(str).str.strip()
         if "banco_nome" in mapa else ""
     )
-    # v5.0: TOP DE BAIXA (código da operação Sankhya). 1722 = cartão de crédito.
     out["top_baixa"] = (
         df[mapa["top_baixa"]].fillna("").astype(str).str.strip()
         if "top_baixa" in mapa else ""
