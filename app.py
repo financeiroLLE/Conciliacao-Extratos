@@ -2565,9 +2565,11 @@ def tela_upload():
         section_title("EXTRATO SANKHYA CONCILIAÇÃO")
         st.caption("Relatório de Conciliação Bancária exportado do ERP.")
         arquivo_sistema = st.file_uploader(
-            "Arraste o relatório do sistema",
+            "Arraste o(s) relatório(s) do sistema",
             type=["xlsx", "xls"],
             key="sistema",
+            accept_multiple_files=True,
+            help="Pode subir mais de um (ex.: um relatório do Sankhya por conta/banco). O app junta todos antes de conciliar.",
         )
         coluna_conta_sistema = st.text_input(
             "Extrato Sankhya Conciliação — coluna da conta",
@@ -2662,9 +2664,19 @@ def tela_upload():
                             f"foram descartadas por terem data inválida ou vazia."
                         )
 
-                sistema = carregar_relatorio_sistema(
-                    arquivo_sistema,
-                    coluna_conta=coluna_conta_sistema or None,
+                # Múltiplos relatórios do Sankhya: carrega cada um e junta tudo.
+                _lista_sistema = arquivo_sistema if isinstance(arquivo_sistema, list) else [arquivo_sistema]
+                _dfs_sistema = []
+                for _arq_sis in _lista_sistema:
+                    _dfs_sistema.append(
+                        carregar_relatorio_sistema(
+                            _arq_sis,
+                            coluna_conta=coluna_conta_sistema or None,
+                        )
+                    )
+                sistema = (
+                    pd.concat(_dfs_sistema, ignore_index=True)
+                    if _dfs_sistema else pd.DataFrame()
                 )
 
                 # v3.6: mesmo tratamento para o sistema
