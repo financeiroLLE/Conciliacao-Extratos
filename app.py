@@ -516,6 +516,32 @@ input, textarea, select, [data-baseweb="select"] > div {{
     color: {CORES["branco"]} !important;
     border-color: {CORES["card_borda"]} !important;
 }}
+/* v5.35: menu ABERTO do selectbox (popover do BaseWeb). Antes herdava o texto
+   branco do tema, mas o popover tem fundo claro → texto branco-no-branco,
+   invisível. Força fundo escuro + texto branco, com destaque no hover/selecionado.
+   Corrige também o antigo submenu de Tipo (mesmo problema). */
+[data-baseweb="popover"] [role="listbox"],
+[data-baseweb="popover"] [data-baseweb="menu"],
+[data-baseweb="popover"] ul {{
+    background-color: {CORES["azul_escuro_2"]} !important;
+}}
+[data-baseweb="popover"] [role="option"],
+[data-baseweb="popover"] li {{
+    background-color: {CORES["azul_escuro_2"]} !important;
+    color: {CORES["branco"]} !important;
+}}
+[data-baseweb="popover"] [role="option"] * {{
+    color: {CORES["branco"]} !important;
+}}
+[data-baseweb="popover"] [role="option"]:hover,
+[data-baseweb="popover"] [role="option"][aria-selected="true"] {{
+    background-color: {CORES["card_bg"]} !important;
+    color: {CORES["amarelo"]} !important;
+}}
+[data-baseweb="popover"] [role="option"]:hover *,
+[data-baseweb="popover"] [role="option"][aria-selected="true"] * {{
+    color: {CORES["amarelo"]} !important;
+}}
 .stTextInput input, .stDateInput input {{
     background-color: {CORES["azul_escuro_2"]} !important;
     color: {CORES["branco"]} !important;
@@ -3520,6 +3546,13 @@ def render_tab_pendentes(resultado: ResultadoConciliacao, conta: str):
     if df.empty:
         st.success("🎉 Nada sem baixa no Sankhya nesta conta.")
         return
+
+    # v5.35: somatório total da coluna (igual ao "Resumo por origem" do Divergência),
+    # pra dar o total e permitir comparar.
+    _total_pb = float(df["valor"].abs().sum()) if "valor" in df.columns else 0.0
+    _qtd_pb = len(df)
+    _un_pb = "item" if _qtd_pb == 1 else "itens"
+    st.markdown(f"**Total sem baixa no Sankhya:** {fmt_brl(_total_pb)} · {fmt_int(_qtd_pb)} {_un_pb}")
 
     # v5.11: editor inline pra trocar o Tipo de uma linha pendente
     st.info(
