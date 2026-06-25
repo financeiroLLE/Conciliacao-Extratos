@@ -71,6 +71,11 @@ def detectar_banco(texto_pagina1: str) -> str:
         or "cp empresarial" in t
     ):
         return "bradesco"
+    # Santander: logo é imagem (não extrai 'santander'); detecta pelo cabeçalho
+    # "Valor ($)" (coluna única, sem Saldo) e/ou "Internet Banking Empresarial".
+    # Precisa vir ANTES da Caixa, porque a palavra "caixa" aparece no texto dele.
+    if "internet banking empresarial" in t or "valor ($)" in t:
+        return "santander"
     if "caixa" in t or "gerenciador" in t:
         return "caixa"
     return "desconhecido"
@@ -219,6 +224,37 @@ def _parse_bradesco(paginas: list[str], conta: str) -> pd.DataFrame:
 
 
 # --------------------------------------------------------------------------
+# SANTANDER — Data Histórico Valor ($)  (coluna ÚNICA de valor, sem Saldo)
+# Valor vem como "R$ 674.319,93" ou "-R$ 1.837.914,00" (sinal ANTES do R$).
+# --------------------------------------------------------------------------
+_RE_SANTANDER = re.compile(
+    rf"^(\d{{2}}/\d{{2}}/\d{{4}})\s+(.+?)\s+(-?)\s*R\$\s*(\d{{1,3}}(?:\.\d{{3}})*,\d{{2}})\s*$"
+)
+
+
+def _parse_santander(paginas: list[str], conta: str) -> pd.DataFrame:
+    linhas: list[dict] = []
+    for txt in paginas:
+        for raw in txt.split("\n"):
+            ln = raw.strip()
+            m = _RE_SANTANDER.match(ln)
+            if not m:
+                continue
+            data_s, hist, sinal, val_s = m.groups()
+            valor = _num_br(val_s)
+            if sinal == "-":
+                valor = -abs(valor)
+            dd, mm, yyyy = data_s.split("/")
+            linhas.append({
+                "data": pd.Timestamp(int(yyyy), int(mm), int(dd)),
+                "historico": hist.strip(),
+                "documento": "",
+                "valor": valor,
+            })
+    return _df(linhas, conta)
+
+
+# --------------------------------------------------------------------------
 # GENÉRICO (banco desconhecido) — TENTA o padrão comum, mas AVISA.
 # --------------------------------------------------------------------------
 def _parse_generico_incerto(paginas: list[str], conta: str) -> pd.DataFrame:
@@ -260,6 +296,8 @@ def carregar_extrato_pdf_generico(
         df = _parse_sicredi(paginas, conta)
     elif banco == "bradesco":
         df = _parse_bradesco(paginas, conta)
+    elif banco == "santander":
+        df = _parse_santander(paginas, conta)
     elif banco == "caixa":
         df = _parse_caixa(paginas, conta)
     else:
