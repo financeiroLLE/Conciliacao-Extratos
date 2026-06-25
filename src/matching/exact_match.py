@@ -64,35 +64,52 @@ def match_exato(
     consumidos_sistema: set[int] = set()
     pares: list[tuple[int, int, int]] = []  # (idx_banco, idx_sistema, dias_diff)
 
-    # Para cada linha do banco, busca o melhor candidato no sistema dentro da tolerância
-    # Agrupa o sistema por (valor_centavos, conta) para acelerar.
-    sistema_grupo = sistema.groupby(["_valor_centavos", "conta"])
+    # v5.33: mesma lógica do match guloso 1-a-1 (mesma chave valor+conta, dentro da
+    # tolerância de dias, menor diferença de dias e, no empate, menor índice original),
+    # mas em estruturas Python puras — sem o custo do Pandas por linha. Em volume
+    # (milhares de linhas) isso é dezenas de vezes mais rápido, com resultado idêntico.
+    NS_DIA = 86_400_000_000_000
 
-    for _, linha_b in banco.iterrows():
-        chave = (linha_b["_valor_centavos"], linha_b["conta"])
-        if chave not in sistema_grupo.groups:
-            continue
-        idxs = sistema_grupo.groups[chave]
-        candidatos = sistema.loc[idxs]
-        candidatos = candidatos[~candidatos["_idx"].isin(consumidos_sistema)]
-        if candidatos.empty:
-            continue
+    b_idx = banco["_idx"].to_numpy()
+    b_cent = banco["_valor_centavos"].to_numpy()
+    b_conta = banco["conta"].to_numpy()
+    b_ns = banco["data"].to_numpy(dtype="datetime64[ns]").astype("int64")
+    b_nat = banco["data"].isna().to_numpy()
 
-        # Diferença de dias
-        diffs = (candidatos["data"] - linha_b["data"]).abs().dt.days
-        dentro_janela = candidatos[diffs <= tolerancia_dias].copy()
-        if dentro_janela.empty:
-            continue
+    s_idx = sistema["_idx"].to_numpy()
+    s_cent = sistema["_valor_centavos"].to_numpy()
+    s_conta = sistema["conta"].to_numpy()
+    s_ns = sistema["data"].to_numpy(dtype="datetime64[ns]").astype("int64")
+    s_nat = sistema["data"].isna().to_numpy()
 
-        dentro_janela["_diff"] = (
-            (dentro_janela["data"] - linha_b["data"]).abs().dt.days
-        )
-        # Menor diferença de dias primeiro; em empate, mantém ordem original
-        dentro_janela = dentro_janela.sort_values(by=["_diff", "_idx"])
-        escolhido = dentro_janela.iloc[0]
-        idx_s = int(escolhido["_idx"])
-        consumidos_sistema.add(idx_s)
-        pares.append((int(linha_b["_idx"]), idx_s, int(escolhido["_diff"])))
+    # candidatos do sistema por chave (valor_centavos, conta), em ordem original
+    candidatos_por_chave: dict[tuple, list[int]] = {}
+    for pos in range(len(s_idx)):
+        candidatos_por_chave.setdefault((s_cent[pos], s_conta[pos]), []).append(pos)
+
+    for pos_b in range(len(b_idx)):
+        if b_nat[pos_b]:
+            continue
+        lista = candidatos_por_chave.get((b_cent[pos_b], b_conta[pos_b]))
+        if not lista:
+            continue
+        ns_b = int(b_ns[pos_b])
+        melhor_pos = -1
+        melhor_diff = None
+        for pos_s in lista:  # em ordem de índice original → empate fica no menor índice
+            if s_nat[pos_s]:
+                continue
+            idx_s = int(s_idx[pos_s])
+            if idx_s in consumidos_sistema:
+                continue
+            diff = abs(ns_b - int(s_ns[pos_s])) // NS_DIA
+            if diff <= tolerancia_dias and (melhor_diff is None or diff < melhor_diff):
+                melhor_diff = diff
+                melhor_pos = pos_s
+        if melhor_pos >= 0:
+            idx_s = int(s_idx[melhor_pos])
+            consumidos_sistema.add(idx_s)
+            pares.append((int(b_idx[pos_b]), idx_s, int(melhor_diff)))
 
     # Montagem dos DataFrames de saída
     if pares:
