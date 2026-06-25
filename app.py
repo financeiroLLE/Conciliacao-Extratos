@@ -2900,12 +2900,12 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
     sub_banco_c = _card_total_com_rec_desp(k["receitas_banco"], k["despesas_banco"])
     sub_sankhya_c = _card_total_com_rec_desp(k["receitas_sistema"], k["despesas_sistema"])
     cards = [
-        card_kpi_html("Movimentado no Banco", fmt_brl(k["total_movimentado_banco"]),
+        card_kpi_html("Total movimentado · banco", fmt_brl(k["total_movimentado_banco"]),
                       sub_banco_c),
-        card_kpi_html("Total Sankhya", fmt_brl(k["total_extrato_sistema"]),
+        card_kpi_html("Total lançado no Sankhya", fmt_brl(k["total_extrato_sistema"]),
                       sub_sankhya_c),
         _card_investimentos_da_conta(resultado, conta),
-        card_kpi("% Conciliado", fmt_pct(k["percentual_conciliado"]), classe="destaque-amarelo"),
+        card_kpi("% conferido em pares", fmt_pct(k["percentual_conciliado"]), classe="destaque-amarelo"),
     ]
     render_cards(cards)
 
@@ -2917,20 +2917,35 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
     fonte_fl = ("via Sankhya 'Conciliado=Não'"
                 if k["fonte_falta_lancar"] == "sankhya_conciliado_nao"
                 else "pendência do sistema")
+    falta_c = float(k["falta_conciliar"])
+    div_c = float(k["divergencia_sankhya_banco"])
+    qtd_div_c = int(k["qtd_divergencia_sankhya_banco"])
+
+    # Banco sem explicação (verde quando zero, vermelho quando há)
+    if falta_c == 0:
+        card_banco_sem_exp = card_kpi(
+            "Banco sem explicação", "R$ 0,00",
+            "movimento do banco que o ERP não justifica", classe="destaque-verde")
+    else:
+        card_banco_sem_exp = card_kpi_html(
+            "Banco sem explicação", fmt_brl(falta_c), sub_fc, classe="destaque-vermelho")
+
+    # Sankhya sem confirmação: junta valor + contagem num card só
+    cor_div = "destaque-verde" if (div_c == 0 and qtd_div_c == 0) else "destaque-vermelho"
+    qtd_txt = (fmt_int(qtd_div_c) + " item") if qtd_div_c == 1 else (fmt_int(qtd_div_c) + " itens")
+    valor_div_html = (fmt_brl(div_c)
+                      + ' <span style="font-size:14px; color:#8BA3C7; font-weight:400;">&middot; '
+                      + qtd_txt + '</span>')
+    card_sankhya_sem_conf = card_kpi_html(
+        "Sankhya sem confirmação", valor_div_html,
+        '<div class="lle-kpi-suffix">lançamentos do ERP que o banco não confirmou</div>',
+        classe=cor_div)
+
     cards2 = [
-        card_kpi_html("Falta Conciliar", fmt_brl(k["falta_conciliar"]),
-                      sub_fc, classe="destaque-vermelho"),
-        card_kpi_html("Divergência (Sankhya × Banco)",
-                      fmt_brl(k["divergencia_sankhya_banco"]),
-                      _card_falta_conciliar_vertical(
-                          k["divergencia_sankhya_banco_receitas"],
-                          k["divergencia_sankhya_banco_despesas"],
-                      ),
-                      classe="destaque-vermelho"),
-        card_kpi("Qtd Divergências", fmt_int(k["qtd_divergencia_sankhya_banco"]),
-                 "lançamentos do Sankhya sem par no banco",
-                 classe="destaque-amarelo" if k["qtd_divergencia_sankhya_banco"] > 0 else ""),
-        card_kpi("Conciliado", fmt_brl(k["total_conciliado"]), classe="destaque-verde"),
+        card_banco_sem_exp,
+        card_sankhya_sem_conf,
+        card_kpi("Valor conferido", fmt_brl(k["total_conciliado"]),
+                 "soma dos lançamentos que casaram em pares", classe="destaque-verde"),
     ]
     render_cards(cards2)
 
@@ -2938,6 +2953,33 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
     info_saldo = resultado.saldo_final_da_conta(conta)
     if info_saldo is not None:
         render_card_saldo_final(info_saldo)
+
+    # Notas recolhíveis — explicam os cards acima, sem poluir
+    _mov_c = float(k["total_movimentado_banco"])
+    _falta_c2 = float(k["falta_conciliar"])
+    _explic = 100.0 * (_mov_c - _falta_c2) / _mov_c if _mov_c > 0 else 0.0
+    _pares = float(k["percentual_conciliado"])
+    _regra = max(0.0, _explic - _pares)
+    _diff = abs(float(k["total_extrato_sistema"]) - _mov_c)
+    with st.expander("Entenda os cards acima"):
+        st.markdown(
+            "**% conferido em pares (" + fmt_pct(_pares) + "):** casou em pares diretos (1 a 1). "
+            "Os " + fmt_pct(_regra) + " restantes são o **cartão**, que casa pela soma total "
+            "(TOP 1722) — também explicado. Somando, o banco está **" + fmt_pct(_explic)
+            + " explicado** (é o número que aparece no resumo)."
+        )
+        if not resultado.aplicacoes_resgates_da_conta(conta).empty:
+            st.markdown(
+                "**Investimentos no período:** é o líquido entre o que foi aplicado e o que foi "
+                "resgatado no mês. Valor negativo significa que se aplicou mais do que se resgatou "
+                "— esse dinheiro ficou guardado em aplicação. **Não é despesa nem prejuízo.**"
+            )
+        if _diff > 0.01:
+            st.markdown(
+                "**Diferença entre Banco e Sankhya (" + fmt_brl(_diff) + "):** normalmente é a "
+                "taxa de cartão registrada **duas vezes** no Sankhya (uma embutida no valor bruto, "
+                "outra como linha de despesa). **Não é erro de conciliação.**"
+            )
 
     # Download específico desse banco
     try:
