@@ -81,14 +81,51 @@ def detectar_banco(texto_pagina1: str) -> str:
     return "desconhecido"
 
 
+def _seek0(arquivo: Any) -> None:
+    try:
+        arquivo.seek(0)
+    except Exception:
+        pass
+
+
+def _ler_paginas_rapido(arquivo: Any) -> list[str]:
+    """Leitura RÁPIDA de texto (pypdf) — ~20x mais rápida que o pdfplumber em PDF
+    grande. Serve pra detecção e pros layouts de fluxo simples (Itaú/Sicredi/
+    Santander). Normaliza espaço não-quebrável (\\xa0) que o pypdf insere."""
+    from pypdf import PdfReader
+
+    _seek0(arquivo)
+    reader = PdfReader(arquivo)
+    return [(p.extract_text() or "").replace("\xa0", " ") for p in reader.pages]
+
+
 def _ler_paginas(arquivo: Any) -> list[str]:
+    """Leitura COM LAYOUT (pdfplumber) — mais lenta, mas necessária pros layouts
+    multi-coluna (Bradesco) e de espaçamento sensível (Caixa)."""
     if pdfplumber is None:
         raise RuntimeError("pdfplumber não disponível para ler PDF.")
+    _seek0(arquivo)
     paginas: list[str] = []
     with pdfplumber.open(arquivo) as pdf:
         for p in pdf.pages:
             paginas.append(p.extract_text() or "")
     return paginas
+
+
+def _texto_pagina1(arquivo: Any) -> str:
+    """Texto só da 1ª página (pypdf) — para detecção de banco, instantâneo."""
+    try:
+        from pypdf import PdfReader
+
+        _seek0(arquivo)
+        reader = PdfReader(arquivo)
+        if reader.pages:
+            return (reader.pages[0].extract_text() or "").replace("\xa0", " ")
+    except Exception:
+        pass
+    # fallback: pdfplumber
+    paginas = _ler_paginas(arquivo)
+    return paginas[0] if paginas else ""
 
 
 def _df(linhas: list[dict], conta: str) -> pd.DataFrame:
@@ -287,19 +324,25 @@ def _parse_generico_incerto(paginas: list[str], conta: str) -> pd.DataFrame:
 def carregar_extrato_pdf_generico(
     arquivo: Any, conta: str = "—", ano_referencia: int | None = None
 ) -> pd.DataFrame:
-    """Lê um extrato PDF não-Itaú, detectando o banco e tratando o layout."""
-    paginas = _ler_paginas(arquivo)
+    """Lê um extrato PDF não-Itaú, detectando o banco e tratando o layout.
+
+    v5.34: leitura RÁPIDA (pypdf) por padrão — crucial em PDF grande (Santander de
+    318 páginas caiu de ~63s para ~3s). Bradesco e Caixa precisam do layout do
+    pdfplumber (multi-coluna / espaçamento), então só esses dois são relidos com
+    ele — e como são de 1–2 páginas, continua rápido.
+    """
+    paginas = _ler_paginas_rapido(arquivo)
     texto1 = paginas[0] if paginas else ""
     banco = detectar_banco(texto1)
 
     if banco == "sicredi":
         df = _parse_sicredi(paginas, conta)
-    elif banco == "bradesco":
-        df = _parse_bradesco(paginas, conta)
     elif banco == "santander":
         df = _parse_santander(paginas, conta)
+    elif banco == "bradesco":
+        df = _parse_bradesco(_ler_paginas(arquivo), conta)  # pdfplumber (layout)
     elif banco == "caixa":
-        df = _parse_caixa(paginas, conta)
+        df = _parse_caixa(_ler_paginas(arquivo), conta)     # pdfplumber (layout)
     else:
         df = _parse_generico_incerto(paginas, conta)
 
