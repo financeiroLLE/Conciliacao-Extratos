@@ -218,14 +218,13 @@ def carregar_extrato_banco(
         from .extrato_pdf_generico import (
             detectar_banco,
             carregar_extrato_pdf_generico,
-            _ler_paginas,
+            _texto_pagina1,
         )
-        paginas = _ler_paginas(arquivo)
+        banco = detectar_banco(_texto_pagina1(arquivo))  # detecção rápida (pypdf, 1ª pág)
         try:
-            arquivo.seek(0)  # rebobina p/ o parser específico reler o stream
+            arquivo.seek(0)
         except Exception:
             pass
-        banco = detectar_banco(paginas[0] if paginas else "")
         if banco == "itau":
             from .extrato_pdf_itau import carregar_extrato_pdf_itau
             return carregar_extrato_pdf_itau(
