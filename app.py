@@ -2805,12 +2805,9 @@ def tela_upload():
 
                 id_exec = novo_id_execucao()
 
-                # Gera o Excel já para snapshot
-                xlsx_bytes = gerar_relatorio_excel(
-                    resultado,
-                    pendencias_anteriores=pendencias,
-                    execucao={"id": id_exec, "versao": versao, "status": "processado"},
-                )
+                # v5.34: NÃO gera o Excel aqui. Em volume alto (ex.: Santander, 12k+69k)
+                # a geração levava ~3 min e segurava a tela em "Processando...". O Excel
+                # passa a ser gerado sob demanda, quando o usuário clica em "Gerar Excel".
 
                 # Snapshot append-only
                 try:
@@ -2825,7 +2822,7 @@ def tela_upload():
                             "versao": versao,
                             "id_origem": id_origem,
                         },
-                        relatorio_xlsx=xlsx_bytes,
+                        relatorio_xlsx=None,
                     )
                     registrar_execucao(
                         id_exec=id_exec,
@@ -2845,7 +2842,7 @@ def tela_upload():
                 st.session_state.resultado = resultado
                 st.session_state.pendencias_anteriores = pendencias
                 st.session_state.id_execucao_atual = id_exec
-                st.session_state.xlsx_atual = xlsx_bytes
+                st.session_state.xlsx_atual = None  # v5.34: gera sob demanda (volume)
                 st.session_state.csvs_zip_atual = None  # força regerar quando precisar
                 st.session_state.fluxo_etapa = "resultado"
                 st.rerun()
@@ -2901,33 +2898,40 @@ def tela_resultado():
             key="btn_voltar_topo",
         )
     with col_top2:
-        xlsx_bytes = st.session_state.get("xlsx_atual") or gerar_relatorio_excel(
-            resultado, pendencias_anteriores=st.session_state.pendencias_anteriores
-        )
         nome = f"conciliacao_{resultado.data_referencia.strftime('%Y%m%d')}.xlsx"
-        st.download_button(
-            "⬇️ Excel (todas as abas)",
-            data=xlsx_bytes,
-            file_name=nome,
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            type="primary",
-            use_container_width=True,
-        )
+        if st.session_state.get("xlsx_atual"):
+            st.download_button(
+                "⬇️ Excel (todas as abas)",
+                data=st.session_state.xlsx_atual,
+                file_name=nome,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                type="primary",
+                use_container_width=True,
+            )
+        elif st.button("⬇️ Gerar Excel", type="primary", use_container_width=True,
+                       key="btn_gerar_xlsx"):
+            with st.spinner("Gerando Excel… em volume grande pode levar alguns minutos."):
+                st.session_state.xlsx_atual = gerar_relatorio_excel(
+                    resultado,
+                    pendencias_anteriores=st.session_state.pendencias_anteriores,
+                )
+            st.rerun()
     with col_top3:
-        # v3.10: cache no session_state — evita regerar o zip a cada rerun
-        zip_bytes = st.session_state.get("csvs_zip_atual")
-        if zip_bytes is None:
-            zip_bytes = gerar_csvs_zip(resultado)
-            st.session_state.csvs_zip_atual = zip_bytes
         nome_zip = f"conciliacao_{resultado.data_referencia.strftime('%Y%m%d')}_csvs.zip"
-        st.download_button(
-            "⬇️ CSVs (zip)",
-            data=zip_bytes,
-            file_name=nome_zip,
-            mime="application/zip",
-            type="primary",
-            use_container_width=True,
-        )
+        if st.session_state.get("csvs_zip_atual"):
+            st.download_button(
+                "⬇️ CSVs (zip)",
+                data=st.session_state.csvs_zip_atual,
+                file_name=nome_zip,
+                mime="application/zip",
+                type="primary",
+                use_container_width=True,
+            )
+        elif st.button("⬇️ Gerar CSVs (zip)", type="primary", use_container_width=True,
+                       key="btn_gerar_csvs"):
+            with st.spinner("Gerando CSVs…"):
+                st.session_state.csvs_zip_atual = gerar_csvs_zip(resultado)
+            st.rerun()
 
     st.divider()
 
