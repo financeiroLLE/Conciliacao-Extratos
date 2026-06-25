@@ -8,6 +8,8 @@ e abas internas por status / subabas por tipo.
 from __future__ import annotations
 
 import base64
+import io
+import re
 from datetime import date, datetime
 from pathlib import Path
 
@@ -64,6 +66,88 @@ def _logo_data_uri() -> str:
             b64 = base64.b64encode(arq.read_bytes()).decode("ascii")
             return f"data:image/png;base64,{b64}"
     return ""
+
+
+# ============================================================
+# v5.35: Identificador da conta a partir do Sankhya
+# ------------------------------------------------------------
+# O match banco × Sankhya casa pela STRING exata do nome da conta. Para a
+# usuária não precisar digitar (e errar espaço/underline/maiúscula), lemos os
+# nomes de conta de dentro do próprio Sankhya e oferecemos numa lista — assim a
+# string é sempre idêntica à que o matcher usa. A pré-seleção usa o nome do
+# arquivo/banco só para já marcar o item certo; quem casa é o nome do Sankhya.
+# ============================================================
+_OPCAO_DIGITAR = "✏️  Digitar outro nome…"
+
+
+def _norm_conta(s: str) -> str:
+    """Normaliza nome de conta para comparar (espaço/underline/maiúscula iguais)."""
+    s = str(s).lower().strip()
+    s = re.sub(r"[_\-./]+", " ", s)
+    s = re.sub(r"\s+", " ", s)
+    return s
+
+
+def _melhor_match_conta(candidato: str, opcoes: list[str]) -> int | None:
+    """Índice da conta do Sankhya que melhor casa com o nome do arquivo/banco.
+
+    Retorna None quando não há um match claro (uma conta nova, p.ex.) — aí a UI
+    pré-seleciona 'Digitar outro nome…'.
+    """
+    nc = _norm_conta(candidato)
+    if not nc:
+        return None
+    for i, o in enumerate(opcoes):
+        if _norm_conta(o) == nc:
+            return i
+    contidos = [
+        i for i, o in enumerate(opcoes)
+        if nc in _norm_conta(o) or _norm_conta(o) in nc
+    ]
+    if len(contidos) == 1:
+        return contidos[0]
+    return None
+
+
+@st.cache_data(show_spinner=False)
+def _contas_no_sankhya(payload: tuple, coluna_conta: str) -> list[str]:
+    """Nomes de conta presentes no(s) relatório(s) do Sankhya.
+
+    `payload` é uma tupla de (nome_arquivo, bytes) — hashável, então o resultado
+    fica em cache e o Sankhya (que pode ter 69k linhas) só é lido uma vez por
+    arquivo. As strings retornadas são IDÊNTICAS às que o pipeline usa na conta.
+    """
+    nomes: set[str] = set()
+    for _nome_arq, conteudo in payload:
+        try:
+            df = carregar_relatorio_sistema(
+                io.BytesIO(conteudo), coluna_conta=coluna_conta or None
+            )
+            nomes.update(
+                c for c in df["conta"].astype(str).unique() if c and c != "—"
+            )
+        except Exception:
+            continue
+    return sorted(nomes)
+
+
+def _ler_contas_sankhya_da_sessao() -> list[str]:
+    """Lê os nomes de conta do Sankhya já enviado (via session_state).
+
+    A coluna 1 (banco) é renderizada ANTES da coluna 2 (Sankhya) no mesmo run,
+    então pegamos o arquivo do Sankhya do run anterior pelo session_state.
+    """
+    arquivos = st.session_state.get("sistema") or []
+    if arquivos and not isinstance(arquivos, list):
+        arquivos = [arquivos]
+    if not arquivos:
+        return []
+    coluna = st.session_state.get("coluna_conta_sistema", "") or ""
+    try:
+        payload = tuple((f.name, f.getvalue()) for f in arquivos)
+    except Exception:
+        return []
+    return _contas_no_sankhya(payload, coluna)
 
 
 # ============================================================
@@ -2592,29 +2676,88 @@ def tela_upload():
             if arquivo_banco is not None:
                 nome_default = arquivo_banco.name.rsplit(".", 1)[0].strip()
 
-            nome_conta = st.text_input(
-                "Extrato Bancário (identificador da conta)",
-                value=nome_default,
-                placeholder="ex: Bradesco-CC-12345",
-                key="conta_single",
-                help="Rótulo único da conta. Mínimo 3 caracteres. Auto-preenchido com o nome do arquivo.",
-            )
+            # v5.35: se o Sankhya já foi enviado, oferece os nomes de conta dele
+            # numa lista (string idêntica à que o matcher usa), em vez de um campo
+            # de texto onde o nome entra com underline/espaço/maiúscula errados.
+            contas_sankhya = _ler_contas_sankhya_da_sessao()
+            if contas_sankhya:
+                opcoes = contas_sankhya + [_OPCAO_DIGITAR]
+                idx_match = _melhor_match_conta(nome_default, contas_sankhya)
+                idx_default = idx_match if idx_match is not None else len(opcoes) - 1
+                escolha = st.selectbox(
+                    "Extrato Bancário (identificador da conta)",
+                    opcoes,
+                    index=idx_default,
+                    key="conta_single_sel",
+                    help="Nomes lidos do Sankhya. Escolha o da conta deste extrato "
+                    "— assim casa sem erro de digitação.",
+                )
+                if escolha == _OPCAO_DIGITAR:
+                    nome_conta = st.text_input(
+                        "Nome da conta (nova — ainda não está no Sankhya)",
+                        value=nome_default,
+                        key="conta_single_novo",
+                    ).strip()
+                else:
+                    nome_conta = escolha
+            else:
+                st.caption(
+                    "Suba o relatório do Sankhya ao lado para escolher a conta "
+                    "numa lista. Por enquanto, digite o identificador."
+                )
+                nome_conta = st.text_input(
+                    "Extrato Bancário (identificador da conta)",
+                    value=nome_default,
+                    placeholder="ex: Bradesco-CC-12345",
+                    key="conta_single",
+                    help="Rótulo único da conta. Mínimo 3 caracteres.",
+                ).strip()
             arquivos_banco = (
-                [(nome_conta.strip(), arquivo_banco)]
-                if arquivo_banco and nome_conta.strip()
+                [(nome_conta, arquivo_banco)]
+                if arquivo_banco and nome_conta
                 else []
             )
         else:
-            st.caption("Use o nome do arquivo como identificador da conta (ex: `Bradesco-12345.xlsx`).")
+            contas_sankhya = _ler_contas_sankhya_da_sessao()
             arquivos_multi = st.file_uploader(
                 "Arraste os extratos (um por conta)",
                 type=["xlsx", "xls", "pdf"],
                 accept_multiple_files=True,
                 key="banco_multi",
             )
-            arquivos_banco = [
-                (f.name.rsplit(".", 1)[0], f) for f in (arquivos_multi or [])
-            ]
+            if not (arquivos_multi or []):
+                st.caption(
+                    "Suba os extratos e o Sankhya — depois escolha a conta de "
+                    "cada arquivo numa lista."
+                )
+            arquivos_banco = []
+            for f in (arquivos_multi or []):
+                base = f.name.rsplit(".", 1)[0].strip()
+                if contas_sankhya:
+                    opcoes = contas_sankhya + [_OPCAO_DIGITAR]
+                    idx_match = _melhor_match_conta(base, contas_sankhya)
+                    idx_default = (
+                        idx_match if idx_match is not None else len(opcoes) - 1
+                    )
+                    escolha = st.selectbox(
+                        f"Conta de “{f.name}”",
+                        opcoes,
+                        index=idx_default,
+                        key=f"conta_multi_sel_{f.name}",
+                        help="Nome da conta como aparece no Sankhya.",
+                    )
+                    if escolha == _OPCAO_DIGITAR:
+                        nome_arq = st.text_input(
+                            f"Nome da conta (nova) para “{f.name}”",
+                            value=base,
+                            key=f"conta_multi_novo_{f.name}",
+                        ).strip()
+                    else:
+                        nome_arq = escolha
+                else:
+                    nome_arq = base
+                if nome_arq:
+                    arquivos_banco.append((nome_arq, f))
 
     with col2:
         section_title("EXTRATO SANKHYA CONCILIAÇÃO")
@@ -2630,6 +2773,7 @@ def tela_upload():
             "Extrato Sankhya Conciliação — coluna da conta",
             value="",
             placeholder="(deixe vazio para auto-detectar)",
+            key="coluna_conta_sistema",
             help="Nome exato da coluna do ERP que identifica a conta. Se vazio, tenta detectar.",
         )
 
@@ -2653,6 +2797,32 @@ def tela_upload():
     pode_executar = (
         bool(arquivos_banco) and bool(arquivo_sistema) and not erros_validacao
     )
+
+    # v5.35: rede de segurança — nome do banco quase-igual a uma conta do Sankhya
+    # (só muda espaço/underline/maiúscula). Avisa ANTES de conciliar e corrige
+    # num clique, em vez de separar calado em duas contas.
+    if contas_sankhya and arquivos_banco:
+        norm_sankhya = {_norm_conta(c): c for c in contas_sankhya}
+        for _nome, _f in arquivos_banco:
+            if _nome in contas_sankhya:
+                continue
+            _alvo = norm_sankhya.get(_norm_conta(_nome))
+            if _alvo and _alvo != _nome:
+                _c1, _c2 = st.columns([4, 1])
+                with _c1:
+                    st.warning(
+                        f"⚠️ “{_nome}” parece ser a mesma conta que "
+                        f"**{_alvo}** no Sankhya (só muda espaço, underline ou "
+                        f"maiúscula). Com nomes diferentes elas viram duas contas "
+                        f"e não conciliam."
+                    )
+                with _c2:
+                    if st.button(f"Usar “{_alvo}”", key=f"fix_conta_{_f.name}"):
+                        if modo == "1 conta por vez":
+                            st.session_state["conta_single_sel"] = _alvo
+                        else:
+                            st.session_state[f"conta_multi_sel_{_f.name}"] = _alvo
+                        st.rerun()
 
     # v5.8: mensagem espec\u00edfica em vez do gen\u00e9rico "Aguardando upload"
     if not pode_executar:
