@@ -3237,24 +3237,36 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
                     "tarifa, ou item a conciliar. O app **não crava** a causa automaticamente."
                 )
 
-    # Download específico desse banco
-    try:
-        # v3.10: cache do Excel da conta no session_state
-        excel_conta_key = f"xlsx_conta_{st.session_state.get('id_execucao_atual', 'novo')}_{conta}"
-        xlsx_banco = st.session_state.get(excel_conta_key)
-        if xlsx_banco is None:
-            xlsx_banco = gerar_relatorio_excel_de_conta(resultado, conta)
-            st.session_state[excel_conta_key] = xlsx_banco
+    # Download específico desse banco — v5.35: SOB DEMANDA.
+    # Antes, o Excel da conta era gerado ao ABRIR o detalhamento; numa conta de
+    # alto volume (ex.: Santander, 55k linhas) isso levava ~3,4 min e a tela
+    # parecia travada ("Ver detalhamento" não respondia). Agora só gera ao clicar
+    # — o detalhamento abre na hora, igual ao Excel global.
+    excel_conta_key = (
+        f"xlsx_conta_{st.session_state.get('id_execucao_atual', 'novo')}_{conta}"
+    )
+    nome_xls_conta = (
+        f"conciliacao_{conta}_{resultado.data_referencia.strftime('%Y%m%d')}.xlsx"
+    )
+    if st.session_state.get(excel_conta_key):
         st.download_button(
             f"⬇️ Baixar relatório de {conta}",
-            data=xlsx_banco,
-            file_name=f"conciliacao_{conta}_{resultado.data_referencia.strftime('%Y%m%d')}.xlsx",
+            data=st.session_state[excel_conta_key],
+            file_name=nome_xls_conta,
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             type="primary",
             use_container_width=True,
         )
-    except Exception as e:
-        st.warning(f"Não foi possível gerar o Excel deste banco: {e}")
+    elif st.button(f"⬇️ Gerar Excel de {conta}", type="primary",
+                   use_container_width=True, key=f"btn_xls_conta_{conta}"):
+        with st.spinner("Gerando Excel desta conta… em volume grande pode levar alguns minutos."):
+            try:
+                st.session_state[excel_conta_key] = gerar_relatorio_excel_de_conta(
+                    resultado, conta
+                )
+            except Exception as e:
+                st.warning(f"Não foi possível gerar o Excel deste banco: {e}")
+        st.rerun()
 
     st.divider()
 
@@ -3419,24 +3431,40 @@ def _exibir_df(df: pd.DataFrame, nome_arquivo: str, msg_vazio: str = "Nenhum reg
         return
     df_show = df.drop(columns=[c for c in df.columns if c.startswith("_")], errors="ignore")
     st.dataframe(df_show, use_container_width=True, height=420)
+    n_linhas = len(df_show)
     col_xls, col_csv = st.columns(2)
     with col_xls:
-        buf_xls = _df_to_xlsx_bytes(df_show, nome_arquivo)
-        st.download_button(
-            f"⬇️ Baixar Excel ({len(df_show)} linhas)",
-            data=buf_xls,
-            file_name=f"{nome_arquivo}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        # v5.35: Excel da tabela SOB DEMANDA. Em abas grandes (dezenas de milhares
+        # de linhas) montar o xlsx a cada render deixava o detalhamento lento — e
+        # st.tabs roda o código de TODAS as abas a cada clique. O CSV continua na
+        # hora (é instantâneo, vetorizado).
+        xls_key = f"tblxls_{nome_arquivo}_{n_linhas}"
+        if st.session_state.get(xls_key):
+            st.download_button(
+                f"⬇️ Baixar Excel ({n_linhas} linhas)",
+                data=st.session_state[xls_key],
+                file_name=f"{nome_arquivo}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True,
+                key=f"dl_{xls_key}",
+            )
+        elif st.button(
+            f"⬇️ Gerar Excel ({n_linhas} linhas)",
             use_container_width=True,
-        )
+            key=f"gen_{xls_key}",
+        ):
+            with st.spinner("Gerando Excel…"):
+                st.session_state[xls_key] = _df_to_xlsx_bytes(df_show, nome_arquivo)
+            st.rerun()
     with col_csv:
         csv_str = df_show.to_csv(index=False, sep=";", encoding="utf-8-sig", decimal=",")
         st.download_button(
-            f"⬇️ Baixar CSV ({len(df_show)} linhas)",
+            f"⬇️ Baixar CSV ({n_linhas} linhas)",
             data=csv_str.encode("utf-8-sig"),
             file_name=f"{nome_arquivo}.csv",
             mime="text/csv",
             use_container_width=True,
+            key=f"dlcsv_{nome_arquivo}_{n_linhas}",
         )
 
 
