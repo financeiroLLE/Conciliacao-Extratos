@@ -5,3 +5,4 @@ xlrd>=2.0.1
 rapidfuzz>=3.6.0
 pyarrow>=15.0.0
 pdfplumber>=0.11.0
+pypdf>=4.0.0
