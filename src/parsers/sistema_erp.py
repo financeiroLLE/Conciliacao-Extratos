@@ -112,6 +112,9 @@ def carregar_relatorio_sistema(
     mapa: dict[str, str] = {}
     aliases = {
         "data": ["dtlancamento", "datalancamento", "data"],
+        # v5.32: data de conciliação (Dh.Conciliação) — usada como data de match,
+        # pois recebimentos de fim de semana são conciliados na data do banco.
+        "data_conciliacao": ["dhconciliacao", "dataconciliacao", "dhconcil"],
         "valor": ["vlrlancamento", "valorlancamento", "valor"],
         # v5.19: NÃO usar alias "tipo" — a coluna "Tipo" do Sankhya é "Financeiro",
         # não Receita/Despesa.
@@ -171,6 +174,13 @@ def carregar_relatorio_sistema(
     # CRÍTICO: parser de data robusto (trata ISO e BR linha a linha — ver bugfix
     # em extrato_banco._parse_data_robusto).
     out["data"] = _parse_data_robusto(df[mapa["data"]])
+    # v5.32: quando há Dh.Conciliação, ela é a data correta para o match
+    # (o banco registra na data do recebimento; o ERP pode lançar em outra data,
+    # ex.: recebimento de fim de semana conciliado na segunda). Cai para a
+    # Dt Lançamento apenas nas linhas em que a Dh.Conciliação está vazia.
+    if "data_conciliacao" in mapa:
+        _dt_concil = _parse_data_robusto(df[mapa["data_conciliacao"]])
+        out["data"] = _dt_concil.fillna(out["data"])
     out["historico"] = (
         df[col_memo].fillna("").astype(str).str.strip()
         if col_memo is not None else ""
