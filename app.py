@@ -3253,17 +3253,15 @@ def render_tab_pendentes(resultado: ResultadoConciliacao, conta: str):
         resultado.pendentes_banco[resultado.pendentes_banco["conta"] == conta].copy()
         if not resultado.pendentes_banco.empty else pd.DataFrame()
     )
-    ps = (
-        resultado.pendentes_sistema[resultado.pendentes_sistema["conta"] == conta].copy()
-        if not resultado.pendentes_sistema.empty else pd.DataFrame()
-    )
+    # v5.32: esta aba ("Sem baixa no Sankhya") mostra SÓ o lado do banco — movimento
+    # que entrou no banco e ainda não tem baixa no Sankhya (pendentes_banco). O lado
+    # oposto (Sankhya sem confirmação = pendentes_sistema) já aparece na aba
+    # "Divergências (Sankhya × Banco)"; mostrá-lo aqui também duplicava a mesma linha.
     if not pb.empty:
-        pb["origem"] = "Banco (falta lançar no Sistema)"
-    if not ps.empty:
-        ps["origem"] = "Sistema (falta no Banco)"
-    df = pd.concat([pb, ps], ignore_index=True)
+        pb["origem"] = "Banco (falta baixar no Sankhya)"
+    df = pb
     if df.empty:
-        st.success("🎉 Não há pendências nesta conta.")
+        st.success("🎉 Nada sem baixa no Sankhya nesta conta.")
         return
 
     # v5.11: editor inline pra trocar o Tipo de uma linha pendente
