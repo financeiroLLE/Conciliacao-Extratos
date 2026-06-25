@@ -2344,31 +2344,31 @@ def render_painel_bancos(resultado: ResultadoConciliacao, mostrar_botao: bool = 
         reverse=True,
     )
 
-    cols = st.columns(min(len(contas_ordenadas), 4))
-    for i, conta in enumerate(contas_ordenadas):
-        col = cols[i % len(cols)]
+    def _metricas(conta: str):
         k = kpis_pb[conta]
-        mov_conta = float(k.get("total_movimentado_banco", 0.0))
-        falta_conta = float(k.get("falta_conciliar", 0.0))
-        pct = 100.0 * (mov_conta - falta_conta) / mov_conta if mov_conta > 0 else 0.0
+        mov = float(k.get("total_movimentado_banco", 0.0))
+        falta = float(k.get("falta_conciliar", 0.0))
+        explic = 100.0 * (mov - falta) / mov if mov > 0 else 0.0
+        tot_sis = float(k.get("total_extrato_sistema", 0.0))
+        div = float(k.get("divergencia_sankhya_banco", 0.0))
+        confirm = 100.0 * (tot_sis - div) / tot_sis if tot_sis > 0 else 0.0
         pct_pares = float(k.get("percentual_conciliado", 0.0))
-        qtd_itens, valor_resolver = _itens_a_resolver(conta, k)
+        qtd, valor = _itens_a_resolver(conta, k)
+        return mov, explic, confirm, pct_pares, qtd, valor
 
-        # Selo de alerta (badge) — a cor vive AQUI, não no card.
+    # ---- UMA conta: mantém o card de hoje (a tabela é só pra múltiplas contas) ----
+    if len(contas_ordenadas) == 1:
+        conta = contas_ordenadas[0]
+        mov_conta, pct, _confirm, pct_pares, qtd_itens, valor_resolver = _metricas(conta)
         if qtd_itens == 0:
-            badge_classe = "verde"
-            badge_texto = "ok"
+            badge_classe, badge_texto = "verde", "ok"
         elif qtd_itens <= 2:
             badge_classe = "amarelo"
             badge_texto = f"{qtd_itens} item" if qtd_itens == 1 else f"{qtd_itens} itens"
         else:
-            badge_classe = "vermelho"
-            badge_texto = f"{qtd_itens} itens"
-
-        # Barra: verde só quando a conta está limpa; neutra quando há alerta.
+            badge_classe, badge_texto = "vermelho", f"{qtd_itens} itens"
         cor_barra = "#46d18a" if qtd_itens == 0 else "#9fb0d0"
         pct_barra = max(0.0, min(100.0, float(pct)))
-
         if qtd_itens == 0:
             linha_resolver = '<div class="lle-kpi-suffix">nada pendente</div>'
         else:
@@ -2377,32 +2377,87 @@ def render_painel_bancos(resultado: ResultadoConciliacao, mostrar_botao: bool = 
                 f'<div class="lle-kpi-suffix" style="color:{cor_txt};">'
                 f"{fmt_brl(valor_resolver)} a resolver</div>"
             )
-
-        with col:
-            st.html(
-                f"""
-                <div class="lle-kpi">
-                    <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px;">
-                        <div class="lle-kpi-label">{conta}</div>
-                        <span class="lle-badge {badge_classe}">{badge_texto}</span>
-                    </div>
-                    <div class="lle-kpi-value" style="font-size:22px;">{fmt_pct(pct)}</div>
-                    <div style="height:6px; background:#1a2a52; border-radius:999px; overflow:hidden; margin:8px 0;">
-                        <div style="width:{pct_barra}%; height:100%; background:{cor_barra};"></div>
-                    </div>
-                    <div class="lle-kpi-suffix">mov. {fmt_brl(k.get("total_movimentado_banco", 0.0))}</div>
-                    <div class="lle-kpi-suffix" style="opacity:.7;">{fmt_pct(pct_pares)} em pares</div>
-                    {linha_resolver}
+        st.html(
+            f"""
+            <div class="lle-kpi">
+                <div style="display:flex; justify-content:space-between; align-items:flex-start; gap:8px;">
+                    <div class="lle-kpi-label">{conta}</div>
+                    <span class="lle-badge {badge_classe}">{badge_texto}</span>
                 </div>
-                """
+                <div class="lle-kpi-value" style="font-size:22px;">{fmt_pct(pct)}</div>
+                <div style="height:6px; background:#1a2a52; border-radius:999px; overflow:hidden; margin:8px 0;">
+                    <div style="width:{pct_barra}%; height:100%; background:{cor_barra};"></div>
+                </div>
+                <div class="lle-kpi-suffix">mov. {fmt_brl(mov_conta)}</div>
+                <div class="lle-kpi-suffix" style="opacity:.7;">{fmt_pct(pct_pares)} em pares</div>
+                {linha_resolver}
+            </div>
+            """
+        )
+        if mostrar_botao:
+            st.button(
+                "Ver detalhamento →", key=f"banco_btn_{conta}",
+                on_click=selecionar_banco, args=(conta,), use_container_width=True,
             )
-            if mostrar_botao:
+        return
+
+    # ---- VÁRIAS contas: tabela do gestor (sem média global enganosa) ----
+    linhas = []
+    total_itens = 0
+    total_resolver = 0.0
+    fechadas = 0
+    for conta in contas_ordenadas:
+        _mov, explic, confirm, _pp, qtd, valor = _metricas(conta)
+        total_itens += qtd
+        total_resolver += valor
+        if qtd == 0:
+            fechadas += 1
+            dot = "#46d18a"
+            itens_cell = '<span style="background:#0F8C3B; color:#fff; font-size:11px; padding:3px 9px; border-radius:20px;">ok</span>'
+            resolver_cell = '<span style="color:#46d18a;">—</span>'
+        else:
+            dot = "#FAC318" if qtd <= 2 else "#D63031"
+            cor_badge = "#9a7b12" if qtd <= 2 else "#D63031"
+            itens_cell = f'<span style="background:{cor_badge}; color:#fff; font-size:11px; padding:3px 9px; border-radius:20px;">{qtd}</span>'
+            resolver_cell = f'<span style="color:#ff8a8a; font-weight:500;">{fmt_brl(valor)}</span>'
+        linhas.append(
+            f'<tr style="border-top:1px solid #1c2f57;">'
+            f'<td style="padding:12px 8px 12px 0;"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:{dot};margin-right:8px;"></span>{conta}</td>'
+            f'<td style="padding:12px 8px; text-align:center;">{fmt_pct(explic)}</td>'
+            f'<td style="padding:12px 8px; text-align:center;">{fmt_pct(confirm)}</td>'
+            f'<td style="padding:12px 8px; text-align:center;">{itens_cell}</td>'
+            f'<td style="padding:12px 0 12px 8px; text-align:right;">{resolver_cell}</td>'
+            f'</tr>'
+        )
+    grupo = (
+        f'<tr style="border-top:2px solid #2a4170; background:#0e1f49;">'
+        f'<td style="padding:12px 8px 12px 12px; color:#f4c430; font-weight:500;">GRUPO &middot; {fechadas} de {len(contas_ordenadas)} fechadas</td>'
+        f'<td style="padding:12px 8px; text-align:center; color:#6f86ad;">&mdash;</td>'
+        f'<td style="padding:12px 8px; text-align:center; color:#6f86ad;">&mdash;</td>'
+        f'<td style="padding:12px 8px; text-align:center; color:#fff; font-weight:500;">{total_itens}</td>'
+        f'<td style="padding:12px 12px 12px 8px; text-align:right; color:#ff8a8a; font-weight:500;">{fmt_brl(total_resolver)}</td>'
+        f'</tr>'
+    )
+    st.html(
+        '<table style="width:100%; border-collapse:collapse; font-size:13px; color:#dfe8fb;">'
+        '<thead><tr style="color:#8BA3C7; font-size:11px; text-align:left;">'
+        '<th style="padding:0 8px 8px 0; font-weight:400;">CONTA</th>'
+        '<th style="padding:0 8px 8px; font-weight:400; text-align:center;">EXPLICADO</th>'
+        '<th style="padding:0 8px 8px; font-weight:400; text-align:center;">CONFIRMADO</th>'
+        '<th style="padding:0 8px 8px; font-weight:400; text-align:center;">ITENS</th>'
+        '<th style="padding:0 0 8px 8px; font-weight:400; text-align:right;">A RESOLVER</th>'
+        '</tr></thead><tbody>'
+        + "".join(linhas) + grupo +
+        '</tbody></table>'
+        '<div style="color:#6f86ad; font-size:11px; margin-top:10px;">As % do grupo ficam vazias de propósito — média de contas diferentes engana. Use os botões para o detalhamento.</div>'
+    )
+    if mostrar_botao:
+        cols = st.columns(len(contas_ordenadas))
+        for i, conta in enumerate(contas_ordenadas):
+            with cols[i]:
                 st.button(
-                    "Ver detalhamento →",
-                    key=f"banco_btn_{conta}",
-                    on_click=selecionar_banco,
-                    args=(conta,),
-                    use_container_width=True,
+                    f"Ver {conta} →", key=f"banco_btn_{conta}",
+                    on_click=selecionar_banco, args=(conta,), use_container_width=True,
                 )
 
 
