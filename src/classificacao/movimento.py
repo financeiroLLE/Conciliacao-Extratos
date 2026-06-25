@@ -50,6 +50,8 @@ RE_SALDO = re.compile(
 RE_APLICACAO = re.compile(
     r"\b("
     r"APLIC(A[CÇ][AÃ]O)?\.?\s+AUT|"  # APLIC AUT, APLIC. AUT (v5.26), APLICAÇÃO AUTOM
+    r"APLIC\.?\s*FINANC|"            # APLIC.FINANC (Sicredi)
+    r"APLIC\.?\s*INVEST|"           # APLIC.INVEST FACIL (Bradesco)
     r"APLICA[CÇ][AÃ]O|"
     r"INVESTIMENTO|"
     r"COMPRA\s+(CDB|RDB|LCI|LCA|TESOURO)|"
@@ -64,6 +66,7 @@ RE_RESGATE = re.compile(
     r"\b("
     r"RESGATE|"
     r"RESG\.?\s*AUT|"      # RESG. AUT, RESG AUT, RESGATE AUT
+    r"RESG\.?\s*APLIC|"    # RESG.APLIC.FIN (Sicredi)
     r"RES\s+APLIC|"        # RES APLIC AUT (do extrato Itaú)
     r"VENDA\s+(CDB|RDB|LCI|LCA|TESOURO)|"
     r"VENDA\s+T[IÍ]TULO|"
@@ -77,6 +80,7 @@ RE_RESGATE = re.compile(
 RE_RENDIMENTO = re.compile(
     r"\b("
     r"REND\s+PAGO|"
+    r"RENTAB\.?\s*INVEST|"   # RENTAB.INVEST FACILCRED (Bradesco) — rendimento creditado
     r"RENDIMENTO\s+PAGO|"
     r"CR[EÉ]DITO\s+RENDIMENTO|"
     r"JUROS\s+(CRED|RECEB)"
