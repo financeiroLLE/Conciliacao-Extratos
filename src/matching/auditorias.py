@@ -105,34 +105,34 @@ def detectar_excesso_sankhya_pos_match(
     if juntos.empty:
         return pd.DataFrame()
 
-    resultados = []
-    for _, grupo in juntos.iterrows():
-        cond = (
-            (s["conta"] == grupo["conta"])
-            & (s["_cent"] == grupo["_cent"])
-            & (s["data"] == grupo["data"])
-        )
-        linhas = s[cond].head(int(grupo["excedente"]))
-        for _, linha in linhas.iterrows():
-            resultados.append({
-                "data": linha["data"],
-                "conta": linha["conta"],
-                "historico": linha["historico"],
-                "documento": linha.get("documento", ""),
-                "valor": linha["valor"],
-                "qtd_sankhya_pendente": int(grupo["qtd_sistema"]),
-                "qtd_banco_pendente": int(grupo["qtd_banco"]),
-                "excedente_total": int(grupo["excedente"]),
-                "motivo": (
-                    f"Sankhya tem {int(grupo['qtd_sistema'])} pendência(s) "
-                    f"(mesma data+valor+conta); banco tem apenas "
-                    f"{int(grupo['qtd_banco'])} pendência(s)"
-                ),
-            })
-
-    if not resultados:
+    # v5.33: seleção vetorizada das linhas excedentes (substitui o laço por grupo +
+    # filtro do s inteiro). Pega, em cada chave com excedente, as primeiras
+    # `excedente` linhas do Sankhya na ordem original — resultado idêntico ao laço.
+    s = s.reset_index(drop=True)
+    s["_ord"] = range(len(s))
+    exc = juntos[["conta", "_cent", "data", "excedente", "qtd_sistema", "qtd_banco"]]
+    m = s.merge(exc, on=["conta", "_cent", "data"], how="inner").sort_values("_ord")
+    m["_rank"] = m.groupby(["conta", "_cent", "data"]).cumcount()
+    sel = m[m["_rank"] < m["excedente"]]
+    if sel.empty:
         return pd.DataFrame()
-    return pd.DataFrame(resultados).reset_index(drop=True)
+
+    out = pd.DataFrame({
+        "data": sel["data"].values,
+        "conta": sel["conta"].values,
+        "historico": sel["historico"].values,
+        "documento": sel["documento"].values if "documento" in sel.columns else "",
+        "valor": sel["valor"].values,
+        "qtd_sankhya_pendente": sel["qtd_sistema"].astype(int).values,
+        "qtd_banco_pendente": sel["qtd_banco"].astype(int).values,
+        "excedente_total": sel["excedente"].astype(int).values,
+    })
+    out["motivo"] = [
+        f"Sankhya tem {qs} pendência(s) (mesma data+valor+conta); "
+        f"banco tem apenas {qb} pendência(s)"
+        for qs, qb in zip(out["qtd_sankhya_pendente"], out["qtd_banco_pendente"])
+    ]
+    return out.reset_index(drop=True)
 
 
 def detectar_divergencia_valor(
