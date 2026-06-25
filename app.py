@@ -2973,13 +2973,21 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
     _pares = float(k["percentual_conciliado"])
     _regra = max(0.0, _explic - _pares)
     _diff = abs(float(k["total_extrato_sistema"]) - _mov_c)
+    _tem_cartao = _regra > 0.01  # só há "cartão (TOP 1722)" quando a regra explicou algo
     with st.expander("Entenda os cards acima"):
-        st.markdown(
-            "**% conferido em pares (" + fmt_pct(_pares) + "):** casou em pares diretos (1 a 1). "
-            "Os " + fmt_pct(_regra) + " restantes são o **cartão**, que casa pela soma total "
-            "(TOP 1722) — também explicado. Somando, o banco está **" + fmt_pct(_explic)
-            + " explicado** (é o número que aparece no resumo)."
-        )
+        if _tem_cartao:
+            st.markdown(
+                "**% conferido em pares (" + fmt_pct(_pares) + "):** casou em pares diretos (1 a 1). "
+                "Os " + fmt_pct(_regra) + " restantes são o **cartão**, que casa pela soma total "
+                "(TOP 1722) — também explicado. Somando, o banco está **" + fmt_pct(_explic)
+                + " explicado** (é o número que aparece no resumo)."
+            )
+        else:
+            st.markdown(
+                "**% conferido em pares (" + fmt_pct(_pares) + "):** casou em pares diretos (1 a 1). "
+                "Somando com os agrupamentos do período, o banco está **" + fmt_pct(_explic)
+                + " explicado** (é o número que aparece no resumo)."
+            )
         if not resultado.aplicacoes_resgates_da_conta(conta).empty:
             st.markdown(
                 "**Investimentos no período:** é o líquido entre o que foi aplicado e o que foi "
@@ -2987,11 +2995,18 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
                 "— esse dinheiro ficou guardado em aplicação. **Não é despesa nem prejuízo.**"
             )
         if _diff > 0.01:
-            st.markdown(
-                "**Diferença entre Banco e Sankhya (" + fmt_brl(_diff) + "):** normalmente é a "
-                "taxa de cartão registrada **duas vezes** no Sankhya (uma embutida no valor bruto, "
-                "outra como linha de despesa). **Não é erro de conciliação.**"
-            )
+            if _tem_cartao:
+                st.markdown(
+                    "**Diferença entre Banco e Sankhya (" + fmt_brl(_diff) + "):** normalmente é a "
+                    "taxa de cartão registrada **duas vezes** no Sankhya (uma embutida no valor bruto, "
+                    "outra como linha de despesa). **Não é erro de conciliação.**"
+                )
+            else:
+                st.markdown(
+                    "**Diferença entre Banco e Sankhya (" + fmt_brl(_diff) + "):** essa diferença "
+                    "ainda **precisa ser analisada** — pode ser lançamento duplicado no Sankhya, "
+                    "tarifa, ou item a conciliar. O app **não crava** a causa automaticamente."
+                )
 
     # Download específico desse banco
     try:
@@ -3048,7 +3063,7 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
         tabs_nomes.append("💰 Aplicações e Resgates")
     # v5.0: abas novas
     if not estornos_anu_conta.empty:
-        tabs_nomes.append(f"♻️ Anulados por Estorno ({len(estornos_anu_conta)})")
+        tabs_nomes.append(f"♻️ Estornos · pares anulados ({len(estornos_anu_conta)})")
     if not estornos_par_conta.empty:
         tabs_nomes.append(f"⚖️ Estornos Parciais ({len(estornos_par_conta)})")
     if not top1722_grupos_conta.empty:
