@@ -209,12 +209,29 @@ def carregar_extrato_banco(
 
     Retorna DataFrame com colunas: data, historico, documento, valor, conta.
 
-    v5.30: detecta PDF (por extensão .pdf ou pelos bytes mágicos "%PDF") e
-    delega ao parser do extrato mensal Itaú. XLS/XLSX seguem o caminho normal.
+    v5.30: detecta PDF (por extensão .pdf ou pelos bytes mágicos "%PDF").
+    v5.31: detecta o BANCO pelo cabeçalho — Itaú vai pro parser dedicado;
+    Sicredi/Bradesco/Caixa (e desconhecidos) vão pro leitor genérico.
+    XLS/XLSX seguem o caminho normal.
     """
     if _eh_pdf(arquivo):
-        from .extrato_pdf_itau import carregar_extrato_pdf_itau
-        return carregar_extrato_pdf_itau(
+        from .extrato_pdf_generico import (
+            detectar_banco,
+            carregar_extrato_pdf_generico,
+            _ler_paginas,
+        )
+        paginas = _ler_paginas(arquivo)
+        try:
+            arquivo.seek(0)  # rebobina p/ o parser específico reler o stream
+        except Exception:
+            pass
+        banco = detectar_banco(paginas[0] if paginas else "")
+        if banco == "itau":
+            from .extrato_pdf_itau import carregar_extrato_pdf_itau
+            return carregar_extrato_pdf_itau(
+                arquivo, conta=conta, ano_referencia=ano_referencia
+            )
+        return carregar_extrato_pdf_generico(
             arquivo, conta=conta, ano_referencia=ano_referencia
         )
 
