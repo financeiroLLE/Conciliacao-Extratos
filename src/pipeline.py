@@ -684,6 +684,17 @@ def executar_pipeline(
             index=[i for i in res_tarifas_adq.indices_sankhya_consumidos if i < len(pend_sistema)]
         ).reset_index(drop=True)
 
+    # v5.31: resgates/aplicações/rendimentos NÃO são "banco sem explicação" —
+    # são movimento de investimento (já listados na aba Investimentos, que vem do
+    # banco completo). Removê-los do pend_banco evita inflar Falta Conciliar e
+    # Pendentes. A categoria_mov já foi classificada no início do pipeline.
+    if "categoria_mov" in pend_banco.columns:
+        pend_banco = pend_banco[
+            ~pend_banco["categoria_mov"].isin(
+                ["aplicacao", "resgate", "rendimento", "investimento_outro"]
+            )
+        ].reset_index(drop=True)
+
     divergencias = detectar_divergencia_valor(pend_banco, pend_sistema)
     duplicidades = detectar_duplicidades(banco_mov, sistema_mov)
 
