@@ -2348,7 +2348,10 @@ def render_painel_bancos(resultado: ResultadoConciliacao, mostrar_botao: bool = 
     for i, conta in enumerate(contas_ordenadas):
         col = cols[i % len(cols)]
         k = kpis_pb[conta]
-        pct = k["percentual_conciliado"]
+        mov_conta = float(k.get("total_movimentado_banco", 0.0))
+        falta_conta = float(k.get("falta_conciliar", 0.0))
+        pct = 100.0 * (mov_conta - falta_conta) / mov_conta if mov_conta > 0 else 0.0
+        pct_pares = float(k.get("percentual_conciliado", 0.0))
         qtd_itens, valor_resolver = _itens_a_resolver(conta, k)
 
         # Selo de alerta (badge) — a cor vive AQUI, não no card.
@@ -2388,6 +2391,7 @@ def render_painel_bancos(resultado: ResultadoConciliacao, mostrar_botao: bool = 
                         <div style="width:{pct_barra}%; height:100%; background:{cor_barra};"></div>
                     </div>
                     <div class="lle-kpi-suffix">mov. {fmt_brl(k.get("total_movimentado_banco", 0.0))}</div>
+                    <div class="lle-kpi-suffix" style="opacity:.7;">{fmt_pct(pct_pares)} em pares</div>
                     {linha_resolver}
                 </div>
                 """
@@ -2402,6 +2406,89 @@ def render_painel_bancos(resultado: ResultadoConciliacao, mostrar_botao: bool = 
                 )
 
 
+
+
+# ============================================================
+# Resumo com termômetros (% explicado) — v7
+# ============================================================
+def render_resumo_termometros(resultado: ResultadoConciliacao, kpis: dict):
+    """v7: cabeçalho do resumo com dois termômetros.
+
+    % explicado = (movimentado - falta conciliar) / movimentado  → conta o cartão
+    (explicado pelo agrupamento TOP 1722), não só os pares 1-a-1. Mostra a
+    composição (pares × regra de cartão) pra continuar auditável.
+    """
+    total_banco = float(kpis.get("total_movimentado_banco", 0.0))
+    falta = float(kpis.get("falta_conciliar", 0.0))
+    total_sis = float(kpis.get("total_extrato_sistema", 0.0))
+    diverg = float(kpis.get("divergencia_sankhya_banco", 0.0))
+
+    explicado = 100.0 * (total_banco - falta) / total_banco if total_banco > 0 else 0.0
+    pares = float(kpis.get("percentual_conciliado", 0.0))
+    regra = max(0.0, explicado - pares)
+    sankhya_conf = 100.0 * (total_sis - diverg) / total_sis if total_sis > 0 else 0.0
+
+    qtd_div = int(kpis.get("qtd_divergencia_sankhya_banco", 0))
+    qtd_pend = int(kpis.get("qtd_pendentes_banco", 0))
+    precisa = qtd_div + qtd_pend
+
+    cor_banco = "#0F8C3B" if explicado >= 99.95 else ("#FAC318" if explicado >= 80 else "#D63031")
+    cor_sis = "#0F8C3B" if sankhya_conf >= 99.95 else ("#FAC318" if sankhya_conf >= 80 else "#D63031")
+
+    section_title("RESUMO EXECUTIVO")
+
+    # Selo de veredito
+    if precisa == 0 and explicado >= 99.95 and sankhya_conf >= 99.95:
+        st.html(
+            '<div style="background:rgba(15,140,59,0.12); border:1px solid rgba(15,140,59,0.5); '
+            'border-radius:12px; padding:12px 16px; margin-bottom:16px;">'
+            '<span style="background:#0F8C3B; color:#fff; font-size:13px; font-weight:600; '
+            'padding:4px 12px; border-radius:999px;">&#10003; Conciliação fechada</span>'
+            '<span style="color:#7DD87D; font-size:13px; margin-left:10px;">'
+            '100% do banco explicado &middot; R$ 0,00 sem explicação</span></div>'
+        )
+    else:
+        st.html(
+            '<div style="background:rgba(214,48,49,0.10); border:1px solid rgba(214,48,49,0.4); '
+            'border-radius:12px; padding:12px 16px; margin-bottom:16px;">'
+            '<span style="color:#FF8A8A; font-size:13px;">&#9888; ' + str(precisa) + ' '
+            + ("item precisa" if precisa == 1 else "itens precisam") + ' da sua análise</span></div>'
+        )
+
+    def _termo(label, pct, cor, sub):
+        return (
+            '<div class="lle-kpi">'
+            '<div class="lle-kpi-label">' + label + '</div>'
+            '<div class="lle-kpi-value" style="color:' + cor + ';">' + fmt_pct(pct) + '</div>'
+            '<div style="height:9px; background:rgba(255,255,255,0.06); border-radius:999px; '
+            'overflow:hidden; margin:10px 0 0;">'
+            '<div style="width:' + str(max(0.0, min(100.0, pct))) + '%; height:100%; background:' + cor + ';"></div></div>'
+            '<div class="lle-kpi-suffix">' + sub + '</div></div>'
+        )
+
+    sub_banco = fmt_pct(pares) + " em pares diretos &middot; " + fmt_pct(regra) + " por regra de cartão"
+    sub_sis = (str(qtd_div) + " lançamento" + ("s" if qtd_div != 1 else "") + " sem confirmação"
+               if qtd_div else "0 lançamentos sem confirmação no banco")
+    st.html(
+        '<div style="display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-bottom:14px;">'
+        + _termo("Banco explicado pelo ERP", explicado, cor_banco, sub_banco)
+        + _termo("Sankhya confirmado no banco", sankhya_conf, cor_sis, sub_sis)
+        + '</div>'
+    )
+
+    # Cards: Precisa de você + 2 volumes + Investimentos
+    if precisa == 0:
+        precisa_card = card_kpi("Precisa de você", "0 itens",
+                                "nada pendente de decisão", classe="destaque-verde")
+    else:
+        precisa_card = card_kpi("Precisa de você",
+                                str(precisa) + (" item" if precisa == 1 else " itens"),
+                                fmt_brl(falta + diverg) + " a resolver", classe="destaque-vermelho")
+    diff = abs(total_banco - total_sis)
+    banco_card = card_kpi("Movimentado no Banco", fmt_brl(total_banco))
+    sankhya_card = card_kpi("Movimentado no Sankhya", fmt_brl(total_sis),
+                            "diferença: " + fmt_brl(diff))
+    render_cards([precisa_card, banco_card, sankhya_card, _card_investimentos(resultado)])
 
 
 # ============================================================
@@ -2781,57 +2868,7 @@ def tela_resultado():
     # Quando o usuário entra no detalhamento de uma conta específica, mostra direto
     # o detalhe da conta — evita confundir KPIs globais com KPIs da conta selecionada.
     if not st.session_state.banco_conta_selecionada:
-        # KPIs executivos
-        section_title("RESUMO EXECUTIVO")
-
-        # Linha 1: principais (com receitas/despesas embaixo dos 2 totais)
-        sub_banco = _card_total_com_rec_desp(kpis["receitas_banco"], kpis["despesas_banco"])
-        sub_sankhya = _card_total_com_rec_desp(kpis["receitas_sistema"], kpis["despesas_sistema"])
-        cards1 = [
-            card_kpi_html("Total Movimentado no Banco", fmt_brl(kpis["total_movimentado_banco"]),
-                          sub_banco),
-            card_kpi_html("Total Extrato Sankhya", fmt_brl(kpis["total_extrato_sistema"]),
-                          sub_sankhya),
-            _card_investimentos(resultado),
-            card_kpi("Percentual Conciliado", fmt_pct(kpis["percentual_conciliado"]),
-                     classe="destaque-amarelo"),
-        ]
-        render_cards(cards1)
-
-        # Linha 2: Falta Conciliar + Divergência + Qtd Divergências + Contas
-        sub_falta_conciliar = _card_falta_conciliar_vertical(
-            kpis["falta_conciliar_receitas"],
-            kpis["falta_conciliar_despesas"],
-        )
-
-        cards2 = [
-            card_kpi_html("Falta Conciliar", fmt_brl(kpis["falta_conciliar"]),
-                          sub_falta_conciliar, classe="destaque-vermelho"),
-            card_kpi_html("Divergência (Sankhya × Banco)",
-                          fmt_brl(kpis["divergencia_sankhya_banco"]),
-                          _card_falta_conciliar_vertical(
-                              kpis["divergencia_sankhya_banco_receitas"],
-                              kpis["divergencia_sankhya_banco_despesas"],
-                          ),
-                          classe="destaque-vermelho"),
-            card_kpi("Qtd Divergências", fmt_int(kpis["qtd_divergencia_sankhya_banco"]),
-                     "lançamentos do Sankhya sem par no banco",
-                     classe="destaque-amarelo" if kpis["qtd_divergencia_sankhya_banco"] > 0 else ""),
-            card_kpi("Contas processadas", fmt_int(len(resultado.contas_processadas))),
-        ]
-        render_cards(cards2)
-
-        # Linha 3: contagens (Investimentos foi pra linha 1; aqui entra o Conciliado em R$)
-        cards3 = [
-            card_kpi("Registros Banco", fmt_int(kpis["qtd_registros_banco"]),
-                     f"{fmt_int(kpis['qtd_movimentacoes_banco'])} movimentações"),
-            card_kpi("Registros Sistema", fmt_int(kpis["qtd_registros_sistema"]),
-                     f"{fmt_int(kpis['qtd_movimentacoes_sistema'])} movimentações"),
-            card_kpi("Conciliados", fmt_int(kpis["qtd_conciliados"]),
-                     "pares Banco × Sankhya", classe="destaque-verde"),
-            card_kpi("Total Conciliado", fmt_brl(kpis["total_conciliado"]), classe="destaque-verde"),
-        ]
-        render_cards(cards3)
+        render_resumo_termometros(resultado, kpis)
 
         # v5.14: Removida a seção "Exceções e Regras Aplicadas" (estornos + TOP 1722).
         # A lógica continua rodando — mas o resumo não exibe mais esses cards.
