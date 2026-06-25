@@ -89,6 +89,26 @@ def detectar_depositos_abertos(
     # Conta opcional — se existir, usa; senão considera todas mesma conta
     tem_conta = "conta" in pb.columns and "conta" in ps.columns
 
+    # v5.33: força datas a datetime (chaves consistentes) e pré-agrupa os índices
+    # do Sankhya por (data, conta, sinal) UMA vez — a busca de candidatos vira
+    # lookup de dicionário, sem varrer o ps a cada linha do banco. A soma de
+    # subconjunto e o consumo continuam idênticos.
+    pb["data"] = pd.to_datetime(pb["data"], errors="coerce")
+    ps["data"] = pd.to_datetime(ps["data"], errors="coerce")
+
+    from collections import defaultdict
+    grupos_ps: dict[tuple, list[int]] = defaultdict(list)
+    for idx_s in ps.index:
+        v_s = ps.at[idx_s, "valor"]
+        d_s = ps.at[idx_s, "data"]
+        if pd.isna(d_s) or pd.isna(v_s):
+            continue
+        sinal_s = 1 if float(v_s) > 0 else (-1 if float(v_s) < 0 else 0)
+        if sinal_s == 0:
+            continue
+        conta_s = ps.at[idx_s, "conta"] if tem_conta else None
+        grupos_ps[(d_s, conta_s, sinal_s)].append(idx_s)
+
     indices_banco_consumidos: set[int] = set()
     indices_sankhya_consumidos: set[int] = set()
     grupos_rows = []
@@ -107,21 +127,17 @@ def detectar_depositos_abertos(
         valor_b = float(linha_b["valor"])
         if pd.isna(data_b) or pd.isna(valor_b):
             continue
-        # Filtra candidatos Sankhya
-        mask = (ps["data"] == data_b) & (~ps.index.isin(indices_sankhya_consumidos))
-        if tem_conta:
-            mask = mask & (ps["conta"] == linha_b.get("conta"))
-        # Mesmo sinal
-        if valor_b > 0:
-            mask = mask & (ps["valor"] > 0)
-        elif valor_b < 0:
-            mask = mask & (ps["valor"] < 0)
-        else:
+        sinal_b = 1 if valor_b > 0 else (-1 if valor_b < 0 else 0)
+        if sinal_b == 0:
             continue
-
-        candidatos = ps[mask].copy()
-        if candidatos.empty:
+        conta_b = linha_b.get("conta") if tem_conta else None
+        idxs_cand = [
+            i for i in grupos_ps.get((data_b, conta_b, sinal_b), [])
+            if i not in indices_sankhya_consumidos
+        ]
+        if not idxs_cand:
             continue
+        candidatos = ps.loc[idxs_cand].copy()
 
         # v5.25: se houver muitos candidatos na mesma data+conta+sinal, PULA.
         # Provavelmente é dia de muita movimentação onde a busca combinatória
