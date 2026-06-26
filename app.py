@@ -556,6 +556,20 @@ input, textarea, select, [data-baseweb="select"] > div {{
 }}
 [data-testid="stFileUploaderDropzone"] * {{ color: {CORES["branco"]} !important; }}
 
+/* v5.36: chips dos arquivos JÁ enviados (ficavam claro-no-claro e sumiam o nome) */
+[data-testid="stFileUploaderFile"],
+[data-testid="stFileUploaderDeleteBtn"] {{
+    background-color: {CORES["azul_escuro_2"]} !important;
+    border-radius: 8px !important;
+}}
+[data-testid="stFileUploaderFile"],
+[data-testid="stFileUploaderFile"] *,
+[data-testid="stFileUploaderFileName"],
+[data-testid="stFileUploaderFileData"] *,
+.uploadedFileName,
+.uploadedFileData,
+.uploadedFileData * {{ color: {CORES["branco"]} !important; }}
+
 /* v3.4: tooltip do help (?) — texto PRETO em qualquer lugar (sidebar amarela ou main) */
 [data-testid="stTooltipContent"],
 [data-testid="stTooltipContent"] *,
@@ -2572,8 +2586,22 @@ def render_painel_bancos(resultado: ResultadoConciliacao, mostrar_botao: bool = 
             )
         return
 
-    # ---- VÁRIAS contas: tabela do gestor (sem média global enganosa) ----
-    linhas = []
+    # ---- VÁRIAS contas: tabela do gestor com botão "Ver →" no fim de CADA linha ----
+    # v5.36: antes os botões vinham todos numa fileira embaixo (espremiam com muitas
+    # contas). Agora cada conta é uma linha nativa com seu próprio botão à direita.
+    _ratios = [3.2, 1.1, 1.1, 0.8, 1.6, 1.2]
+
+    def _cel(html, align="left", cor="#dfe8fb", peso="400"):
+        return f'<div style="text-align:{align}; color:{cor}; font-weight:{peso}; font-size:13px;">{html}</div>'
+
+    # Cabeçalho
+    hc = st.columns(_ratios)
+    for _col, _txt, _al in zip(
+        hc, ["CONTA", "EXPLICADO", "CONFIRMADO", "ITENS", "A RESOLVER", ""],
+        ["left", "center", "center", "center", "right", "left"],
+    ):
+        _col.markdown(_cel(_txt, _al, "#8BA3C7"), unsafe_allow_html=True)
+
     total_itens = 0
     total_resolver = 0.0
     fechadas = 0
@@ -2591,45 +2619,34 @@ def render_painel_bancos(resultado: ResultadoConciliacao, mostrar_botao: bool = 
             cor_badge = "#9a7b12" if qtd <= 2 else "#D63031"
             itens_cell = f'<span style="background:{cor_badge}; color:#fff; font-size:11px; padding:3px 9px; border-radius:20px;">{qtd}</span>'
             resolver_cell = f'<span style="color:#ff8a8a; font-weight:500;">{fmt_brl(valor)}</span>'
-        linhas.append(
-            f'<tr style="border-top:1px solid #1c2f57;">'
-            f'<td style="padding:12px 8px 12px 0;"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:{dot};margin-right:8px;"></span>{conta}</td>'
-            f'<td style="padding:12px 8px; text-align:center;">{fmt_pct(explic)}</td>'
-            f'<td style="padding:12px 8px; text-align:center;">{fmt_pct(confirm)}</td>'
-            f'<td style="padding:12px 8px; text-align:center;">{itens_cell}</td>'
-            f'<td style="padding:12px 0 12px 8px; text-align:right;">{resolver_cell}</td>'
-            f'</tr>'
-        )
-    grupo = (
-        f'<tr style="border-top:2px solid #2a4170; background:#0e1f49;">'
-        f'<td style="padding:12px 8px 12px 12px; color:#f4c430; font-weight:500;">GRUPO &middot; {fechadas} de {len(contas_ordenadas)} fechadas</td>'
-        f'<td style="padding:12px 8px; text-align:center; color:#6f86ad;">&mdash;</td>'
-        f'<td style="padding:12px 8px; text-align:center; color:#6f86ad;">&mdash;</td>'
-        f'<td style="padding:12px 8px; text-align:center; color:#fff; font-weight:500;">{total_itens}</td>'
-        f'<td style="padding:12px 12px 12px 8px; text-align:right; color:#ff8a8a; font-weight:500;">{fmt_brl(total_resolver)}</td>'
-        f'</tr>'
-    )
-    st.html(
-        '<table style="width:100%; border-collapse:collapse; font-size:13px; color:#dfe8fb;">'
-        '<thead><tr style="color:#8BA3C7; font-size:11px; text-align:left;">'
-        '<th style="padding:0 8px 8px 0; font-weight:400;">CONTA</th>'
-        '<th style="padding:0 8px 8px; font-weight:400; text-align:center;">EXPLICADO</th>'
-        '<th style="padding:0 8px 8px; font-weight:400; text-align:center;">CONFIRMADO</th>'
-        '<th style="padding:0 8px 8px; font-weight:400; text-align:center;">ITENS</th>'
-        '<th style="padding:0 0 8px 8px; font-weight:400; text-align:right;">A RESOLVER</th>'
-        '</tr></thead><tbody>'
-        + "".join(linhas) + grupo +
-        '</tbody></table>'
-        '<div style="color:#6f86ad; font-size:11px; margin-top:10px;">As % do grupo ficam vazias de propósito — média de contas diferentes engana. Use os botões para o detalhamento.</div>'
-    )
-    if mostrar_botao:
-        cols = st.columns(len(contas_ordenadas))
-        for i, conta in enumerate(contas_ordenadas):
-            with cols[i]:
-                st.button(
-                    f"Ver {conta} →", key=f"banco_btn_{conta}",
-                    on_click=selecionar_banco, args=(conta,), use_container_width=True,
-                )
+
+        rc = st.columns(_ratios)
+        rc[0].markdown(
+            _cel(f'<span style="display:inline-block;width:8px;height:8px;border-radius:50%;'
+                 f'background:{dot};margin-right:8px;"></span>{conta}'),
+            unsafe_allow_html=True)
+        rc[1].markdown(_cel(fmt_pct(explic), "center"), unsafe_allow_html=True)
+        rc[2].markdown(_cel(fmt_pct(confirm), "center"), unsafe_allow_html=True)
+        rc[3].markdown(_cel(itens_cell, "center"), unsafe_allow_html=True)
+        rc[4].markdown(_cel(resolver_cell, "right"), unsafe_allow_html=True)
+        if mostrar_botao:
+            rc[5].button("Ver →", key=f"banco_btn_{conta}",
+                         on_click=selecionar_banco, args=(conta,),
+                         use_container_width=True)
+
+    # Rodapé GRUPO
+    gc = st.columns(_ratios)
+    gc[0].markdown(
+        _cel(f'GRUPO &middot; {fechadas} de {len(contas_ordenadas)} fechadas', "left", "#f4c430", "500"),
+        unsafe_allow_html=True)
+    gc[1].markdown(_cel("&mdash;", "center", "#6f86ad"), unsafe_allow_html=True)
+    gc[2].markdown(_cel("&mdash;", "center", "#6f86ad"), unsafe_allow_html=True)
+    gc[3].markdown(_cel(str(total_itens), "center", "#fff", "500"), unsafe_allow_html=True)
+    gc[4].markdown(_cel(fmt_brl(total_resolver), "right", "#ff8a8a", "500"), unsafe_allow_html=True)
+    st.markdown(
+        '<div style="color:#6f86ad; font-size:11px; margin-top:10px;">As % do grupo ficam vazias '
+        'de propósito — média de contas diferentes engana. Cada conta tem seu botão "Ver →" à direita.</div>',
+        unsafe_allow_html=True)
 
 
 
@@ -4008,7 +4025,8 @@ def render_subabas_tipo(resultado: ResultadoConciliacao, conta: str | None = Non
 
     v3.8: Se `conta` for fornecido, filtra apenas registros daquela conta.
     """
-    tipos_disponiveis = ["Todos"] + TIPOS_PRINCIPAIS + ["Pagamentos", "Recebimentos", "Outros"]
+    _tipos_base = [t for t in TIPOS_PRINCIPAIS if t not in ("Pagamentos", "Recebimentos", "Outros")]
+    tipos_disponiveis = ["Todos"] + _tipos_base + ["Pagamentos", "Recebimentos", "Outros"]
     tabs = st.tabs(tipos_disponiveis)
 
     # v3.10: visão unificada é cara (concat de 3 DataFrames). Cache no session_state.
@@ -4024,7 +4042,7 @@ def render_subabas_tipo(resultado: ResultadoConciliacao, conta: str | None = Non
     if conta is not None and not df_unif.empty and "conta" in df_unif.columns:
         df_unif = df_unif[df_unif["conta"] == conta].copy()
 
-    for tab, tipo in zip(tabs, tipos_disponiveis):
+    for _itab, (tab, tipo) in enumerate(zip(tabs, tipos_disponiveis)):
         with tab:
             if tipo == "Todos":
                 df = df_unif.copy()
@@ -4095,7 +4113,7 @@ def render_subabas_tipo(resultado: ResultadoConciliacao, conta: str | None = Non
                 cols_show = [c for c in cols_show if c in df.columns]
                 out = df[cols_show].copy()
                 out.columns = [c.title() for c in out.columns]
-                _exibir_df(out, f"tipo_{tipo.lower().replace(' ', '_').replace('/', '_')}")
+                _exibir_df(out, f"tipo{_itab}_{tipo.lower().replace(' ', '_').replace('/', '_')}")
 
             # v5.12: Bloco TOP 1722 (banco × sankhya) — aparece na aba Cartão
             if mostrar_top1722_aqui:
