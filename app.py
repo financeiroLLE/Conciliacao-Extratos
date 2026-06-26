@@ -587,20 +587,29 @@ input, textarea, select, [data-baseweb="select"] > div {{
 [data-testid="stFileUploaderDropzoneInstructions"],
 [data-testid="stFileUploaderDropzoneInstructions"] * {{ color: {CORES["branco"]} !important; }}
 
-/* v5.37: menu da coluna do st.dataframe (Sort/filtro) — vinha claro-no-claro */
+/* v5.37/v5.38: menu da coluna do st.dataframe (Sort/filtro) e menus em geral —
+   vinham claro-no-claro (texto branco em fundo branco). Cobre vários tipos. */
 [data-testid="stDataFrameColumnMenu"],
-[data-testid="stElementToolbarButton"] + div [role="menu"] {{
+[data-baseweb="menu"],
+[data-baseweb="popover"] [role="menu"],
+[role="menu"] {{
     background-color: {CORES["azul_escuro_2"]} !important;
     border: 1px solid {CORES["card_borda"]} !important;
 }}
 [data-testid="stDataFrameColumnMenu"] *,
-[data-testid="stDataFrameColumnMenu"] [role="menuitem"],
-[data-testid="stDataFrameColumnMenu"] button {{
+[data-baseweb="menu"] *,
+[data-baseweb="menu"] [role="option"],
+[role="menu"] *,
+[role="menuitem"],
+[role="menuitem"] * {{
     color: {CORES["branco"]} !important;
 }}
-[data-testid="stDataFrameColumnMenu"] input {{
+[data-testid="stDataFrameColumnMenu"] input,
+[data-baseweb="menu"] input,
+[role="menu"] input {{
     color: {CORES["branco"]} !important;
     background-color: {CORES["azul_escuro_2"]} !important;
+    border: 1px solid {CORES["card_borda"]} !important;
 }}
 
 /* v3.4: tooltip do help (?) — texto PRETO em qualquer lugar (sidebar amarela ou main) */
@@ -4032,12 +4041,14 @@ def render_tab_divergencia_consolidada(df: pd.DataFrame, conta: str):
 
     # Resumo por origem
     if "origem_divergencia" in df.columns:
+        # v5.37: soma COM SINAL (líquido). Antes somava o valor absoluto, então
+        # +13,06 e −9,33 davam R$ 22,39 (sem sentido) em vez de R$ 3,73.
         resumo = df.groupby("origem_divergencia").agg(
             quantidade=("valor", "count"),
-            total=("valor", lambda s: s.abs().sum()),
+            total=("valor", "sum"),
         ).reset_index()
-        resumo.columns = ["Origem da Divergência", "Quantidade", "Valor Total"]
-        resumo["Valor Total"] = resumo["Valor Total"].apply(fmt_brl)
+        resumo.columns = ["Origem da Divergência", "Quantidade", "Valor Total (líquido)"]
+        resumo["Valor Total (líquido)"] = resumo["Valor Total (líquido)"].apply(fmt_brl)
         st.markdown("**Resumo por origem:**")
         st.dataframe(resumo, use_container_width=True, hide_index=True)
         st.write("")
