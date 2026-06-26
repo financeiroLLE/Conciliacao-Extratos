@@ -25,7 +25,8 @@ REGRAS: list[tuple[str, str]] = [
     # v5.11: Cart\u00e3o expandido com adquirentes e bandeiras abreviadas.
     # MAST (Mastercard abreviado pela Getnet), GETNET, PAGSEGURO, etc.
     ("Cartão", r"\b(CART[ÃA]O|VISA|MASTERCARD|MASTER|MAST|ELO|HIPERCARD|AMEX|GETNET|CIELO|STONE|REDE\s*(?:VAREJO)?|PAGSEGURO|PAG\s*SEGURO|PAGBANK|MERCADO\s*PAGO|MERCADOPAGO|ADQUIRENTE)\b"),
-    ("Salário/Folha", r"\b(SAL[ÁA]RIO|FOLHA|PAGTO\s+FOLHA)\b"),
+    ("Salário/Folha", r"\b(SAL[ÁA]RIO|FOLHA|PAGTO\s+FOLHA|SISPAG)\b"),
+    ("Fornecedor", r"\b(FORNECEDOR(ES)?|PGTO\s+FORN|PAG(AMENTO)?\s+FORN)\b"),
     ("Imposto", r"\b(DARF|DAS|IPVA|IPTU|GPS|FGTS|IMPOSTO|TRIBUTO)\b"),
     ("Transferência", r"\b(TRANSF|TRANSFER[ÊE]NCIA)\b"),
 ]
@@ -73,4 +74,4 @@ def adicionar_classificacao(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-TIPOS_PRINCIPAIS = ["Boleto", "Pix", "Tarifa", "TED/DOC", "Débito Automático", "Cartão"]
+TIPOS_PRINCIPAIS = ["Boleto", "Pix", "Tarifa", "TED/DOC", "Débito Automático", "Cartão", "Salário/Folha", "Fornecedor", "Imposto", "Transferência", "Outros"]
