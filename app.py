@@ -91,7 +91,7 @@ def _norm_conta(s: str) -> str:
 _STOP_CONTA = {
     "banco", "extrato", "mensal", "conta", "corrente", "cc", "c", "ag", "agencia",
     "do", "da", "de", "dos", "das", "e", "no", "na", "movimento", "conciliacao",
-    "relatorio", "santander", "bradesco", "itau", "sicredi", "caixa",
+    "relatorio",
 }
 
 
@@ -3414,24 +3414,26 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
                 "em aplicação e continua sendo da empresa." if _liq < 0
                 else "Resgatou mais do que aplicou no mês."
             )
-            st.markdown(
+            _msg_inv = (
                 "**Investimentos no período:** líquido de **" + fmt_brl(_liq) + "** "
                 "(resgatado " + fmt_brl(_rg) + " − aplicado " + fmt_brl(_ap) + "). " + _frase_liq
             )
+            # v5.38: escapa o cifrão pra o Streamlit NÃO interpretar R$...R$ como LaTeX.
+            st.markdown(_msg_inv.replace("$", "\\$"))
         if _diff > 0.01:
             if _tem_cartao:
-                st.markdown(
+                st.markdown((
                     "**Diferença entre Banco e Sankhya (" + fmt_brl(_diff) + "):** pode incluir a "
                     "taxa de cartão lançada **duas vezes** no Sankhya (uma no valor bruto, outra como "
                     "despesa). O restante precisa ser analisado."
-                )
+                ).replace("$", "\\$"))
             else:
-                st.markdown(
+                st.markdown((
                     "**Diferença entre Banco e Sankhya (" + fmt_brl(_diff) + "):** precisa ser "
                     "analisada. O app **não crava** a causa — pode ser cartão de adquirente "
                     "(Cielo/Stone/Getnet) que não fechou no agrupamento, lançamento a mais/"
                     "duplicado no Sankhya, tarifa, ou item a conciliar."
-                )
+                ).replace("$", "\\$"))
 
     # Download específico desse banco — v5.35: SOB DEMANDA.
     # Antes, o Excel da conta era gerado ao ABRIR o detalhamento; numa conta de
