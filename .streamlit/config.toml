@@ -1,0 +1,11 @@
+[theme]
+# v5.38: tema ESCURO nativo. Antes o app rodava no tema claro padrão e "pintava"
+# de escuro só por CSS — então componentes nativos (menu de coluna do dataframe,
+# cabeçalho de expander, etc.) nasciam BRANCOS e o texto branco sumia neles.
+# Com o tema escuro nativo, esses componentes já vêm legíveis. As cores batem
+# com a paleta CORES do app.py pra não destoar.
+base = "dark"
+primaryColor = "#FAC318"
+backgroundColor = "#041747"
+secondaryBackgroundColor = "#0E2456"
+textColor = "#FFFFFF"
