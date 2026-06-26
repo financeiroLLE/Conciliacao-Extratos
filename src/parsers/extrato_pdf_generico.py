@@ -212,7 +212,7 @@ def _parse_bradesco(paginas: list[str], conta: str) -> pd.DataFrame:
     data_corrente: pd.Timestamp | None = None
     desc_pendente: list[str] = []
     PARAR = ("total ", "os dados acima", "saldos invest", "ultimos lancamentos",
-             "data lancamento", "extrato de:", "agencia | conta")
+             "data lancamento", "extrato de:", "agencia | conta", "saldo anterior")
     for txt in paginas:
         for raw in txt.split("\n"):
             ln = raw.strip()
