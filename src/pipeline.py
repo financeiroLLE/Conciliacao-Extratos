@@ -55,6 +55,11 @@ class ResultadoConciliacao:
     top1722_linhas: pd.DataFrame = field(default_factory=pd.DataFrame)
     top1722_linhas_banco: pd.DataFrame = field(default_factory=pd.DataFrame)
     top1722_diferencas: pd.DataFrame = field(default_factory=pd.DataFrame)
+    # v5.35: TOP 1702 (agrupamento boleto) — irmão do 1722
+    top1702_grupos: pd.DataFrame = field(default_factory=pd.DataFrame)
+    top1702_linhas: pd.DataFrame = field(default_factory=pd.DataFrame)
+    top1702_linhas_banco: pd.DataFrame = field(default_factory=pd.DataFrame)
+    top1702_diferencas: pd.DataFrame = field(default_factory=pd.DataFrame)
 
     banco_completo: pd.DataFrame = field(default_factory=pd.DataFrame)
     sistema_completo: pd.DataFrame = field(default_factory=pd.DataFrame)
@@ -80,6 +85,11 @@ class ResultadoConciliacao:
             getattr(self, "estornos_anulados", pd.DataFrame()),
             getattr(self, "estornos_parciais", pd.DataFrame()),
             getattr(self, "top1722_grupos", pd.DataFrame()),
+            pd.concat(
+                [getattr(self, "top1702_grupos", pd.DataFrame()),
+                 getattr(self, "top1702_diferencas", pd.DataFrame())],
+                ignore_index=True,
+            ),
         )
 
     def kpis_por_banco(self) -> dict[str, dict[str, Any]]:
@@ -106,6 +116,10 @@ class ResultadoConciliacao:
             _filtra("estornos_anulados"),
             _filtra("estornos_parciais"),
             _filtra("top1722_grupos"),
+            pd.concat(
+                [_filtra("top1702_grupos"), _filtra("top1702_diferencas")],
+                ignore_index=True,
+            ),
         )
 
     def divergencias_sankhya_banco(self, conta: str | None = None) -> pd.DataFrame:
@@ -280,6 +294,7 @@ def _calcular_kpis(
     estornos_anulados: pd.DataFrame | None = None,
     estornos_parciais: pd.DataFrame | None = None,
     top1722_grupos: pd.DataFrame | None = None,
+    top1702_grupos: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
     banco_mov = _eh_movimentado(banco_completo)
     sistema_mov = _eh_movimentado(sistema_completo)
@@ -478,6 +493,12 @@ def _calcular_kpis(
             if (top1722_grupos is not None and not top1722_grupos.empty
                 and "valor_banco_total" in top1722_grupos.columns) else 0.0
         ),
+        "qtd_top1702_grupos": int(len(top1702_grupos)) if top1702_grupos is not None else 0,
+        "valor_top1702_conciliado": (
+            float(top1702_grupos["valor_banco_total"].sum())
+            if (top1702_grupos is not None and not top1702_grupos.empty
+                and "valor_banco_total" in top1702_grupos.columns) else 0.0
+        ),
     }
 
 
@@ -589,6 +610,20 @@ def executar_pipeline(
         ).reset_index(drop=True)
         pend_sistema = pend_sistema.drop(
             index=[i for i in res_top1722.indices_sankhya_casados if i < len(pend_sistema)]
+        ).reset_index(drop=True)
+
+    # v5.35: conciliação por agrupamento TOP 1702 (boleto). Irmão do 1722, mesma
+    # mecânica de soma total por conta — roda sobre as pendências que sobraram.
+    from src.matching.boleto_top1702 import detectar_top_1702
+    res_top1702 = detectar_top_1702(pend_banco, pend_sistema, janela_dias=tolerancia_dias)
+    if res_top1702.indices_banco_casados or res_top1702.indices_sankhya_casados:
+        pend_banco = pend_banco.reset_index(drop=True)
+        pend_sistema = pend_sistema.reset_index(drop=True)
+        pend_banco = pend_banco.drop(
+            index=[i for i in res_top1702.indices_banco_casados if i < len(pend_banco)]
+        ).reset_index(drop=True)
+        pend_sistema = pend_sistema.drop(
+            index=[i for i in res_top1702.indices_sankhya_casados if i < len(pend_sistema)]
         ).reset_index(drop=True)
 
     # v5.21: conciliação por agrupamento FOLHA DE PAGAMENTO (SISPAG SALARIOS).
@@ -728,6 +763,9 @@ def executar_pipeline(
     # v5.28: idem para Salários N→M
     if not res_salarios_nm.linhas_banco_casadas.empty:
         chaves_banco_consumidas.update(_chave_conteudo(res_salarios_nm.linhas_banco_casadas).tolist())
+    # v5.35: idem para Boleto TOP 1702
+    if not res_top1702.linhas_banco_casadas.empty:
+        chaves_banco_consumidas.update(_chave_conteudo(res_top1702.linhas_banco_casadas).tolist())
 
     # Constrói set de chaves já consumidas no sankhya
     chaves_sistema_consumidas: set[str] = set()
@@ -743,6 +781,9 @@ def executar_pipeline(
     # v5.28: idem para Salários N→M
     if not res_salarios_nm.linhas_sankhya_casadas.empty:
         chaves_sistema_consumidas.update(_chave_conteudo(res_salarios_nm.linhas_sankhya_casadas).tolist())
+    # v5.35: idem para Boleto TOP 1702
+    if not res_top1702.linhas_sankhya_casadas.empty:
+        chaves_sistema_consumidas.update(_chave_conteudo(res_top1702.linhas_sankhya_casadas).tolist())
 
     # v5.27: TAMBÉM exclui linhas conciliadas no match 1-pra-1 (exact_match/fuzzy).
     # Sem isso, tarifas TAR C/C SISPAG que já casaram 1-pra-1 com pares no Sankhya
@@ -812,6 +853,10 @@ def executar_pipeline(
         top1722_linhas=res_top1722.linhas_sankhya_casadas,
         top1722_linhas_banco=res_top1722.linhas_banco_casadas,
         top1722_diferencas=res_top1722.com_diferenca,
+        top1702_grupos=res_top1702.grupos_conciliados,
+        top1702_linhas=res_top1702.linhas_sankhya_casadas,
+        top1702_linhas_banco=res_top1702.linhas_banco_casadas,
+        top1702_diferencas=res_top1702.com_diferenca,
         banco_completo=banco,
         sistema_completo=sistema,
         data_referencia=data_referencia,
