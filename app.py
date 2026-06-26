@@ -88,24 +88,51 @@ def _norm_conta(s: str) -> str:
     return s
 
 
+_STOP_CONTA = {
+    "banco", "extrato", "mensal", "conta", "corrente", "cc", "c", "ag", "agencia",
+    "do", "da", "de", "dos", "das", "e", "no", "na", "movimento", "conciliacao",
+    "relatorio", "santander", "bradesco", "itau", "sicredi", "caixa",
+}
+
+
+def _tokens_conta(s: str) -> set[str]:
+    """Tokens distintivos de um nome de conta (sem palavras genéricas/números)."""
+    return {
+        t for t in _norm_conta(s).split()
+        if t not in _STOP_CONTA and not t.isdigit() and len(t) >= 3
+    }
+
+
 def _melhor_match_conta(candidato: str, opcoes: list[str]) -> int | None:
     """Índice da conta do Sankhya que melhor casa com o nome do arquivo/banco.
 
     Retorna None quando não há um match claro (uma conta nova, p.ex.) — aí a UI
-    pré-seleciona 'Digitar outro nome…'.
+    pré-seleciona 'Digitar outro nome…'. Nunca chuta com ambiguidade.
     """
     nc = _norm_conta(candidato)
     if not nc:
         return None
+    # 1) match exato (normalizado)
     for i, o in enumerate(opcoes):
         if _norm_conta(o) == nc:
             return i
+    # 2) um contém o outro, e só uma conta bate
     contidos = [
         i for i, o in enumerate(opcoes)
         if nc in _norm_conta(o) or _norm_conta(o) in nc
     ]
     if len(contidos) == 1:
         return contidos[0]
+    # 3) token distintivo (KING, INOV, PISA...) — casa quando uma conta tem o
+    #    MAIOR overlap de tokens e esse máximo é único (sem empate = sem chute).
+    tk = _tokens_conta(candidato)
+    if tk:
+        scores = sorted(
+            ((len(_tokens_conta(o) & tk), i) for i, o in enumerate(opcoes)),
+            reverse=True,
+        )
+        if scores and scores[0][0] > 0 and (len(scores) == 1 or scores[0][0] > scores[1][0]):
+            return scores[0][1]
     return None
 
 
@@ -556,19 +583,41 @@ input, textarea, select, [data-baseweb="select"] > div {{
 }}
 [data-testid="stFileUploaderDropzone"] * {{ color: {CORES["branco"]} !important; }}
 
-/* v5.36: chips dos arquivos JÁ enviados (ficavam claro-no-claro e sumiam o nome) */
-[data-testid="stFileUploaderFile"],
-[data-testid="stFileUploaderDeleteBtn"] {{
+/* v5.36/v5.37: chips dos arquivos JÁ enviados — fundo escuro, nome branco e visível.
+   Especificidade alta (prefixo stFileUploader) pra ganhar do estilo padrão. */
+[data-testid="stFileUploader"] [data-testid="stFileUploaderFile"] {{
     background-color: {CORES["azul_escuro_2"]} !important;
+    border: 1px solid {CORES["card_borda"]} !important;
     border-radius: 8px !important;
+    padding: 6px 10px !important;
+    max-width: none !important;
 }}
-[data-testid="stFileUploaderFile"],
-[data-testid="stFileUploaderFile"] *,
+[data-testid="stFileUploader"] [data-testid="stFileUploaderFile"] *,
 [data-testid="stFileUploaderFileName"],
 [data-testid="stFileUploaderFileData"] *,
-.uploadedFileName,
-.uploadedFileData,
-.uploadedFileData * {{ color: {CORES["branco"]} !important; }}
+[data-testid="stFileUploaderFile"] small,
+[data-testid="stFileUploaderFile"] span {{
+    color: {CORES["branco"]} !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+    max-width: none !important;
+}}
+
+/* v5.37: menu da coluna do st.dataframe (Sort/filtro) — vinha claro-no-claro */
+[data-testid="stDataFrameColumnMenu"],
+[data-testid="stElementToolbarButton"] + div [role="menu"] {{
+    background-color: {CORES["azul_escuro_2"]} !important;
+    border: 1px solid {CORES["card_borda"]} !important;
+}}
+[data-testid="stDataFrameColumnMenu"] *,
+[data-testid="stDataFrameColumnMenu"] [role="menuitem"],
+[data-testid="stDataFrameColumnMenu"] button {{
+    color: {CORES["branco"]} !important;
+}}
+[data-testid="stDataFrameColumnMenu"] input {{
+    color: {CORES["branco"]} !important;
+    background-color: {CORES["azul_escuro_2"]} !important;
+}}
 
 /* v3.4: tooltip do help (?) — texto PRETO em qualquer lugar (sidebar amarela ou main) */
 [data-testid="stTooltipContent"],
@@ -3356,11 +3405,25 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
                 "**% conferido em pares (" + fmt_pct(_pares) + "):** casou em pares diretos (1 a 1). "
                 "O banco está **" + fmt_pct(_explic) + " explicado** (é o número do resumo)."
             )
-        if not resultado.aplicacoes_resgates_da_conta(conta).empty:
+        _inv = resultado.aplicacoes_resgates_da_conta(conta).copy()
+        if not _inv.empty:
+            if "historico" in _inv.columns:
+                _inv = _inv[~_inv["historico"].astype(str).str.upper().str.contains("SALDO", na=False)]
+            _cols = [c for c in ["data", "valor", "conta", "tipo_aplicacao"] if c in _inv.columns]
+            if _cols and "origem" in _inv.columns:
+                _inv["_o"] = _inv["origem"].apply(lambda x: 0 if "Sankhya" in str(x) else 1)
+                _inv = _inv.sort_values("_o").drop_duplicates(subset=_cols, keep="first")
+            _ap = float(_inv[_inv["tipo_aplicacao"] == "Aplicação"]["valor"].abs().sum()) if "tipo_aplicacao" in _inv.columns else 0.0
+            _rg = float(_inv[_inv["tipo_aplicacao"] == "Resgate"]["valor"].abs().sum()) if "tipo_aplicacao" in _inv.columns else 0.0
+            _liq = _rg - _ap
+            _frase_liq = (
+                "Aplicou mais do que resgatou — **não é prejuízo**, o dinheiro ficou guardado "
+                "em aplicação e continua sendo da empresa." if _liq < 0
+                else "Resgatou mais do que aplicou no mês."
+            )
             st.markdown(
-                "**Investimentos no período:** é o líquido entre o que foi aplicado e o que foi "
-                "resgatado no mês. Aplicar mais do que resgatar **não é prejuízo** — o dinheiro só "
-                "ficou guardado em aplicação, continua sendo da empresa."
+                "**Investimentos no período:** líquido de **" + fmt_brl(_liq) + "** "
+                "(resgatado " + fmt_brl(_rg) + " − aplicado " + fmt_brl(_ap) + "). " + _frase_liq
             )
         if _diff > 0.01:
             if _tem_cartao:
