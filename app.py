@@ -3428,9 +3428,9 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
             else:
                 st.markdown(
                     "**Diferença entre Banco e Sankhya (" + fmt_brl(_diff) + "):** precisa ser "
-                    "analisada. Esta conta **não tem cartão**, então não é taxa de cartão — pode ser "
-                    "lançamento a mais/duplicado no Sankhya, tarifa, ou item a conciliar. O app "
-                    "**não crava** a causa."
+                    "analisada. O app **não crava** a causa — pode ser cartão de adquirente "
+                    "(Cielo/Stone/Getnet) que não fechou no agrupamento, lançamento a mais/"
+                    "duplicado no Sankhya, tarifa, ou item a conciliar."
                 )
 
     # Download específico desse banco — v5.35: SOB DEMANDA.
