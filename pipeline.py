@@ -55,6 +55,11 @@ class ResultadoConciliacao:
     top1722_linhas: pd.DataFrame = field(default_factory=pd.DataFrame)
     top1722_linhas_banco: pd.DataFrame = field(default_factory=pd.DataFrame)
     top1722_diferencas: pd.DataFrame = field(default_factory=pd.DataFrame)
+    # v5.35: TOP 1702 (agrupamento boleto) — irmão do 1722
+    top1702_grupos: pd.DataFrame = field(default_factory=pd.DataFrame)
+    top1702_linhas: pd.DataFrame = field(default_factory=pd.DataFrame)
+    top1702_linhas_banco: pd.DataFrame = field(default_factory=pd.DataFrame)
+    top1702_diferencas: pd.DataFrame = field(default_factory=pd.DataFrame)
 
     banco_completo: pd.DataFrame = field(default_factory=pd.DataFrame)
     sistema_completo: pd.DataFrame = field(default_factory=pd.DataFrame)
@@ -80,6 +85,11 @@ class ResultadoConciliacao:
             getattr(self, "estornos_anulados", pd.DataFrame()),
             getattr(self, "estornos_parciais", pd.DataFrame()),
             getattr(self, "top1722_grupos", pd.DataFrame()),
+            pd.concat(
+                [getattr(self, "top1702_grupos", pd.DataFrame()),
+                 getattr(self, "top1702_diferencas", pd.DataFrame())],
+                ignore_index=True,
+            ),
         )
 
     def kpis_por_banco(self) -> dict[str, dict[str, Any]]:
@@ -106,6 +116,10 @@ class ResultadoConciliacao:
             _filtra("estornos_anulados"),
             _filtra("estornos_parciais"),
             _filtra("top1722_grupos"),
+            pd.concat(
+                [_filtra("top1702_grupos"), _filtra("top1702_diferencas")],
+                ignore_index=True,
+            ),
         )
 
     def divergencias_sankhya_banco(self, conta: str | None = None) -> pd.DataFrame:
@@ -120,45 +134,18 @@ class ResultadoConciliacao:
         """
         frames = []
 
-        # 1) Sem par no banco
-        # v3.11 BUGFIX: se a fonte é 'Conciliado=Não do Sankhya', precisamos REMOVER
-        # as linhas que JÁ casaram no nosso match automático. Caso contrário, uma
-        # linha pode aparecer ao mesmo tempo como 'Conciliada' (porque bateu com o
-        # banco) e como 'Divergência - Sem par no banco' (porque o Sankhya marca
-        # ela como Conciliado=Não no campo do ERP).
-        if self.usa_conciliado_sankhya and not self.falta_lancar_sankhya.empty:
-            df_origem = _eh_movimentado(self.falta_lancar_sankhya)
-            # Remove linhas que aparecem em 'conciliados' (lado sistema)
-            if not self.conciliados.empty and not df_origem.empty:
-                # Identifica chaves (data, valor, conta) que já casaram
-                sis_cols = [c for c in self.conciliados.columns if c.startswith("sistema_")]
-                if sis_cols:
-                    chaves_casadas = set()
-                    for _, row in self.conciliados.iterrows():
-                        data_v = row.get("sistema_data")
-                        valor_v = row.get("sistema_valor")
-                        conta_v = row.get("sistema_conta")
-                        hist_v = row.get("sistema_historico", "")
-                        if data_v is not None and valor_v is not None:
-                            chaves_casadas.add(
-                                (str(data_v), round(float(valor_v), 2),
-                                 str(conta_v), str(hist_v))
-                            )
-                    def _esta_casada(linha):
-                        return (
-                            str(linha.get("data")),
-                            round(float(linha.get("valor", 0)), 2),
-                            str(linha.get("conta", "")),
-                            str(linha.get("historico", "")),
-                        ) in chaves_casadas
-                    df_origem = df_origem[~df_origem.apply(_esta_casada, axis=1)]
-            df = df_origem
-        else:
-            df = _eh_movimentado(self.pendentes_sistema)
+        # 1) Sem par no banco — Fase 1 (v6.0): a fonte é SEMPRE o resultado do nosso
+        # match (pendências do Sankhya pós-conciliação), NUNCA a flag 'Conciliado=Não'
+        # do ERP. Quem decide a conciliação é o app, comparando banco × Sankhya; a
+        # marcação do Sankhya é dado de entrada, não veredito. Isso remove a antiga
+        # fonte circular (uma linha podia ser 'Conciliada' e 'Divergência' ao mesmo
+        # tempo só porque o ERP a marcava como Conciliado=Não).
+        df = _eh_movimentado(self.pendentes_sistema)
         if not df.empty:
             d = df[["data", "valor", "historico", "conta"]].copy()
             d["documento"] = df.get("documento", "")
             d["origem_divergencia"] = "Sem par no banco"
+            d["origem"] = "Sankhya"
             frames.append(d)
 
         # 2) Excesso no Sankhya
@@ -166,6 +153,7 @@ class ResultadoConciliacao:
             d = self.excesso_sankhya[["data", "valor", "historico", "conta"]].copy()
             d["documento"] = self.excesso_sankhya.get("documento", "")
             d["origem_divergencia"] = "Excesso no Sankhya"
+            d["origem"] = "Sankhya"
             frames.append(d)
 
         # 3) Valor diferente
@@ -175,11 +163,12 @@ class ResultadoConciliacao:
             d["conta"] = self.divergencias.get("conta", "")
             d["documento"] = self.divergencias.get("documento_sistema", "")
             d["origem_divergencia"] = "Valor diferente"
+            d["origem"] = "Banco × Sankhya"
             frames.append(d)
 
         if not frames:
             return pd.DataFrame(columns=[
-                "data", "valor", "historico", "documento", "conta", "origem_divergencia"
+                "data", "valor", "historico", "documento", "conta", "origem_divergencia", "origem"
             ])
         out = pd.concat(frames, ignore_index=True)
         out = out.drop_duplicates(subset=["data", "valor", "historico", "conta"])
@@ -305,6 +294,7 @@ def _calcular_kpis(
     estornos_anulados: pd.DataFrame | None = None,
     estornos_parciais: pd.DataFrame | None = None,
     top1722_grupos: pd.DataFrame | None = None,
+    top1702_grupos: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
     banco_mov = _eh_movimentado(banco_completo)
     sistema_mov = _eh_movimentado(sistema_completo)
@@ -503,6 +493,12 @@ def _calcular_kpis(
             if (top1722_grupos is not None and not top1722_grupos.empty
                 and "valor_banco_total" in top1722_grupos.columns) else 0.0
         ),
+        "qtd_top1702_grupos": int(len(top1702_grupos)) if top1702_grupos is not None else 0,
+        "valor_top1702_conciliado": (
+            float(top1702_grupos["valor_banco_total"].sum())
+            if (top1702_grupos is not None and not top1702_grupos.empty
+                and "valor_banco_total" in top1702_grupos.columns) else 0.0
+        ),
     }
 
 
@@ -616,6 +612,20 @@ def executar_pipeline(
             index=[i for i in res_top1722.indices_sankhya_casados if i < len(pend_sistema)]
         ).reset_index(drop=True)
 
+    # v5.35: conciliação por agrupamento TOP 1702 (boleto). Irmão do 1722, mesma
+    # mecânica de soma total por conta — roda sobre as pendências que sobraram.
+    from src.matching.boleto_top1702 import detectar_top_1702
+    res_top1702 = detectar_top_1702(pend_banco, pend_sistema, janela_dias=tolerancia_dias)
+    if res_top1702.indices_banco_casados or res_top1702.indices_sankhya_casados:
+        pend_banco = pend_banco.reset_index(drop=True)
+        pend_sistema = pend_sistema.reset_index(drop=True)
+        pend_banco = pend_banco.drop(
+            index=[i for i in res_top1702.indices_banco_casados if i < len(pend_banco)]
+        ).reset_index(drop=True)
+        pend_sistema = pend_sistema.drop(
+            index=[i for i in res_top1702.indices_sankhya_casados if i < len(pend_sistema)]
+        ).reset_index(drop=True)
+
     # v5.21: conciliação por agrupamento FOLHA DE PAGAMENTO (SISPAG SALARIOS).
     # Mesma ideia do TOP 1722 mas INVERSA: N linhas no banco → 1 linha no sankhya.
     # Banco lança 1 SISPAG por funcionário; Sankhya tem 1 folha consolidada.
@@ -629,6 +639,23 @@ def executar_pipeline(
         ).reset_index(drop=True)
         pend_sistema = pend_sistema.drop(
             index=[i for i in res_folha.indices_sankhya_casados if i < len(pend_sistema)]
+        ).reset_index(drop=True)
+
+    # v5.28: SALÁRIOS pagos avulsos no Sankhya (N→M).
+    # Quando o Sankhya não consolida em FOLHA DE PAGAMENTO mas lança cada
+    # salário individualmente (ex: 6 SISPAG no banco vs 2 lançamentos individuais
+    # no Sankhya somando o mesmo valor). Busca combinações que somem o total dos
+    # SISPAG do banco na mesma data.
+    from src.matching.salarios_n_m import detectar_salarios_n_m
+    res_salarios_nm = detectar_salarios_n_m(pend_banco, pend_sistema)
+    if res_salarios_nm.indices_banco_casados or res_salarios_nm.indices_sankhya_casados:
+        pend_banco = pend_banco.reset_index(drop=True)
+        pend_sistema = pend_sistema.reset_index(drop=True)
+        pend_banco = pend_banco.drop(
+            index=[i for i in res_salarios_nm.indices_banco_casados if i < len(pend_banco)]
+        ).reset_index(drop=True)
+        pend_sistema = pend_sistema.drop(
+            index=[i for i in res_salarios_nm.indices_sankhya_casados if i < len(pend_sistema)]
         ).reset_index(drop=True)
 
     # v5.24: depósitos abertos no Sankhya (1 banco → N sankhya).
@@ -680,6 +707,29 @@ def executar_pipeline(
             index=[i for i in res_aut_mais.indices_sankhya_consumidos if i < len(pend_sistema)]
         ).reset_index(drop=True)
 
+    # v5.28: tarifas de adquirente (TARIFA ALUGUEL GETNET) já descontadas pela GETNET.
+    # No Sankhya essas tarifas são lançadas separadamente, mas no banco elas vêm
+    # JÁ DESCONTADAS do valor líquido. Por isso jamais terão par individual no
+    # extrato. Removemos das pendências do Sankhya pra não virarem divergência.
+    from src.matching.tarifas_adquirente import detectar_tarifas_adquirente
+    res_tarifas_adq = detectar_tarifas_adquirente(pend_sistema)
+    if res_tarifas_adq.indices_sankhya_consumidos:
+        pend_sistema = pend_sistema.reset_index(drop=True)
+        pend_sistema = pend_sistema.drop(
+            index=[i for i in res_tarifas_adq.indices_sankhya_consumidos if i < len(pend_sistema)]
+        ).reset_index(drop=True)
+
+    # v5.31: resgates/aplicações/rendimentos NÃO são "banco sem explicação" —
+    # são movimento de investimento (já listados na aba Investimentos, que vem do
+    # banco completo). Removê-los do pend_banco evita inflar Falta Conciliar e
+    # Pendentes. A categoria_mov já foi classificada no início do pipeline.
+    if "categoria_mov" in pend_banco.columns:
+        pend_banco = pend_banco[
+            ~pend_banco["categoria_mov"].isin(
+                ["aplicacao", "resgate", "rendimento", "investimento_outro"]
+            )
+        ].reset_index(drop=True)
+
     divergencias = detectar_divergencia_valor(pend_banco, pend_sistema)
     duplicidades = detectar_duplicidades(banco_mov, sistema_mov)
 
@@ -710,6 +760,12 @@ def executar_pipeline(
         chaves_banco_consumidas.update(_chave_conteudo(res_depositos.linhas_banco_casadas).tolist())
     if not res_tarifas.linhas_banco_casadas.empty:
         chaves_banco_consumidas.update(_chave_conteudo(res_tarifas.linhas_banco_casadas).tolist())
+    # v5.28: idem para Salários N→M
+    if not res_salarios_nm.linhas_banco_casadas.empty:
+        chaves_banco_consumidas.update(_chave_conteudo(res_salarios_nm.linhas_banco_casadas).tolist())
+    # v5.35: idem para Boleto TOP 1702
+    if not res_top1702.linhas_banco_casadas.empty:
+        chaves_banco_consumidas.update(_chave_conteudo(res_top1702.linhas_banco_casadas).tolist())
 
     # Constrói set de chaves já consumidas no sankhya
     chaves_sistema_consumidas: set[str] = set()
@@ -722,6 +778,12 @@ def executar_pipeline(
         chaves_sistema_consumidas.update(_chave_conteudo(res_depositos.linhas_sankhya_casadas).tolist())
     if not res_tarifas.linhas_sankhya_casadas.empty:
         chaves_sistema_consumidas.update(_chave_conteudo(res_tarifas.linhas_sankhya_casadas).tolist())
+    # v5.28: idem para Salários N→M
+    if not res_salarios_nm.linhas_sankhya_casadas.empty:
+        chaves_sistema_consumidas.update(_chave_conteudo(res_salarios_nm.linhas_sankhya_casadas).tolist())
+    # v5.35: idem para Boleto TOP 1702
+    if not res_top1702.linhas_sankhya_casadas.empty:
+        chaves_sistema_consumidas.update(_chave_conteudo(res_top1702.linhas_sankhya_casadas).tolist())
 
     # v5.27: TAMBÉM exclui linhas conciliadas no match 1-pra-1 (exact_match/fuzzy).
     # Sem isso, tarifas TAR C/C SISPAG que já casaram 1-pra-1 com pares no Sankhya
@@ -791,6 +853,10 @@ def executar_pipeline(
         top1722_linhas=res_top1722.linhas_sankhya_casadas,
         top1722_linhas_banco=res_top1722.linhas_banco_casadas,
         top1722_diferencas=res_top1722.com_diferenca,
+        top1702_grupos=res_top1702.grupos_conciliados,
+        top1702_linhas=res_top1702.linhas_sankhya_casadas,
+        top1702_linhas_banco=res_top1702.linhas_banco_casadas,
+        top1702_diferencas=res_top1702.com_diferenca,
         banco_completo=banco,
         sistema_completo=sistema,
         data_referencia=data_referencia,
