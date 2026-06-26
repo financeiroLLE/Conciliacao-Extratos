@@ -1552,6 +1552,7 @@ def render_secao_excecoes_regras(resultado, kpis: dict, conta: str | None = None
     qtd_est_anu = kpis.get("qtd_estornos_anulados", 0)
     qtd_est_par = kpis.get("qtd_estornos_parciais", 0)
     qtd_top1722 = kpis.get("qtd_top1722_grupos", 0)
+    qtd_top1702 = kpis.get("qtd_top1702_grupos", 0)
 
     # Investimentos: pega global ou por conta
     if conta:
@@ -1561,7 +1562,7 @@ def render_secao_excecoes_regras(resultado, kpis: dict, conta: str | None = None
     tem_invest = not df_inv.empty
 
     # Só renderiza a seção se houver pelo menos uma exceção
-    if not (qtd_est_anu > 0 or qtd_est_par > 0 or qtd_top1722 > 0 or tem_invest):
+    if not (qtd_est_anu > 0 or qtd_est_par > 0 or qtd_top1722 > 0 or qtd_top1702 > 0 or tem_invest):
         return
 
     section_title("EXCEÇÕES E REGRAS APLICADAS")
@@ -1588,6 +1589,17 @@ def render_secao_excecoes_regras(resultado, kpis: dict, conta: str | None = None
             "🃏 Cartão TOP 1722", fmt_int(qtd_top1722),
             f"valor: {fmt_brl(kpis.get('valor_top1722_conciliado', 0.0))}",
             classe="destaque-verde",
+        ))
+    if qtd_top1702 > 0:
+        _dif1702 = getattr(resultado, "top1702_diferencas", pd.DataFrame())
+        _difv = float(_dif1702["diferenca"].sum()) if (not _dif1702.empty and "diferenca" in _dif1702.columns) else 0.0
+        _sub = f"valor: {fmt_brl(kpis.get('valor_top1702_conciliado', 0.0))}"
+        if abs(_difv) >= 0.005:
+            _sub += f" · dif {fmt_brl(_difv)}"
+        cards.append(card_kpi(
+            "🎫 Boleto TOP 1702", fmt_int(qtd_top1702),
+            _sub,
+            classe="destaque-amarelo" if abs(_difv) >= 0.005 else "destaque-verde",
         ))
     if tem_invest:
         cards.append(_card_investimentos_de_df(df_inv))
@@ -1949,15 +1961,16 @@ def _render_excecoes_editorial(resultado: ResultadoConciliacao, kpis: dict):
     qtd_est_anu = kpis.get("qtd_estornos_anulados", 0)
     qtd_est_par = kpis.get("qtd_estornos_parciais", 0)
     qtd_top1722 = kpis.get("qtd_top1722_grupos", 0)
+    qtd_top1702 = kpis.get("qtd_top1702_grupos", 0)
     df_inv = resultado.aplicacoes_resgates
     tem_invest = not df_inv.empty
 
     # Se nenhuma das regras se aplica, mostra seção minimalista com "nenhuma exceção"
-    if not (qtd_est_anu > 0 or qtd_est_par > 0 or qtd_top1722 > 0 or tem_invest):
+    if not (qtd_est_anu > 0 or qtd_est_par > 0 or qtd_top1722 > 0 or qtd_top1702 > 0 or tem_invest):
         editorial_secao_head("Exceções aplicadas", "nenhuma neste período")
         return
 
-    total_regras = sum(1 for x in [qtd_est_anu > 0, qtd_est_par > 0, qtd_top1722 > 0, tem_invest] if x)
+    total_regras = sum(1 for x in [qtd_est_anu > 0, qtd_est_par > 0, qtd_top1722 > 0, qtd_top1702 > 0, tem_invest] if x)
     editorial_secao_head("Exceções aplicadas", f"{total_regras} regra{'s' if total_regras != 1 else ''} ativa{'s' if total_regras != 1 else ''}")
 
     itens = []
@@ -1982,6 +1995,29 @@ def _render_excecoes_editorial(resultado: ResultadoConciliacao, kpis: dict):
             "valor": fmt_brl(valor_top),
             "status": "Conciliado",
             "cor": "verde",
+        })
+
+    # TOP 1702 (boleto)
+    if qtd_top1702 > 0:
+        valor_bol = float(kpis.get("valor_top1702_conciliado", 0.0))
+        lb = getattr(resultado, "top1702_linhas_banco", pd.DataFrame())
+        ls = getattr(resultado, "top1702_linhas", pd.DataFrame())
+        dif1702 = getattr(resultado, "top1702_diferencas", pd.DataFrame())
+        qb = len(lb) if not lb.empty else 0
+        qs = len(ls) if not ls.empty else 0
+        dif_val = float(dif1702["diferenca"].sum()) if (not dif1702.empty and "diferenca" in dif1702.columns) else 0.0
+        com_dif = abs(dif_val) >= 0.005
+        sub = (
+            f"{qb} créditos cobrança banco × {qs} boletos Sankhya · "
+            + (f"diferença {fmt_brl(dif_val)} (a investigar)" if com_dif else "diferença R$ 0,00")
+        )
+        itens.append({
+            "icone": "ti-barcode",
+            "titulo": "Boleto TOP 1702 — agrupamento por soma total",
+            "sub": sub,
+            "valor": fmt_brl(valor_bol),
+            "status": "Conciliado (c/ diferença)" if com_dif else "Conciliado",
+            "cor": "amarelo" if com_dif else "verde",
         })
 
     # Investimentos
@@ -2249,11 +2285,12 @@ def _render_excecoes_opcao_a(resultado: ResultadoConciliacao, kpis: dict):
     qtd_est_anu = kpis.get("qtd_estornos_anulados", 0)
     qtd_est_par = kpis.get("qtd_estornos_parciais", 0)
     qtd_top1722 = kpis.get("qtd_top1722_grupos", 0)
+    qtd_top1702 = kpis.get("qtd_top1702_grupos", 0)
     df_inv = resultado.aplicacoes_resgates
     tem_invest = not df_inv.empty
 
     # Se nenhuma exceção, esconde a seção (não polui)
-    if not (qtd_est_anu > 0 or qtd_est_par > 0 or qtd_top1722 > 0 or tem_invest):
+    if not (qtd_est_anu > 0 or qtd_est_par > 0 or qtd_top1722 > 0 or qtd_top1702 > 0 or tem_invest):
         return
 
     # Header da seção
@@ -2277,6 +2314,20 @@ def _render_excecoes_opcao_a(resultado: ResultadoConciliacao, kpis: dict):
             valor_principal=str(qtd_top1722),
             valor_sub=fmt_brl(valor_top),
             cor="verde",
+        ))
+
+    # TOP 1702 (boleto)
+    if qtd_top1702 > 0:
+        _dif1702 = getattr(resultado, "top1702_diferencas", pd.DataFrame())
+        _difv = float(_dif1702["diferenca"].sum()) if (not _dif1702.empty and "diferenca" in _dif1702.columns) else 0.0
+        _com_dif = abs(_difv) >= 0.005
+        chips.append(opa_render_chip_excecao(
+            icone="ti-barcode",
+            label="Boleto TOP 1702",
+            valor_principal=str(qtd_top1702),
+            valor_sub=fmt_brl(float(kpis.get("valor_top1702_conciliado", 0.0)))
+            + (f" · dif {fmt_brl(_difv)}" if _com_dif else ""),
+            cor="amarelo" if _com_dif else "verde",
         ))
 
     # Investimentos
