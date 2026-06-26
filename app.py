@@ -581,27 +581,11 @@ input, textarea, select, [data-baseweb="select"] > div {{
 [data-testid="stFileUploaderDropzone"]:hover {{
     border-color: {CORES["amarelo"]} !important;
 }}
-[data-testid="stFileUploaderDropzone"] * {{ color: {CORES["branco"]} !important; }}
-
-/* v5.36/v5.37: chips dos arquivos JÁ enviados — fundo escuro, nome branco e visível.
-   Especificidade alta (prefixo stFileUploader) pra ganhar do estilo padrão. */
-[data-testid="stFileUploader"] [data-testid="stFileUploaderFile"] {{
-    background-color: {CORES["azul_escuro_2"]} !important;
-    border: 1px solid {CORES["card_borda"]} !important;
-    border-radius: 8px !important;
-    padding: 6px 10px !important;
-    max-width: none !important;
-}}
-[data-testid="stFileUploader"] [data-testid="stFileUploaderFile"] *,
-[data-testid="stFileUploaderFileName"],
-[data-testid="stFileUploaderFileData"] *,
-[data-testid="stFileUploaderFile"] small,
-[data-testid="stFileUploaderFile"] span {{
-    color: {CORES["branco"]} !important;
-    overflow: visible !important;
-    text-overflow: clip !important;
-    max-width: none !important;
-}}
+/* v5.37: ANTES pintava TUDO de branco (inclusive o nome do arquivo, que fica
+   numa caixa branca → sumia). Agora só as INSTRUÇÕES ("arraste", "200MB") ficam
+   brancas; o nome do arquivo mantém a cor escura padrão e aparece na caixa. */
+[data-testid="stFileUploaderDropzoneInstructions"],
+[data-testid="stFileUploaderDropzoneInstructions"] * {{ color: {CORES["branco"]} !important; }}
 
 /* v5.37: menu da coluna do st.dataframe (Sort/filtro) — vinha claro-no-claro */
 [data-testid="stDataFrameColumnMenu"],
