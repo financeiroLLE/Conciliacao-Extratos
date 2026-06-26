@@ -6,6 +6,6 @@
 # com a paleta CORES do app.py pra não destoar.
 base = "dark"
 primaryColor = "#FAC318"
-backgroundColor = "#041747"
+backgroundColor = "#0A1F4D"
 secondaryBackgroundColor = "#0E2456"
 textColor = "#FFFFFF"
