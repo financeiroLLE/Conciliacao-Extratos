@@ -1519,12 +1519,22 @@ def _card_investimentos_de_df(df: pd.DataFrame) -> str:
     # Saldo líquido = Resgates - Aplicações (faz sentido contábil)
     saldo_liquido = val_r - val_a
 
+    # v5.35: deixa explícito que aplicar mais que resgatar NÃO é prejuízo.
+    if saldo_liquido < -0.005:
+        _status = ("Aplicou " + fmt_brl(abs(saldo_liquido)) + " a mais que resgatou · "
+                   "não é prejuízo (dinheiro aplicado, segue da empresa)")
+    elif saldo_liquido > 0.005:
+        _status = "Resgatou " + fmt_brl(saldo_liquido) + " a mais que aplicou no mês"
+    else:
+        _status = "Aplicações e resgates se equilibraram no mês"
+
     sub = f"""
     <div class="lle-kpi-sub-stack">
         <div class="lle-kpi-sub-label">Aplicações:</div>
         <div class="lle-kpi-sub-valor">{fmt_int(qtd_a)} mov. · {fmt_brl(val_a)}</div>
         <div class="lle-kpi-sub-label">Resgates:</div>
         <div class="lle-kpi-sub-valor">{fmt_int(qtd_r)} mov. · {fmt_brl(val_r)}</div>
+        <div class="lle-kpi-sub-label" style="margin-top:6px;">{_status}</div>
     </div>
     """
     return card_kpi_html("Investimentos", fmt_brl(saldo_liquido), sub, classe="destaque-amarelo")
@@ -2682,7 +2692,18 @@ def render_resumo_termometros(resultado: ResultadoConciliacao, kpis: dict):
             '<div class="lle-kpi-suffix">' + sub + '</div></div>'
         )
 
-    sub_banco = fmt_pct(pares) + " em pares diretos &middot; " + fmt_pct(regra) + " por regra de cartão"
+    # v5.35: nomeia a regra que DE FATO explicou (boleto/cartão), em vez de cravar
+    # "cartão". Se não houve agrupamento, mostra só os pares diretos.
+    _regras_nomes = []
+    if int(kpis.get("qtd_top1702_grupos", 0)) > 0:
+        _regras_nomes.append("boleto")
+    if int(kpis.get("qtd_top1722_grupos", 0)) > 0:
+        _regras_nomes.append("cartão")
+    if regra > 0.05:
+        _rot = ("por agrupamento de " + " e ".join(_regras_nomes)) if _regras_nomes else "por agrupamento"
+        sub_banco = fmt_pct(pares) + " em pares diretos &middot; " + fmt_pct(regra) + " " + _rot
+    else:
+        sub_banco = fmt_pct(pares) + " em pares diretos"
     sub_sis = (str(qtd_div) + " lançamento" + ("s" if qtd_div != 1 else "") + " sem confirmação"
                if qtd_div else "0 lançamentos sem confirmação no banco")
     st.html(
@@ -2700,10 +2721,27 @@ def render_resumo_termometros(resultado: ResultadoConciliacao, kpis: dict):
         precisa_card = card_kpi("Precisa de você",
                                 str(precisa) + (" item" if precisa == 1 else " itens"),
                                 fmt_brl(falta + diverg) + " a resolver", classe="destaque-vermelho")
-    diff = abs(total_banco - total_sis)
-    banco_card = card_kpi("Movimentado no Banco", fmt_brl(total_banco))
-    sankhya_card = card_kpi("Movimentado no Sankhya", fmt_brl(total_sis),
-                            "diferença: " + fmt_brl(diff))
+    # v5.35: a diferença vai no card do lado que movimentou MAIS, e só cita "cartão"
+    # quando a conta tem cartão. Sem cartão, fala a verdade: "a analisar".
+    diff_assinado = round(total_banco - total_sis, 2)
+    abs_diff = abs(diff_assinado)
+    nota_diff = ""
+    if abs_diff >= 0.01:
+        _tem_cartao = int(kpis.get("qtd_top1722_grupos", 0)) > 0
+        _lado = ("Banco movimentou " + fmt_brl(abs_diff) + " a mais que o Sankhya"
+                 if diff_assinado > 0
+                 else "Sankhya movimentou " + fmt_brl(abs_diff) + " a mais que o banco")
+        nota_diff = _lado + (" — pode incluir taxa de cartão lançada 2x; o restante a analisar."
+                             if _tem_cartao else " — a analisar.")
+    if diff_assinado > 0:
+        banco_card = card_kpi("Movimentado no Banco", fmt_brl(total_banco), nota_diff)
+        sankhya_card = card_kpi("Movimentado no Sankhya", fmt_brl(total_sis))
+    elif diff_assinado < 0:
+        banco_card = card_kpi("Movimentado no Banco", fmt_brl(total_banco))
+        sankhya_card = card_kpi("Movimentado no Sankhya", fmt_brl(total_sis), nota_diff)
+    else:
+        banco_card = card_kpi("Movimentado no Banco", fmt_brl(total_banco))
+        sankhya_card = card_kpi("Movimentado no Sankhya", fmt_brl(total_sis))
     render_cards([precisa_card, banco_card, sankhya_card, _card_investimentos(resultado)])
 
 
@@ -2740,7 +2778,7 @@ def tela_upload():
 
     with col1:
         section_title("EXTRATO BANCÁRIO")
-        st.caption("Formato padronizado: Data, Histórico, Documento, Valor (R$). Aceita XLS, XLSX ou PDF mensal do Itaú.")
+        st.caption("Formato padronizado: Data, Histórico, Documento, Valor (R$). Aceita XLS, XLSX ou PDF do extrato bancário (Itaú, Sicredi, Bradesco, Caixa, Santander).")
         if modo == "1 conta por vez":
             arquivo_banco = st.file_uploader(
                 "Arraste o extrato",
@@ -3279,39 +3317,47 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
     _pares = float(k["percentual_conciliado"])
     _regra = max(0.0, _explic - _pares)
     _diff = abs(float(k["total_extrato_sistema"]) - _mov_c)
-    _tem_cartao = _regra > 0.01  # só há "cartão (TOP 1722)" quando a regra explicou algo
+    # v5.35: só fala "cartão" se a conta TEM cartão; nomeia a regra real.
+    _tem_cartao = int(k.get("qtd_top1722_grupos", 0)) > 0
+    _tem_boleto = int(k.get("qtd_top1702_grupos", 0)) > 0
+    _nomes = []
+    if _tem_boleto:
+        _nomes.append("boleto (TOP 1702)")
+    if _tem_cartao:
+        _nomes.append("cartão (TOP 1722)")
+    _rotulo = " e ".join(_nomes) if _nomes else "agrupamento por soma"
     with st.expander("Entenda os cards acima"):
-        if _tem_cartao:
+        if _regra > 0.01:
             st.markdown(
                 "**% conferido em pares (" + fmt_pct(_pares) + "):** casou em pares diretos (1 a 1). "
-                "Os " + fmt_pct(_regra) + " restantes são o **cartão**, que casa pela soma total "
-                "(TOP 1722) — também explicado. Somando, o banco está **" + fmt_pct(_explic)
+                "Os " + fmt_pct(_regra) + " restantes são **" + _rotulo + "**, que casa pela soma "
+                "total — também explicado. Somando, o banco está **" + fmt_pct(_explic)
                 + " explicado** (é o número que aparece no resumo)."
             )
         else:
             st.markdown(
                 "**% conferido em pares (" + fmt_pct(_pares) + "):** casou em pares diretos (1 a 1). "
-                "Somando com os agrupamentos do período, o banco está **" + fmt_pct(_explic)
-                + " explicado** (é o número que aparece no resumo)."
+                "O banco está **" + fmt_pct(_explic) + " explicado** (é o número do resumo)."
             )
         if not resultado.aplicacoes_resgates_da_conta(conta).empty:
             st.markdown(
                 "**Investimentos no período:** é o líquido entre o que foi aplicado e o que foi "
-                "resgatado no mês. Valor negativo significa que se aplicou mais do que se resgatou "
-                "— esse dinheiro ficou guardado em aplicação. **Não é despesa nem prejuízo.**"
+                "resgatado no mês. Aplicar mais do que resgatar **não é prejuízo** — o dinheiro só "
+                "ficou guardado em aplicação, continua sendo da empresa."
             )
         if _diff > 0.01:
             if _tem_cartao:
                 st.markdown(
-                    "**Diferença entre Banco e Sankhya (" + fmt_brl(_diff) + "):** normalmente é a "
-                    "taxa de cartão registrada **duas vezes** no Sankhya (uma embutida no valor bruto, "
-                    "outra como linha de despesa). **Não é erro de conciliação.**"
+                    "**Diferença entre Banco e Sankhya (" + fmt_brl(_diff) + "):** pode incluir a "
+                    "taxa de cartão lançada **duas vezes** no Sankhya (uma no valor bruto, outra como "
+                    "despesa). O restante precisa ser analisado."
                 )
             else:
                 st.markdown(
-                    "**Diferença entre Banco e Sankhya (" + fmt_brl(_diff) + "):** essa diferença "
-                    "ainda **precisa ser analisada** — pode ser lançamento duplicado no Sankhya, "
-                    "tarifa, ou item a conciliar. O app **não crava** a causa automaticamente."
+                    "**Diferença entre Banco e Sankhya (" + fmt_brl(_diff) + "):** precisa ser "
+                    "analisada. Esta conta **não tem cartão**, então não é taxa de cartão — pode ser "
+                    "lançamento a mais/duplicado no Sankhya, tarifa, ou item a conciliar. O app "
+                    "**não crava** a causa."
                 )
 
     # Download específico desse banco — v5.35: SOB DEMANDA.
