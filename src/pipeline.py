@@ -418,7 +418,11 @@ def _calcular_kpis(
             columns=["data", "valor", "historico", "conta", "origem_divergencia"]
         )
 
-    falta_lancar = float(divergencia_total_df["valor"].abs().sum()) if not divergencia_total_df.empty else 0.0
+    # v5.38: LÍQUIDO e depois MÓDULO. Soma com sinal (pra +13,06 e −9,33 anularem
+    # → 3,73, em vez de 22,39 do absoluto), e tira o módulo pra exibir positivo
+    # (Santander, despesa única −160,59 → 160,59). A contagem (qtd) preserva a
+    # visibilidade dos itens.
+    falta_lancar = abs(float(divergencia_total_df["valor"].sum())) if not divergencia_total_df.empty else 0.0
     if not divergencia_total_df.empty:
         falta_lancar_receitas = float(divergencia_total_df[divergencia_total_df["valor"] > 0]["valor"].sum())
         falta_lancar_despesas = float(divergencia_total_df[divergencia_total_df["valor"] < 0]["valor"].abs().sum())
