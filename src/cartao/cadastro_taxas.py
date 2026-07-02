@@ -76,12 +76,38 @@ def _upper_sem_acento(s: Any) -> str:
     return "".join(c for c in s if not unicodedata.combining(c)).upper().strip()
 
 
-# Bandeiras combinadas primeiro (senão "MAS/ELO" cairia em "ELO").
-_TT_BANDEIRAS_COMBINADAS = [("VIS/MAS", "Visa/Master"), ("MAS/ELO", "Master/Elo")]
-_TT_BANDEIRAS_SIMPLES = [
-    ("HIPER", "Hiper"), ("AMEX", "Amex"), ("ELO", "Elo"),
-    ("VISA", "Visa"), ("MASTER", "Master"), ("MAST", "Master"),
+# Bandeiras combinadas primeiro (senão "MAS/ELO" cairia em "ELO"). Cada uma
+# vira DUAS bandeiras canônicas (o contrato combinado vale pras duas marcas).
+_TT_BANDEIRAS_COMBINADAS = [
+    ("VIS/MAS", ["Visa", "Mastercard"]),
+    ("MAS/ELO", ["Mastercard", "Elo"]),
 ]
+_BANDEIRAS_CANONICAS = ("Mastercard", "Visa", "Hipercard", "Amex", "Elo")
+
+
+def canonizar_bandeira(s: Any) -> str:
+    """Nome canônico da bandeira, tolerante às duas fontes.
+
+    O Sankhya escreve curto ('Master', 'Hiper', 'Amex') e o extrato do GetNet
+    escreve completo ('Mastercard', 'Hipercard', 'American Express'). Mapeando
+    por palavra-chave, os dois lados falam o MESMO nome — senão o casamento por
+    bandeira falha e tudo cai em "sem contrato". Bandeira desconhecida é mantida
+    como veio (fica "sem contrato" honesto, nunca um match falso).
+    """
+    u = _upper_sem_acento(s)
+    if not u:
+        return ""
+    if "MASTER" in u or u == "MC":
+        return "Mastercard"
+    if "VISA" in u or u == "VIS":
+        return "Visa"
+    if "HIPER" in u:
+        return "Hipercard"
+    if "AMEX" in u or "AMERICAN" in u:
+        return "Amex"
+    if "ELO" in u:
+        return "Elo"
+    return str(s).strip()
 
 
 def _tt_adquirente(u: str) -> str:
@@ -93,14 +119,14 @@ def _tt_adquirente(u: str) -> str:
     return ""
 
 
-def _tt_bandeira(u: str) -> str:
-    for k, v in _TT_BANDEIRAS_COMBINADAS:
+def _tt_bandeiras(u: str) -> list[str]:
+    """Bandeira(s) canônica(s) da linha do Tipo de Título.
+    Combinadas ('VIS/MAS') viram duas ('Visa', 'Mastercard')."""
+    for k, lista in _TT_BANDEIRAS_COMBINADAS:
         if k in u:
-            return v
-    for k, v in _TT_BANDEIRAS_SIMPLES:
-        if k in u:
-            return v
-    return ""
+            return list(lista)
+    b = canonizar_bandeira(u)
+    return [b] if b in _BANDEIRAS_CANONICAS else [""]
 
 
 def _tt_parcelas(u: str, qtd: Any) -> list[int]:
@@ -163,18 +189,19 @@ def _converter_tipo_de_titulo(df_raw: pd.DataFrame) -> pd.DataFrame:
             mod = ""
         if not adq or not mod or not parc:
             continue
-        band = _tt_bandeira(u)
+        bandeiras = _tt_bandeiras(u)
         taxa = r.get(col_taxa)
-        for p in parc:
-            linhas.append(
-                {
-                    "adquirente": adq,
-                    "bandeira": band,
-                    "modalidade": mod,
-                    "parcelas": p,
-                    "taxa_mdr": taxa,
-                }
-            )
+        for band in bandeiras:
+            for p in parc:
+                linhas.append(
+                    {
+                        "adquirente": adq,
+                        "bandeira": band,
+                        "modalidade": mod,
+                        "parcelas": p,
+                        "taxa_mdr": taxa,
+                    }
+                )
     return pd.DataFrame(
         linhas,
         columns=["adquirente", "bandeira", "modalidade", "parcelas", "taxa_mdr"],
@@ -237,7 +264,7 @@ def carregar_cadastro_taxas(arquivo: Any) -> pd.DataFrame:
     # Quando presente, refina o match: taxas variam por bandeira mesmo com mesma
     # modalidade/parcelas. Quando ausente (cadastro antigo), funciona como antes.
     out["bandeira"] = (
-        df_raw["bandeira"].astype(str).str.strip()
+        df_raw["bandeira"].astype(str).map(canonizar_bandeira)
         if "bandeira" in df_raw.columns else ""
     )
     out["taxa_antecipacao"] = (
@@ -302,8 +329,11 @@ def encontrar_taxa_vigente(
         and (cadastro["bandeira"].astype(str).str.strip() != "").any()
     )
     if bandeira and cadastro_tem_bandeira:
-        bnd_norm = str(bandeira).strip().lower()
-        cand_bnd = cand[cand["bandeira"].astype(str).str.lower() == bnd_norm]
+        bnd_norm = canonizar_bandeira(bandeira).lower()
+        cand_bnd = cand[
+            cand["bandeira"].astype(str).map(lambda b: canonizar_bandeira(b).lower())
+            == bnd_norm
+        ]
         if not cand_bnd.empty:
             cand = cand_bnd
         # Se não bateu por bandeira mas tem linhas SEM bandeira (cadastro genérico),
