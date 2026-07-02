@@ -16,6 +16,12 @@ from .cadastro_taxas import (
  
 # Tolerância 0% — taxa precisa bater exatamente (com epsilon para erro de float)
 EPSILON = 0.00001
+
+# v5.44: régua que separa arredondamento da adquirente de discrepância real.
+# Medida em PONTOS PERCENTUAIS (a coluna diferenca_pp). Até este limite, a
+# diferença é atribuída ao arredondamento por transação (não é cobrança
+# indevida); acima, é discrepância de taxa (entra no radar / impacto).
+LIMITE_ARREDONDAMENTO_PP = 0.02
  
  
 @dataclass
@@ -166,7 +172,7 @@ def auditar_taxas(
     else:
         detalhe = detalhe_atual
  
-    divergentes = detalhe[detalhe["status"] == "Divergente"].copy() if not detalhe.empty else pd.DataFrame()
+    divergentes = detalhe[detalhe["status"] == "Discrepância"].copy() if not detalhe.empty else pd.DataFrame()
  
     kpis = _calcular_kpis(detalhe)
     return ResultadoAuditoriaTaxas(detalhado=detalhe, divergentes=divergentes, kpis=kpis)
@@ -231,12 +237,21 @@ def _auditar_dataframe(relatorio: pd.DataFrame, cadastro: pd.DataFrame) -> pd.Da
             )
         else:
             diff = cobrado_rs - esperado_rs
-            sinal = "ACIMA do contratado" if diff > 0 else "ABAIXO do contratado"
-            detalhe.at[idx, "status"] = "Divergente"
-            detalhe.at[idx, "motivo"] = (
-                f"Cobrança {sinal} em R$ {abs(diff):.2f} "
-                f"(esperado R$ {esperado_rs:.2f}, cobrado R$ {cobrado_rs:.2f})"
-            )
+            # v5.44: separa arredondamento (taxa dentro do contrato, só centavo de
+            # arredondamento por transação) de DISCREPÂNCIA real de taxa.
+            if abs(detalhe.at[idx, "diferenca_pp"]) <= LIMITE_ARREDONDAMENTO_PP:
+                detalhe.at[idx, "status"] = "Arredondamento"
+                detalhe.at[idx, "motivo"] = (
+                    f"Arredondamento da adquirente (R$ {abs(diff):.2f}) — "
+                    f"taxa dentro do contrato ({detalhe.at[idx, 'diferenca_pp']:+.4f} pp)"
+                )
+            else:
+                sinal = "ACIMA do contratado" if diff > 0 else "ABAIXO do contratado"
+                detalhe.at[idx, "status"] = "Discrepância"
+                detalhe.at[idx, "motivo"] = (
+                    f"Cobrança {sinal} em R$ {abs(diff):.2f} "
+                    f"(esperado R$ {esperado_rs:.2f}, cobrado R$ {cobrado_rs:.2f})"
+                )
  
     # Se valor_liquido estava vazio, calcula
     sem_liq = detalhe["valor_liquido"].isna() | (detalhe["valor_liquido"] == 0)
@@ -256,27 +271,36 @@ def _calcular_kpis(detalhe: pd.DataFrame) -> dict[str, Any]:
     taxas_pagas = volume_bruto - liquido
     taxa_media = (taxas_pagas / volume_bruto) if volume_bruto > 0 else 0.0
  
-    qtd_div = int((detalhe["status"] == "Divergente").sum())
+    qtd_disc = int((detalhe["status"] == "Discrepância").sum())
+    qtd_arred = int((detalhe["status"] == "Arredondamento").sum())
     qtd_sem_contrato = int((detalhe["status"] == "Sem contrato").sum())
     qtd_ok = int((detalhe["status"] == "OK").sum())
  
-    div_df = detalhe[detalhe["status"] == "Divergente"]
+    div_df = detalhe[detalhe["status"] == "Discrepância"]
+    arred_df = detalhe[detalhe["status"] == "Arredondamento"]
     impacto_acumulado = float(div_df["diferenca_rs"].sum()) if not div_df.empty else 0.0
     impacto_voce_pagou_mais = float(
         div_df[div_df["diferenca_rs"] > 0]["diferenca_rs"].sum()
     ) if not div_df.empty else 0.0
+    impacto_voce_pagou_menos = float(
+        div_df[div_df["diferenca_rs"] < 0]["diferenca_rs"].sum()
+    ) if not div_df.empty else 0.0
+    arredondamento_total = float(arred_df["diferenca_rs"].abs().sum()) if not arred_df.empty else 0.0
  
     return {
         "volume_bruto": volume_bruto,
         "valor_liquido": liquido,
         "taxas_pagas": taxas_pagas,
         "taxa_media_efetiva": taxa_media,
-        "qtd_divergencias": qtd_div,
+        "qtd_divergencias": qtd_disc,
+        "qtd_arredondamento": qtd_arred,
         "qtd_sem_contrato": qtd_sem_contrato,
         "qtd_ok": qtd_ok,
         "qtd_total": len(detalhe),
         "impacto_acumulado": impacto_acumulado,
         "impacto_pagou_mais": impacto_voce_pagou_mais,
+        "impacto_pagou_menos": impacto_voce_pagou_menos,
+        "arredondamento_total": arredondamento_total,
     }
  
  
@@ -287,11 +311,14 @@ def _kpis_vazios() -> dict[str, Any]:
         "taxas_pagas": 0.0,
         "taxa_media_efetiva": 0.0,
         "qtd_divergencias": 0,
+        "qtd_arredondamento": 0,
         "qtd_sem_contrato": 0,
         "qtd_ok": 0,
         "qtd_total": 0,
         "impacto_acumulado": 0.0,
         "impacto_pagou_mais": 0.0,
+        "impacto_pagou_menos": 0.0,
+        "arredondamento_total": 0.0,
     }
  
  
