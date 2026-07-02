@@ -58,7 +58,19 @@ def _num_br(s: str) -> float:
 def detectar_banco(texto_pagina1: str) -> str:
     """Retorna 'itau' | 'sicredi' | 'bradesco' | 'caixa' | 'desconhecido'."""
     t = _normalizar(texto_pagina1)
-    if "itauempresas" in t or "itau empresas" in t or "ag./origem" in t:
+    # Itaú: às vezes o logo "ItaúEmpresas" e o cabeçalho "Ag./Origem" são IMAGEM
+    # (não saem no texto). Nesse caso, detecta por marcas exclusivas do Itaú que
+    # aparecem no corpo do extrato — "SISPAG" e "APLIC AUT MAIS" — ou pelo padrão
+    # agência/conta do topo (ex.: 0023/78861-5) junto de "empresas". Nenhum dos
+    # outros bancos da base usa essas marcas, então não há risco de confundir.
+    if (
+        "itauempresas" in t
+        or "itau empresas" in t
+        or "ag./origem" in t
+        or "sispag" in t
+        or "aplic aut mais" in t
+        or ("empresas" in t[:40] and re.search(r"\d{4}/\d{4,6}-\d", t))
+    ):
         return "itau"
     if "sicredi" in t or ("cooperativa" in t and "associado" in t):
         return "sicredi"
