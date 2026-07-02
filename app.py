@@ -4993,7 +4993,7 @@ def pagina_auditoria_taxas():
     st.markdown(
         "Suba aqui o **relatório padronizado das adquirentes** do período que quer auditar. "
         "O sistema compara a taxa que a adquirente cobrou contra a taxa contratada no cadastro "
-        "e marca cada lançamento como **OK**, **Divergente** ou **Sem contrato**."
+        "e marca cada lançamento como **OK**, **Arredondamento**, **Discrepância** ou **Sem contrato**."
     )
 
     # v4.1: bloco de histórico acumulado
@@ -5200,28 +5200,38 @@ def pagina_auditoria_taxas():
     render_cards(cards1)
 
     cards2 = [
-        card_kpi("Divergências", fmt_int(k["qtd_divergencias"]),
-                 "taxa aplicada ≠ contratada",
+        card_kpi("OK", fmt_int(k["qtd_ok"]),
+                 "conforme contrato", classe="destaque-verde"),
+        card_kpi("Arredondamento", fmt_int(k.get("qtd_arredondamento", 0)),
+                 "centavo da adquirente"),
+        card_kpi("Discrepâncias", fmt_int(k["qtd_divergencias"]),
+                 "diferença real de taxa",
                  classe="destaque-vermelho" if k["qtd_divergencias"] > 0 else ""),
         card_kpi("Sem Contrato", fmt_int(k["qtd_sem_contrato"]),
                  "modalidade não cadastrada",
                  classe="destaque-amarelo" if k["qtd_sem_contrato"] > 0 else ""),
-        card_kpi("OK", fmt_int(k["qtd_ok"]),
-                 "conforme contrato", classe="destaque-verde"),
-        card_kpi("Impacto Acumulado",
-                 fmt_brl(k["impacto_acumulado"]),
-                 "soma das diferenças (+ você pagou mais)",
-                 classe="destaque-vermelho" if k["impacto_pagou_mais"] > 0 else ""),
     ]
     render_cards(cards2)
 
+    cards3 = [
+        card_kpi("Você pagou a mais", fmt_brl(k.get("impacto_pagou_mais", 0.0)),
+                 "só discrepâncias",
+                 classe="destaque-vermelho" if k.get("impacto_pagou_mais", 0.0) > 0 else ""),
+        card_kpi("Você pagou a menos", fmt_brl(abs(k.get("impacto_pagou_menos", 0.0))),
+                 "só discrepâncias (a seu favor)"),
+        card_kpi("Arredondamento (total)", fmt_brl(k.get("arredondamento_total", 0.0)),
+                 "não é cobrança indevida"),
+    ]
+    render_cards(cards3)
+
     st.divider()
 
-    # Tabela com abas: divergentes / sem contrato / tudo
+    # Tabela com abas: OK / arredondamento / discrepância / sem contrato / tudo
     tabs = st.tabs([
-        f"⚠️ Divergentes ({k['qtd_divergencias']})",
-        f"❓ Sem contrato ({k['qtd_sem_contrato']})",
         f"✅ OK ({k['qtd_ok']})",
+        f"🔧 Arredondamento ({k.get('qtd_arredondamento', 0)})",
+        f"⚠️ Discrepância ({k['qtd_divergencias']})",
+        f"❓ Sem contrato ({k['qtd_sem_contrato']})",
         "📋 Tudo",
     ])
 
@@ -5260,22 +5270,44 @@ def pagina_auditoria_taxas():
         return out
 
     with tabs[0]:
-        if res.divergentes.empty:
-            st.success("🎉 Nenhuma divergência! Todas as taxas estão conforme contrato.")
+        ok = res.detalhado[res.detalhado["status"] == "OK"]
+        if ok.empty:
+            st.info("Nenhuma transação OK neste período.")
         else:
+            st.success(f"✅ **{len(ok)} transações conforme contrato.**")
+            st.dataframe(_formatar_visualizacao(ok), use_container_width=True, hide_index=True)
+
+    with tabs[1]:
+        arr = res.detalhado[res.detalhado["status"] == "Arredondamento"]
+        if arr.empty:
+            st.success("✅ Nenhum arredondamento a destacar.")
+        else:
+            st.info(
+                f"🔧 **{len(arr)} lançamentos com arredondamento da adquirente** "
+                "(diferença de taxa até 0,02 pp). Total "
+                f"**{fmt_brl(k.get('arredondamento_total', 0.0))}** — não é cobrança indevida, "
+                "é o centavo que a adquirente arredonda por transação."
+            )
+            st.dataframe(_formatar_visualizacao(arr), use_container_width=True, hide_index=True)
+
+    with tabs[2]:
+        if res.divergentes.empty:
+            st.success("🎉 Nenhuma discrepância de taxa. Tudo dentro do contrato (fora arredondamento).")
+        else:
+            _mais = k.get("impacto_pagou_mais", 0.0)
+            _menos = abs(k.get("impacto_pagou_menos", 0.0))
             st.warning(
-                f"⚠️ **{len(res.divergentes)} divergências detectadas.** "
-                f"Impacto financeiro acumulado: **{fmt_brl(k['impacto_acumulado'])}** "
-                f"(valor positivo = você pagou mais que o contratado)."
+                f"⚠️ **{len(res.divergentes)} discrepâncias de taxa** (acima de 0,02 pp). "
+                f"Você pagou a mais **{fmt_brl(_mais)}** e a menos **{fmt_brl(_menos)}**."
             )
             visu = _formatar_visualizacao(res.divergentes)
             st.dataframe(visu, use_container_width=True, hide_index=True)
 
-            # Download das divergentes
+            # Download das discrepâncias
             buf = BytesIO()
             with pd.ExcelWriter(buf, engine="openpyxl") as writer:
                 _formatar_visualizacao(res.divergentes).to_excel(
-                    writer, sheet_name="Divergentes", index=False
+                    writer, sheet_name="Discrepancias", index=False
                 )
                 # Aba "Bruto" com dados originais (sem formatação) pra reanálise
                 res.divergentes[cols_show].to_excel(
@@ -5283,15 +5315,15 @@ def pagina_auditoria_taxas():
                 )
             buf.seek(0)
             st.download_button(
-                "⬇️ Baixar Excel com divergentes",
+                "⬇️ Baixar Excel com discrepâncias",
                 data=buf.getvalue(),
-                file_name=f"divergencias_taxas_{data_ate.strftime('%Y%m%d')}.xlsx",
+                file_name=f"discrepancias_taxas_{data_ate.strftime('%Y%m%d')}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 type="primary",
                 use_container_width=True,
             )
 
-    with tabs[1]:
+    with tabs[3]:
         sc = res.detalhado[res.detalhado["status"] == "Sem contrato"]
         if sc.empty:
             st.success("✅ Todas as transações têm taxa cadastrada.")
@@ -5302,25 +5334,17 @@ def pagina_auditoria_taxas():
             )
             st.dataframe(_formatar_visualizacao(sc), use_container_width=True, hide_index=True)
 
-    with tabs[2]:
-        ok = res.detalhado[res.detalhado["status"] == "OK"]
-        if ok.empty:
-            st.info("Nenhuma transação OK neste período.")
-        else:
-            st.success(f"✅ **{len(ok)} transações conforme contrato.**")
-            st.dataframe(_formatar_visualizacao(ok), use_container_width=True, hide_index=True)
-
-    with tabs[3]:
+    with tabs[4]:
         st.dataframe(_formatar_visualizacao(res.detalhado),
                      use_container_width=True, hide_index=True)
 
-        # Resumo por adquirente
+        # Resumo por adquirente (só discrepâncias)
         if not res.divergentes.empty:
             st.write("")
-            st.markdown("**Divergências por adquirente:**")
+            st.markdown("**Discrepâncias por adquirente:**")
             por_adq = res.divergentes_por_adquirente()
             por_adq["impacto"] = por_adq["impacto"].apply(fmt_brl)
-            por_adq.columns = ["Adquirente", "Quantidade", "Impacto Acumulado"]
+            por_adq.columns = ["Adquirente", "Quantidade", "Impacto (R$)"]
             st.dataframe(por_adq, use_container_width=True, hide_index=True)
 
     # v4.1: download da auditoria COMPLETA (pra usar como histórico no próximo dia)
