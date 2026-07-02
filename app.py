@@ -28,6 +28,10 @@ from src.parsers import (
     carregar_pendencias_anteriores,
     carregar_relatorio_sistema,
 )
+from src.parsers.adquirente import (
+    carregar_extrato_adquirente,
+    resumo_por_categoria,
+)
 from src.pipeline import ResultadoConciliacao, executar_pipeline
 from src.reports import (
     gerar_csvs_zip,
@@ -180,6 +184,47 @@ def _ler_contas_sankhya_da_sessao() -> list[str]:
     except Exception:
         return []
     return _contas_no_sankhya(payload, coluna)
+
+
+@st.cache_data(show_spinner=False)
+def _parse_adquirentes(payload: tuple) -> pd.DataFrame:
+    """Lê todos os arquivos de adquirente (GetNet/PagBank) e junta num só df,
+    no esquema comum de src.parsers.adquirente. payload = ((nome, bytes), ...)."""
+    import io as _io
+
+    from src.parsers.adquirente import COLUNAS_SAIDA
+
+    frames = []
+    for nome, conteudo in payload:
+        try:
+            bio = _io.BytesIO(conteudo)
+            bio.name = nome
+            df = carregar_extrato_adquirente(bio)
+            if df is not None and not df.empty:
+                df = df.copy()
+                df["arquivo"] = nome
+                frames.append(df)
+        except Exception:
+            continue
+    if not frames:
+        return pd.DataFrame(columns=COLUNAS_SAIDA + ["arquivo"])
+    return pd.concat(frames, ignore_index=True)
+
+
+def _adquirentes_da_sessao() -> pd.DataFrame:
+    """DataFrame combinado dos extratos de adquirente enviados (ou vazio)."""
+    from src.parsers.adquirente import COLUNAS_SAIDA
+
+    arquivos = st.session_state.get("adquirente") or []
+    if arquivos and not isinstance(arquivos, list):
+        arquivos = [arquivos]
+    if not arquivos:
+        return pd.DataFrame(columns=COLUNAS_SAIDA + ["arquivo"])
+    try:
+        payload = tuple((f.name, f.getvalue()) for f in arquivos)
+    except Exception:
+        return pd.DataFrame(columns=COLUNAS_SAIDA + ["arquivo"])
+    return _parse_adquirentes(payload)
 
 
 # ============================================================
@@ -2957,6 +3002,21 @@ def tela_upload():
         )
 
     st.divider()
+    section_title("EXTRATO DA ADQUIRENTE (OPCIONAL)")
+    st.caption(
+        "Só pra contas que recebem cartão. Aceita GetNet (Recebíveis) e PagBank/PagSeguro. "
+        "Pode subir vários. Conta sem cartão não precisa subir nada — tudo funciona igual."
+    )
+    arquivos_adquirente = st.file_uploader(
+        "Arraste o extrato da adquirente (GetNet / PagBank)",
+        type=["xlsx", "xls", "csv"],
+        key="adquirente",
+        accept_multiple_files=True,
+        help="Usado pra dar NOME à diferença de cartão (aluguel, tarifa, estorno) na conciliação "
+        "e pra alimentar a Auditoria de Cartões (taxa cobrada × taxa de contrato).",
+    )
+
+    st.divider()
     section_title("PENDÊNCIAS DE DIAS ANTERIORES (OPCIONAL)")
     arquivo_pendencias = st.file_uploader(
         "Relatório anterior (lê a aba 'Pendências Consolidadas')",
@@ -3189,6 +3249,7 @@ def tela_upload():
                                "Os resultados estão disponíveis para download mesmo assim.")
 
                 st.session_state.resultado = resultado
+                st.session_state.adquirente_df = _adquirentes_da_sessao()
                 st.session_state.pendencias_anteriores = pendencias
                 st.session_state.id_execucao_atual = id_exec
                 st.session_state.xlsx_atual = None  # v5.34: gera sob demanda (volume)
@@ -3338,6 +3399,90 @@ def _diferenca_bxs_por_dia(resultado: "ResultadoConciliacao", conta: str) -> lis
             out.append((dia, dif))
     out.sort(key=lambda x: abs(x[1]), reverse=True)
     return out
+
+
+_ROTULOS_CARTAO = {
+    "estorno": "Estorno / Cancelamento",
+    "aluguel": "Aluguel de maquininha",
+    "tarifa": "Tarifa / Excedentes",
+    "repasse": "Repasse (cai no banco)",
+    "venda": "Vendas",
+    "saldo": "Saldo",
+    "outros": "Outros",
+}
+
+
+def render_tab_diferenca_cartao(adq: pd.DataFrame, resultado, conta: str):
+    """Aba 'Diferença de Cartão': usa o extrato da adquirente pra dar NOME às
+    tarifas/aluguéis/estornos e amarrar isso à diferença de volume por dia.
+    Só mostra o que está no arquivo — nada é cravado."""
+    st.caption(
+        "Extrato da adquirente (GetNet/PagBank) — dá nome às tarifas, aluguéis e "
+        "estornos de cartão e amarra à diferença de volume. Nada é cravado sem estar no arquivo."
+    )
+    if adq is None or adq.empty:
+        st.info(
+            "Nenhum extrato de adquirente foi enviado nesta execução. Suba o GetNet "
+            "(Recebíveis) e/ou PagBank na tela de upload — é opcional — pra ver o mapa de cartão aqui."
+        )
+        return
+
+    res = resumo_por_categoria(adq)
+    mapa = pd.DataFrame(
+        {
+            "Categoria": [_ROTULOS_CARTAO.get(c, c) for c in res["categoria"]],
+            "Qtd": res["qtd"].astype(int).values,
+            "Total": [fmt_brl(v) for v in res["total"]],
+        }
+    )
+    st.markdown("**Mapa de cartão — por categoria (valores do extrato da adquirente)**")
+    st.dataframe(mapa, hide_index=True, use_container_width=True)
+
+    # Amarra a diferença de volume (por dia) ao que a adquirente mostra naquele dia.
+    dias = _diferenca_bxs_por_dia(resultado, conta)
+    if dias:
+        adq_dt = pd.to_datetime(adq["data"], errors="coerce").dt.normalize()
+        linhas = []
+        for d, v in dias[:12]:
+            no_dia = adq[
+                (adq_dt == pd.Timestamp(d))
+                & (adq["categoria"].isin(["aluguel", "tarifa", "estorno"]))
+            ]
+            if not no_dia.empty:
+                expl = "; ".join(
+                    f"{_ROTULOS_CARTAO.get(c, c)}: {fmt_brl(abs(val))} ({desc})"
+                    for c, val, desc in zip(
+                        no_dia["categoria"], no_dia["valor"], no_dia["descricao"]
+                    )
+                )
+            else:
+                expl = "— (não há tarifa/estorno da adquirente neste dia)"
+            linhas.append(
+                {"Dia": d.strftime("%d/%m"), "Diferença de volume": fmt_brl(abs(v)), "O que a adquirente mostra": expl}
+            )
+        st.markdown("**Diferença de volume Banco × Sankhya, dia a dia — explicada pela adquirente**")
+        st.caption(
+            "Tarifa/aluguel entram 2× no volume (o Sankhya lança a tarifa e o bruto; "
+            "o banco já vem líquido), por isso a diferença costuma ser ~2× o valor da tarifa."
+        )
+        st.dataframe(pd.DataFrame(linhas), hide_index=True, use_container_width=True)
+
+    # Detalhe das tarifas/aluguéis/estornos
+    custos = adq[adq["categoria"].isin(["estorno", "aluguel", "tarifa"])].copy()
+    if not custos.empty:
+        custos = custos.sort_values("data")
+        det = pd.DataFrame(
+            {
+                "Dia": pd.to_datetime(custos["data"]).dt.strftime("%d/%m"),
+                "Adquirente": custos["adquirente"].values,
+                "Bandeira": custos["bandeira"].values,
+                "Lançamento": custos["descricao"].values,
+                "Categoria": [_ROTULOS_CARTAO.get(c, c) for c in custos["categoria"]],
+                "Valor": [fmt_brl(v) for v in custos["valor"]],
+            }
+        )
+        st.markdown("**Tarifas, aluguéis e estornos (detalhe)**")
+        st.dataframe(det, hide_index=True, use_container_width=True)
 
 
 def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
@@ -3574,6 +3719,12 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
     if not top1722_diff_conta.empty:
         tabs_nomes.append(f"⚠️ TOP 1722 Diferença ({len(top1722_diff_conta)})")
 
+    # v5.41: aba "Diferença de Cartão" — só quando há extrato de adquirente enviado.
+    _adq_df = st.session_state.get("adquirente_df")
+    _tem_adq = _adq_df is not None and not _adq_df.empty
+    if _tem_adq:
+        tabs_nomes.append("💳 Diferença de Cartão")
+
     tabs = st.tabs(tabs_nomes)
     idx = 0
     with tabs[idx]:
@@ -3625,6 +3776,10 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
         idx += 1
         with tabs[idx]:
             render_tab_top1722_diferenca(top1722_diff_conta, conta)
+    if _tem_adq:
+        idx += 1
+        with tabs[idx]:
+            render_tab_diferenca_cartao(_adq_df, resultado, conta)
 
     # v3.8: nova seção "POR TIPO DE LANÇAMENTO" filtrada por conta
     st.write("")
