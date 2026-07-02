@@ -3622,47 +3622,38 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
         _lado = "banco" if dif_bs > 0 else "Sankhya"
         _adq_alert = st.session_state.get("adquirente_df")
         _partes, _todos = _explicar_diferenca_cartao(resultado, conta, _adq_alert)
+        _dias_conferir = [d.strftime("%d/%m") for d, v, e in _partes if e is None]
+        _val = fmt_brl(abs(dif_bs))
 
-        # Monta a composição por dia (o que a adquirente explica).
-        _comp = []
-        for _d, _v, _e in _partes[:12]:
-            _dia = _d.strftime("%d/%m")
-            if _e:
-                _comp.append(_dia + " (" + fmt_brl(abs(_v)) + "): " + _e)
-            else:
-                _comp.append(_dia + " (" + fmt_brl(abs(_v)) + "): a conferir")
-        _lista = "".join("<li>" + c + "</li>" for c in _comp)
+        def _banner(cor, borda, icone, status, texto):
+            st.html(
+                '<div style="background:' + cor + '; border-left:4px solid ' + borda + '; '
+                'border-radius:8px; padding:10px 14px; margin:10px 0 2px 0; color:#e9eef7; '
+                'font-size:14px; line-height:1.5;">' + icone
+                + ' <b>Diferença Banco &times; Sankhya: ' + _val + '</b> &middot; <b>' + status
+                + '</b> &middot; ' + texto + '</div>'
+            )
 
         if _partes and _todos:
-            # Tudo explicado pela adquirente → tom VERDE, sem "precisa de análise".
-            st.html(
-                '<div style="background:#0c2b1a; border-left:4px solid #0F8C3B; border-radius:8px; '
-                'padding:12px 16px; margin:10px 0 2px 0; color:#d6f5e2; font-size:14px; line-height:1.6;">'
-                '&#9989; <b>Diferença Banco &times; Sankhya: ' + fmt_brl(abs(dif_bs)) + '</b> — o '
-                + _lado + ' movimentou mais, e o <b>extrato da adquirente identifica 100% dessa diferença</b>. '
-                'Composição:<ul style="margin:6px 0 0 0;padding-left:18px">' + _lista + '</ul>'
-                '<span style="color:#9fe0b6">Não é erro de conciliação — é uma taxa que a adquirente '
-                'descontou dentro do repasse (entrada e saída do mesmo valor). Detalhe na aba "Diferença de Cartão".</span></div>'
+            # OK — a adquirente identifica 100% da diferença.
+            _banner(
+                "#0c2b1a", "#0F8C3B", "&#9989;", "identificada 100% pela adquirente",
+                'taxa descontada no repasse (não é erro de conciliação). Detalhe na aba '
+                '&ldquo;Diferença de Cartão&rdquo;.',
             )
-        elif _partes:
-            # Parte explicada, parte não → tom AMARELO, mas já nomeando o que dá.
-            st.html(
-                '<div style="background:#2a1d10; border-left:4px solid #FAC318; border-radius:8px; '
-                'padding:12px 16px; margin:10px 0 2px 0; color:#f2e6c8; font-size:14px; line-height:1.6;">'
-                '&#9888;&#65039; <b>Diferença Banco &times; Sankhya: ' + fmt_brl(abs(dif_bs)) + '</b> — o '
-                + _lado + ' movimentou mais. Composição por dia:'
-                '<ul style="margin:6px 0 0 0;padding-left:18px">' + _lista + '</ul>'
-                'O que está como <b>"a conferir"</b> ainda precisa da sua análise (suba o extrato da '
-                'adquirente pra nomear, ou veja nas abas "Sem baixa no Sankhya" / "Diferença de Cartão").</div>'
+        elif _partes and _dias_conferir:
+            # Parte identificada, parte a conferir.
+            _banner(
+                "#2a1d10", "#FAC318", "&#9888;&#65039;", "parte a conferir",
+                'a conferir em: ' + "; ".join(_dias_conferir[:6])
+                + '. Veja a aba &ldquo;Diferença de Cartão&rdquo;.',
             )
         else:
-            # Sem detalhe por dia — banner simples (fallback).
-            st.html(
-                '<div style="background:#2a1d10; border-left:4px solid #FAC318; border-radius:8px; '
-                'padding:12px 16px; margin:10px 0 2px 0; color:#f2e6c8; font-size:14px; line-height:1.6;">'
-                '&#9888;&#65039; <b>Diferença Banco &times; Sankhya: ' + fmt_brl(abs(dif_bs)) + '</b> — o '
-                + _lado + ' movimentou mais. Essa diferença precisa da sua análise. Veja "Entenda os '
-                'cards" e as abas "Sem baixa no Sankhya" / "Diferença de Cartão".</div>'
+            # Precisa de análise (sem adquirente ou sem detalhe por dia).
+            _banner(
+                "#2a1d10", "#FAC318", "&#9888;&#65039;", "precisa da sua análise",
+                'suba o extrato da adquirente pra identificar, ou veja as abas '
+                '&ldquo;Diferença de Cartão&rdquo; e &ldquo;Sem baixa no Sankhya&rdquo;.',
             )
     info_saldo = resultado.saldo_final_da_conta(conta)
     if info_saldo is not None:
@@ -4866,8 +4857,8 @@ def pagina_cadastro_taxas():
 
     st.write("")
     arq = st.file_uploader(
-        "Suba o arquivo de taxas (.xlsx)",
-        type=["xlsx"],
+        "Suba o arquivo de taxas (.xlsx, .xls ou .csv)",
+        type=["xlsx", "xls", "csv"],
         key="upload_taxas",
         help=(
             "Colunas obrigatórias: adquirente, modalidade, parcelas, taxa_mdr. "
