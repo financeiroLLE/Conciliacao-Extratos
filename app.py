@@ -3364,7 +3364,21 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
     ]
     render_cards(cards2)
 
-    # Card de Saldo Final quando 100% conciliado
+    # v5.38: ALERTA da diferença Banco × Sankhya — antes ela só aparecia no texto do
+    # explainer e nas abas, então passava batido. Agora grita num banner sempre que
+    # existir, apontando pra onde investigar.
+    dif_bs = round(float(k["total_movimentado_banco"]) - float(k["total_extrato_sistema"]), 2)
+    if abs(dif_bs) >= 0.01:
+        _lado = "banco" if dif_bs > 0 else "Sankhya"
+        st.html(
+            '<div style="background:#2a1d10; border-left:4px solid #FAC318; border-radius:8px; '
+            'padding:12px 16px; margin:10px 0 2px 0; color:#f2e6c8; font-size:14px; line-height:1.6;">'
+            '&#9888;&#65039; <b>Diferença Banco &times; Sankhya: ' + fmt_brl(abs(dif_bs)) + '</b> — o '
+            + _lado + ' movimentou mais. Mesmo com o resumo em "explicado", <b>essa diferença precisa '
+            'da sua análise</b>: pode incluir taxa de cartão agrupada, lançamento a mais/duplicado, '
+            'tarifa ou item a conciliar. Veja abaixo em "Entenda os cards" e nas abas '
+            '"Sem baixa no Sankhya" e "Divergências (Sankhya &times; Banco)".</div>'
+        )
     info_saldo = resultado.saldo_final_da_conta(conta)
     if info_saldo is not None:
         render_card_saldo_final(info_saldo)
