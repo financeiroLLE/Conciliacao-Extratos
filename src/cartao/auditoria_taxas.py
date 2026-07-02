@@ -43,7 +43,24 @@ def carregar_relatorio_adquirente(arquivo: Any) -> pd.DataFrame:
         data_venda, adquirente, modalidade, parcelas, valor_bruto,
         taxa_aplicada, valor_liquido (opcional), data_prevista_recebimento (opcional)
     """
-    df_raw = pd.read_excel(arquivo, dtype=str)
+    _nome = str(getattr(arquivo, "name", "") or "").lower()
+    if _nome.endswith(".csv"):
+        import io as _io
+
+        _raw = arquivo.read() if hasattr(arquivo, "read") else open(arquivo, "rb").read()
+        df_raw = None
+        for _sep in (";", ","):
+            try:
+                _cand = pd.read_csv(_io.BytesIO(_raw), sep=_sep, dtype=str, engine="python")
+                if _cand.shape[1] > 1:
+                    df_raw = _cand
+                    break
+            except Exception:
+                continue
+        if df_raw is None:
+            df_raw = pd.read_csv(_io.BytesIO(_raw), dtype=str, engine="python")
+    else:
+        df_raw = pd.read_excel(arquivo, dtype=str)
     df_raw.columns = [_normalizar_cabecalho(c) for c in df_raw.columns]
  
     obrigatorias = {"data_venda", "adquirente", "modalidade", "parcelas", "valor_bruto", "taxa_aplicada"}
