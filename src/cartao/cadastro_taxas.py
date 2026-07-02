@@ -189,8 +189,15 @@ def _converter_tipo_de_titulo(df_raw: pd.DataFrame) -> pd.DataFrame:
             mod = ""
         if not adq or not mod or not parc:
             continue
+        # "% Taxa Administradora" é SEMPRE percentual: 3.24 = 3,24% e 0.78 = 0,78%.
+        # Guardamos com "%" pra o parser dividir por 100 sempre — senão valores <= 1
+        # (ex.: débito 0,78%) seriam lidos como fração (0,78 = 78%).
+        taxa_raw = r.get(col_taxa)
+        taxa_txt = "" if taxa_raw is None else str(taxa_raw).strip().replace(",", ".")
+        if not taxa_txt or taxa_txt.lower() in ("nan", "none"):
+            continue  # sem taxa não dá pra auditar — descarta em vez de chutar 0%
+        taxa_mdr = f"{taxa_txt}%"
         bandeiras = _tt_bandeiras(u)
-        taxa = r.get(col_taxa)
         for band in bandeiras:
             for p in parc:
                 linhas.append(
@@ -199,7 +206,7 @@ def _converter_tipo_de_titulo(df_raw: pd.DataFrame) -> pd.DataFrame:
                         "bandeira": band,
                         "modalidade": mod,
                         "parcelas": p,
-                        "taxa_mdr": taxa,
+                        "taxa_mdr": taxa_mdr,
                     }
                 )
     return pd.DataFrame(
