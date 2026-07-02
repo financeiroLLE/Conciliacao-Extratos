@@ -70,6 +70,117 @@ def _normalizar_cabecalho(col: str) -> str:
     )
 
 
+def _upper_sem_acento(s: Any) -> str:
+    import unicodedata
+    s = unicodedata.normalize("NFKD", str(s or ""))
+    return "".join(c for c in s if not unicodedata.combining(c)).upper().strip()
+
+
+# Bandeiras combinadas primeiro (senão "MAS/ELO" cairia em "ELO").
+_TT_BANDEIRAS_COMBINADAS = [("VIS/MAS", "Visa/Master"), ("MAS/ELO", "Master/Elo")]
+_TT_BANDEIRAS_SIMPLES = [
+    ("HIPER", "Hiper"), ("AMEX", "Amex"), ("ELO", "Elo"),
+    ("VISA", "Visa"), ("MASTER", "Master"), ("MAST", "Master"),
+]
+
+
+def _tt_adquirente(u: str) -> str:
+    if "GETNET" in u or "GET NET" in u:
+        return "Getnet"
+    import re
+    if re.search(r"(?<![A-Z0-9])PS(?![A-Z0-9])", u):
+        return "PagSeguro"
+    return ""
+
+
+def _tt_bandeira(u: str) -> str:
+    for k, v in _TT_BANDEIRAS_COMBINADAS:
+        if k in u:
+            return v
+    for k, v in _TT_BANDEIRAS_SIMPLES:
+        if k in u:
+            return v
+    return ""
+
+
+def _tt_parcelas(u: str, qtd: Any) -> list[int]:
+    import re
+    if "DEBITO" in u:
+        return [1]
+    # 1) coluna "Qtd. parcelas" preenchida vence tudo
+    if qtd is not None and str(qtd).strip().lower() not in ("", "nan", "none"):
+        try:
+            return [int(float(str(qtd).replace(",", ".")))]
+        except Exception:
+            pass
+    # 2) faixa "2 A 6" / "7 A 12"
+    m = re.search(r"(\d+)\s*A\s*(\d+)", u)
+    if m:
+        a, b = int(m.group(1)), int(m.group(2))
+        if 1 <= a <= b <= 24:
+            return list(range(a, b + 1))
+    # 3) "7X" / "1X"
+    m = re.search(r"(\d+)\s*X", u)
+    if m:
+        return [int(m.group(1))]
+    # 4) crédito à vista sem número
+    if "A VISTA" in u:
+        return [1]
+    return []
+
+
+def _converter_tipo_de_titulo(df_raw: pd.DataFrame) -> pd.DataFrame:
+    """Converte o export nativo do Sankhya 'Tipo de Título'
+    (Descrição / Qtd. parcelas / % Taxa Administradora / Subtipo)
+    na LISTA padrão (adquirente, bandeira, modalidade, parcelas, taxa_mdr).
+
+    Regras (seguem o dado, não o palpite):
+      - adquirente: 'GETNET' → Getnet, token 'PS' → PagSeguro; senão descarta.
+      - modalidade: 'DEBITO' → Débito; parcelas==1 → Crédito à vista; >1 → parcelado.
+      - parcelas: coluna Qtd; senão faixa '2 A 6' expandida; senão 'NX'; senão 1.
+      - bandeira: Hiper/Amex/Elo/Visa/Master (+ combinadas Visa/Master, Master/Elo).
+    Linhas que não dão pra mapear com segurança são descartadas (nunca chutadas).
+    """
+    col_taxa = next(c for c in df_raw.columns if "taxa_administradora" in c)
+    col_qtd = next(
+        (c for c in df_raw.columns if "parcelas" in c and "qtd" in c), None
+    )
+    linhas = []
+    for _, r in df_raw.iterrows():
+        desc = str(r.get("descricao", "") or "").strip()
+        if not desc:
+            continue
+        u = _upper_sem_acento(desc)
+        adq = _tt_adquirente(u)
+        parc = _tt_parcelas(u, r.get(col_qtd) if col_qtd else None)
+        if "DEBITO" in u:
+            mod = "Débito"
+        elif parc and max(parc) == 1:
+            mod = "Crédito à vista"
+        elif parc:
+            mod = "Crédito parcelado"
+        else:
+            mod = ""
+        if not adq or not mod or not parc:
+            continue
+        band = _tt_bandeira(u)
+        taxa = r.get(col_taxa)
+        for p in parc:
+            linhas.append(
+                {
+                    "adquirente": adq,
+                    "bandeira": band,
+                    "modalidade": mod,
+                    "parcelas": p,
+                    "taxa_mdr": taxa,
+                }
+            )
+    return pd.DataFrame(
+        linhas,
+        columns=["adquirente", "bandeira", "modalidade", "parcelas", "taxa_mdr"],
+    )
+
+
 def carregar_cadastro_taxas(arquivo: Any) -> pd.DataFrame:
     """Lê o arquivo taxas.xlsx e retorna DataFrame normalizado.
 
@@ -101,6 +212,13 @@ def carregar_cadastro_taxas(arquivo: Any) -> pd.DataFrame:
     else:
         df_raw = pd.read_excel(arquivo, dtype=str)
     df_raw.columns = [_normalizar_cabecalho(c) for c in df_raw.columns]
+
+    # Formato nativo do Sankhya "Tipo de Título" (Descrição / Qtd. parcelas /
+    # % Taxa Administradora / Subtipo): converte pra LISTA padrão antes de validar.
+    if "descricao" in df_raw.columns and any(
+        "taxa_administradora" in c for c in df_raw.columns
+    ):
+        df_raw = _converter_tipo_de_titulo(df_raw)
 
     obrigatorias = {"adquirente", "modalidade", "parcelas", "taxa_mdr"}
     faltando = obrigatorias - set(df_raw.columns)
