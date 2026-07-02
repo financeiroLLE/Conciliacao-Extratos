@@ -147,8 +147,13 @@ def _contas_no_sankhya(payload: tuple, coluna_conta: str) -> list[str]:
     nomes: set[str] = set()
     for _nome_arq, conteudo in payload:
         try:
+            # v5.39: sem o nome do arquivo, o leitor não sabe que é .xls e cai no
+            # engine errado (openpyxl → BadZipFile), o except engolia e a lista de
+            # contas voltava vazia — por isso o dropdown não aparecia pra .xls.
+            bio = io.BytesIO(conteudo)
+            bio.name = _nome_arq
             df = carregar_relatorio_sistema(
-                io.BytesIO(conteudo), coluna_conta=coluna_conta or None
+                bio, coluna_conta=coluna_conta or None
             )
             nomes.update(
                 c for c in df["conta"].astype(str).unique() if c and c != "—"
