@@ -3307,6 +3307,39 @@ def tela_resultado():
 # ============================================================
 # Detalhamento por banco — cards + abas internas
 # ============================================================
+def _diferenca_bxs_por_dia(resultado: "ResultadoConciliacao", conta: str) -> list[tuple]:
+    """Diferença |banco| − |Sankhya| por dia, com o MESMO filtro do KPI de
+    'movimentado' (exclui saldo/aplicação/resgate/rendimento). Retorna lista de
+    (data, dif) só com os dias que divergem (|dif| >= 0,01), ordenada do maior
+    para o menor em módulo. Serve pra apontar no alerta EM QUE DIA está a
+    diferença — num extrato de 30 dias, isso leva direto ao ponto."""
+    _excl = ("saldo", "aplicacao", "resgate", "rendimento")
+
+    def _abs_por_dia(df):
+        if df is None or getattr(df, "empty", True):
+            return pd.Series(dtype=float)
+        d = df
+        if "conta" in d.columns:
+            d = d[d["conta"] == conta]
+        if "categoria_mov" in d.columns:
+            d = d[~d["categoria_mov"].isin(_excl)]
+        if d.empty:
+            return pd.Series(dtype=float)
+        dia = pd.to_datetime(d["data"], errors="coerce").dt.normalize()
+        return d["valor"].abs().groupby(dia).sum()
+
+    gb = _abs_por_dia(resultado.banco_completo)
+    gs = _abs_por_dia(resultado.sistema_completo)
+    dias = sorted(set(gb.index) | set(gs.index))
+    out = []
+    for dia in dias:
+        dif = round(float(gb.get(dia, 0.0)) - float(gs.get(dia, 0.0)), 2)
+        if abs(dif) >= 0.01:
+            out.append((dia, dif))
+    out.sort(key=lambda x: abs(x[1]), reverse=True)
+    return out
+
+
 def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
     col_back, _ = st.columns([1, 5])
     with col_back:
@@ -3375,13 +3408,25 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
     dif_bs = round(float(k["total_movimentado_banco"]) - float(k["total_extrato_sistema"]), 2)
     if abs(dif_bs) >= 0.01:
         _lado = "banco" if dif_bs > 0 else "Sankhya"
+        # v5.40: aponta EM QUE DIA(S) está a diferença — num extrato de 30 dias
+        # isso leva direto ao ponto em vez de mandar procurar no mês inteiro.
+        _dias = _diferenca_bxs_por_dia(resultado, conta)
+        _txt_dias = ""
+        if _dias:
+            _top = _dias[:3]
+            _partes = [d.strftime("%d/%m") + " (" + fmt_brl(abs(v)) + ")" for d, v in _top]
+            _frase = "; ".join(_partes)
+            _resto = len(_dias) - len(_top)
+            if _resto > 0:
+                _frase += "; e mais " + str(_resto) + (" dia" if _resto == 1 else " dias")
+            _txt_dias = ' <b>Concentrada em:</b> ' + _frase + '.'
         st.html(
             '<div style="background:#2a1d10; border-left:4px solid #FAC318; border-radius:8px; '
             'padding:12px 16px; margin:10px 0 2px 0; color:#f2e6c8; font-size:14px; line-height:1.6;">'
             '&#9888;&#65039; <b>Diferença Banco &times; Sankhya: ' + fmt_brl(abs(dif_bs)) + '</b> — o '
-            + _lado + ' movimentou mais. Mesmo com o resumo em "explicado", <b>essa diferença precisa '
-            'da sua análise</b>: pode incluir taxa de cartão agrupada, lançamento a mais/duplicado, '
-            'tarifa ou item a conciliar. Veja abaixo em "Entenda os cards" e nas abas '
+            + _lado + ' movimentou mais.' + _txt_dias + ' Mesmo com o resumo em "explicado", <b>essa '
+            'diferença precisa da sua análise</b>: pode incluir taxa de cartão agrupada, lançamento a '
+            'mais/duplicado, tarifa ou item a conciliar. Veja abaixo em "Entenda os cards" e nas abas '
             '"Sem baixa no Sankhya" e "Divergências (Sankhya &times; Banco)".</div>'
         )
     info_saldo = resultado.saldo_final_da_conta(conta)
