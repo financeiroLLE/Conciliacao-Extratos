@@ -234,6 +234,37 @@ def _adquirentes_da_sessao() -> pd.DataFrame:
     return _parse_adquirentes(payload)
 
 
+def _relatorio_auditoria_da_sessao() -> tuple:
+    """Monta o relatório da Auditoria de Cartões a partir dos extratos de
+    adquirente JÁ enviados na conciliação (guardados em 'adquirente_bytes').
+
+    Só o extrato CRU da GETNET tem venda + valor bruto + taxa aplicada, então
+    é o único auditável por venda. PagBank é recebimento (não traz taxa por
+    venda) e é ignorado aqui — informamos quais foram ignorados, sem inventar.
+    Retorna (relatorio_df, nomes_ignorados).
+    """
+    import io as _io
+
+    from src.cartao import eh_extrato_getnet_cru, carregar_extrato_getnet_cru
+
+    itens = st.session_state.get("adquirente_bytes") or []
+    frames, ignorados = [], []
+    for nome, conteudo in itens:
+        try:
+            if eh_extrato_getnet_cru(_io.BytesIO(conteudo)):
+                rel = carregar_extrato_getnet_cru(_io.BytesIO(conteudo))
+                if rel is not None and not rel.empty:
+                    frames.append(rel)
+                else:
+                    ignorados.append(nome)
+            else:
+                ignorados.append(nome)
+        except Exception:
+            ignorados.append(nome)
+    relatorio = pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+    return relatorio, ignorados
+
+
 # ============================================================
 # Configuração da página
 # ============================================================
@@ -3257,6 +3288,18 @@ def tela_upload():
 
                 st.session_state.resultado = resultado
                 st.session_state.adquirente_df = _adquirentes_da_sessao()
+                # v5.43: guarda os BYTES crus dos extratos de adquirente numa chave
+                # própria (não some ao trocar de página) pra a Auditoria de Cartões
+                # reaproveitar sem exigir novo upload.
+                _adq_files = st.session_state.get("adquirente") or []
+                if _adq_files and not isinstance(_adq_files, list):
+                    _adq_files = [_adq_files]
+                try:
+                    st.session_state.adquirente_bytes = [
+                        (f.name, f.getvalue()) for f in _adq_files
+                    ]
+                except Exception:
+                    st.session_state.adquirente_bytes = []
                 st.session_state.pendencias_anteriores = pendencias
                 st.session_state.id_execucao_atual = id_exec
                 st.session_state.xlsx_atual = None  # v5.34: gera sob demanda (volume)
@@ -4999,8 +5042,8 @@ def pagina_auditoria_taxas():
         )
     with col_arq:
         arq = st.file_uploader(
-            "Relatório da adquirente (.xlsx)",
-            type=["xlsx"],
+            "Relatório da adquirente (.xlsx, .xls ou .csv)",
+            type=["xlsx", "xls", "csv"],
             key="upload_relatorio_adq",
             help=(
                 "Aceita 2 formatos:\n\n"
@@ -5014,14 +5057,36 @@ def pagina_auditoria_taxas():
     # Recupera histórico do session_state (carregado no expander acima)
     historico_df = locals().get("historico_df", pd.DataFrame())
 
-    if arq is None and (historico_df is None or historico_df.empty):
+    # v5.43: reaproveita os extratos de adquirente já enviados na conciliação.
+    # Só o GetNet cru é auditável por venda; PagBank (recebimento) é ignorado aqui.
+    relatorio_sessao, adq_ignorados = _relatorio_auditoria_da_sessao()
+    usar_sessao = False
+    if arq is None and not relatorio_sessao.empty:
+        st.success(
+            f"🟩 Encontrei **{len(relatorio_sessao)} venda(s) de GetNet** que você já subiu "
+            "na conciliação. Não precisa subir de novo."
+        )
+        usar_sessao = st.checkbox(
+            "Auditar os extratos que já enviei na conciliação",
+            value=True,
+            help="Usa os mesmos arquivos de adquirente da tela de conciliação. "
+            "Se preferir auditar outro período, suba um arquivo ao lado.",
+        )
+        if adq_ignorados:
+            st.caption(
+                "Obs.: estes não entram na auditoria por venda (não trazem taxa por "
+                "venda, ex.: PagBank é recebimento): " + ", ".join(adq_ignorados)
+            )
+
+    if arq is None and not usar_sessao and (historico_df is None or historico_df.empty):
         st.info(
-            "🙋 Suba o relatório da adquirente para iniciar a auditoria.\n\n"
+            "🙋 Suba o relatório da adquirente para iniciar a auditoria "
+            "(ou suba o extrato da adquirente na conciliação — ele aparece aqui automaticamente).\n\n"
             "**Formato 1 — Extrato CRU da GETNET (recomendado):**\n"
             "- Baixe direto do portal GETNET: *Recebíveis > Completos > Detalhado*\n"
             "- Suba o XLSX como veio, o sistema converte sozinho\n\n"
             "**Formato 2 — Relatório padronizado:**\n"
-            "- Planilha Excel com colunas: `data_venda`, `adquirente`, `modalidade`, "
+            "- Planilha Excel/CSV com colunas: `data_venda`, `adquirente`, `modalidade`, "
             "`parcelas`, `valor_bruto`, `taxa_aplicada`, `valor_liquido` (opcional)\n"
             "- Exemplo em `data/samples/relatorio_adquirente_exemplo.xlsx`"
         )
@@ -5072,6 +5137,23 @@ def pagina_auditoria_taxas():
         if relatorio.empty:
             st.warning("⚠️ O relatório está vazio ou não tem linhas válidas.")
             relatorio = pd.DataFrame()
+    elif usar_sessao and not relatorio_sessao.empty:
+        relatorio = relatorio_sessao
+        resumo_getnet = resumir_extrato_getnet(relatorio)
+        periodo_str = ""
+        if resumo_getnet["data_min"] and resumo_getnet["data_max"]:
+            periodo_str = (
+                f" · Período: {resumo_getnet['data_min'].strftime('%d/%m/%Y')} → "
+                f"{resumo_getnet['data_max'].strftime('%d/%m/%Y')}"
+            )
+        st.success(
+            f"🟧 **Auditando os extratos da conciliação.** "
+            f"{resumo_getnet['qtd']} vendas · "
+            f"Bruto: {fmt_brl(resumo_getnet['bruto_total'])} · "
+            f"Líquido: {fmt_brl(resumo_getnet['liquido_total'])} · "
+            f"Taxa média real: {fmt_pct(resumo_getnet['taxa_media']*100)}"
+            f"{periodo_str}"
+        )
     else:
         relatorio = pd.DataFrame()
 
