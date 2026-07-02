@@ -3443,7 +3443,12 @@ def _explicar_diferenca_cartao(resultado, conta: str, adq: pd.DataFrame):
                     f"{desc} ({fmt_brl(abs(val))})"
                     for desc, val in zip(gn["descricao"], gn["valor"])
                 )
-                expl = itens + " — lançada 2× no volume (tarifa no Sankhya + dentro do bruto)"
+                expl = (
+                    itens
+                    + " — a adquirente descontou essa taxa <b>dentro de um repasse do dia</b>: "
+                    "entrou o valor cheio e saiu a taxa (uma entrada e uma saída do mesmo valor). "
+                    "O Sankhya registra as duas pontas; o banco já recebe líquido — por isso conta 2× no volume."
+                )
         if expl is None:
             todos = False
         partes.append((d, v, expl))
@@ -3495,12 +3500,6 @@ def render_tab_diferenca_cartao(adq: pd.DataFrame, resultado, conta: str):
         }
     )
     st.markdown("**Mapa de cartão — por adquirente e categoria (valores do extrato)**")
-    if (adq["adquirente"] == "PagBank").any():
-        st.caption(
-            "PagBank/PagSeguro é extrato de recebimento — mostra repasses e tarifas, mas "
-            "não detalha as vendas; por isso as 'vendas' dele não entram no mapa. Vendas "
-            "confiáveis vêm só do GetNet."
-        )
     st.dataframe(mapa, hide_index=True, use_container_width=True)
 
     # Amarra a diferença de volume (por dia) ao que a adquirente mostra naquele dia.
@@ -3642,8 +3641,8 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
                 '&#9989; <b>Diferença Banco &times; Sankhya: ' + fmt_brl(abs(dif_bs)) + '</b> — o '
                 + _lado + ' movimentou mais, e o <b>extrato da adquirente identifica 100% dessa diferença</b>. '
                 'Composição:<ul style="margin:6px 0 0 0;padding-left:18px">' + _lista + '</ul>'
-                '<span style="color:#9fe0b6">Não é erro de conciliação — é tarifa/aluguel de cartão contado 2× no volume. '
-                'Detalhe na aba "Diferença de Cartão".</span></div>'
+                '<span style="color:#9fe0b6">Não é erro de conciliação — é uma taxa que a adquirente '
+                'descontou dentro do repasse (entrada e saída do mesmo valor). Detalhe na aba "Diferença de Cartão".</span></div>'
             )
         elif _partes:
             # Parte explicada, parte não → tom AMARELO, mas já nomeando o que dá.
