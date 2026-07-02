@@ -195,8 +195,15 @@ def _parse_adquirentes(payload: tuple) -> pd.DataFrame:
     from src.parsers.adquirente import COLUNAS_SAIDA
 
     frames = []
+    _vistos = set()
     for nome, conteudo in payload:
         try:
+            import hashlib as _hl
+
+            _h = _hl.md5(conteudo).hexdigest()
+            if _h in _vistos:
+                continue  # v5.42: ignora arquivo idêntico subido em duplicata
+            _vistos.add(_h)
             bio = _io.BytesIO(conteudo)
             bio.name = nome
             df = carregar_extrato_adquirente(bio)
@@ -3401,6 +3408,48 @@ def _diferenca_bxs_por_dia(resultado: "ResultadoConciliacao", conta: str) -> lis
     return out
 
 
+def _explicar_diferenca_cartao(resultado, conta: str, adq: pd.DataFrame):
+    """Tenta explicar a diferença de volume de cada dia pela adquirente.
+
+    Mecanismo confirmado: tarifa/aluguel do GetNet entram 2× no volume (o Sankhya
+    lança a tarifa como despesa E dentro do bruto; o banco já vem líquido). Então
+    se a diferença do dia == 2 × (aluguel+tarifa GetNet daquele dia), está EXPLICADA.
+    Só marca 'explicado' quando bate EXATO — nunca crava.
+
+    Retorna (partes, todos_explicados):
+      partes = [(data, dif_assinada, texto_ou_None), ...]  (ordenada por |dif|)
+    """
+    dias = _diferenca_bxs_por_dia(resultado, conta)
+    if not dias:
+        return [], True
+    tem_adq = adq is not None and not adq.empty
+    adq_dt = (
+        pd.to_datetime(adq["data"], errors="coerce").dt.normalize() if tem_adq else None
+    )
+    partes = []
+    todos = True
+    for d, v in dias:
+        alvo = round(abs(v), 2)
+        expl = None
+        if tem_adq:
+            gn = adq[
+                (adq_dt == pd.Timestamp(d))
+                & (adq["adquirente"] == "GetNet")
+                & (adq["categoria"].isin(["aluguel", "tarifa"]))
+            ]
+            soma = round(float(gn["valor"].abs().sum()), 2)
+            if soma > 0 and round(2 * soma, 2) == alvo:
+                itens = "; ".join(
+                    f"{desc} ({fmt_brl(abs(val))})"
+                    for desc, val in zip(gn["descricao"], gn["valor"])
+                )
+                expl = itens + " — lançada 2× no volume (tarifa no Sankhya + dentro do bruto)"
+        if expl is None:
+            todos = False
+        partes.append((d, v, expl))
+    return partes, todos
+
+
 _ROTULOS_CARTAO = {
     "estorno": "Estorno / Cancelamento",
     "aluguel": "Aluguel de maquininha",
@@ -3427,15 +3476,31 @@ def render_tab_diferenca_cartao(adq: pd.DataFrame, resultado, conta: str):
         )
         return
 
-    res = resumo_por_categoria(adq)
+    # Mapa por ADQUIRENTE + categoria. O PagBank/PagSeguro é extrato de RECEBIMENTO:
+    # não detalha vendas de forma confiável, então não exibimos 'venda'/'saldo' dele.
+    g = (
+        adq.assign(_abs=adq["valor"].abs())
+        .groupby(["adquirente", "categoria"])
+        .agg(qtd=("valor", "size"), total=("_abs", "sum"))
+        .reset_index()
+    )
+    g = g[~((g["adquirente"] == "PagBank") & (g["categoria"].isin(["venda", "saldo"])))]
+    g = g.sort_values(["adquirente", "total"], ascending=[True, False])
     mapa = pd.DataFrame(
         {
-            "Categoria": [_ROTULOS_CARTAO.get(c, c) for c in res["categoria"]],
-            "Qtd": res["qtd"].astype(int).values,
-            "Total": [fmt_brl(v) for v in res["total"]],
+            "Adquirente": g["adquirente"].values,
+            "Categoria": [_ROTULOS_CARTAO.get(c, c) for c in g["categoria"]],
+            "Qtd": g["qtd"].astype(int).values,
+            "Total": [fmt_brl(v) for v in g["total"]],
         }
     )
-    st.markdown("**Mapa de cartão — por categoria (valores do extrato da adquirente)**")
+    st.markdown("**Mapa de cartão — por adquirente e categoria (valores do extrato)**")
+    if (adq["adquirente"] == "PagBank").any():
+        st.caption(
+            "PagBank/PagSeguro é extrato de recebimento — mostra repasses e tarifas, mas "
+            "não detalha as vendas; por isso as 'vendas' dele não entram no mapa. Vendas "
+            "confiáveis vêm só do GetNet."
+        )
     st.dataframe(mapa, hide_index=True, use_container_width=True)
 
     # Amarra a diferença de volume (por dia) ao que a adquirente mostra naquele dia.
@@ -3449,6 +3514,9 @@ def render_tab_diferenca_cartao(adq: pd.DataFrame, resultado, conta: str):
                 & (adq["categoria"].isin(["aluguel", "tarifa", "estorno"]))
             ]
             if not no_dia.empty:
+                no_dia = no_dia.reindex(
+                    no_dia["valor"].abs().sort_values(ascending=False).index
+                )
                 expl = "; ".join(
                     f"{_ROTULOS_CARTAO.get(c, c)}: {fmt_brl(abs(val))} ({desc})"
                     for c, val, desc in zip(
@@ -3553,27 +3621,50 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
     dif_bs = round(float(k["total_movimentado_banco"]) - float(k["total_extrato_sistema"]), 2)
     if abs(dif_bs) >= 0.01:
         _lado = "banco" if dif_bs > 0 else "Sankhya"
-        # v5.40: aponta EM QUE DIA(S) está a diferença — num extrato de 30 dias
-        # isso leva direto ao ponto em vez de mandar procurar no mês inteiro.
-        _dias = _diferenca_bxs_por_dia(resultado, conta)
-        _txt_dias = ""
-        if _dias:
-            _top = _dias[:3]
-            _partes = [d.strftime("%d/%m") + " (" + fmt_brl(abs(v)) + ")" for d, v in _top]
-            _frase = "; ".join(_partes)
-            _resto = len(_dias) - len(_top)
-            if _resto > 0:
-                _frase += "; e mais " + str(_resto) + (" dia" if _resto == 1 else " dias")
-            _txt_dias = ' <b>Concentrada em:</b> ' + _frase + '.'
-        st.html(
-            '<div style="background:#2a1d10; border-left:4px solid #FAC318; border-radius:8px; '
-            'padding:12px 16px; margin:10px 0 2px 0; color:#f2e6c8; font-size:14px; line-height:1.6;">'
-            '&#9888;&#65039; <b>Diferença Banco &times; Sankhya: ' + fmt_brl(abs(dif_bs)) + '</b> — o '
-            + _lado + ' movimentou mais.' + _txt_dias + ' Mesmo com o resumo em "explicado", <b>essa '
-            'diferença precisa da sua análise</b>: pode incluir taxa de cartão agrupada, lançamento a '
-            'mais/duplicado, tarifa ou item a conciliar. Veja abaixo em "Entenda os cards" e nas abas '
-            '"Sem baixa no Sankhya" e "Divergências (Sankhya &times; Banco)".</div>'
-        )
+        _adq_alert = st.session_state.get("adquirente_df")
+        _partes, _todos = _explicar_diferenca_cartao(resultado, conta, _adq_alert)
+
+        # Monta a composição por dia (o que a adquirente explica).
+        _comp = []
+        for _d, _v, _e in _partes[:12]:
+            _dia = _d.strftime("%d/%m")
+            if _e:
+                _comp.append(_dia + " (" + fmt_brl(abs(_v)) + "): " + _e)
+            else:
+                _comp.append(_dia + " (" + fmt_brl(abs(_v)) + "): a conferir")
+        _lista = "".join("<li>" + c + "</li>" for c in _comp)
+
+        if _partes and _todos:
+            # Tudo explicado pela adquirente → tom VERDE, sem "precisa de análise".
+            st.html(
+                '<div style="background:#0c2b1a; border-left:4px solid #0F8C3B; border-radius:8px; '
+                'padding:12px 16px; margin:10px 0 2px 0; color:#d6f5e2; font-size:14px; line-height:1.6;">'
+                '&#9989; <b>Diferença Banco &times; Sankhya: ' + fmt_brl(abs(dif_bs)) + '</b> — o '
+                + _lado + ' movimentou mais, e o <b>extrato da adquirente identifica 100% dessa diferença</b>. '
+                'Composição:<ul style="margin:6px 0 0 0;padding-left:18px">' + _lista + '</ul>'
+                '<span style="color:#9fe0b6">Não é erro de conciliação — é tarifa/aluguel de cartão contado 2× no volume. '
+                'Detalhe na aba "Diferença de Cartão".</span></div>'
+            )
+        elif _partes:
+            # Parte explicada, parte não → tom AMARELO, mas já nomeando o que dá.
+            st.html(
+                '<div style="background:#2a1d10; border-left:4px solid #FAC318; border-radius:8px; '
+                'padding:12px 16px; margin:10px 0 2px 0; color:#f2e6c8; font-size:14px; line-height:1.6;">'
+                '&#9888;&#65039; <b>Diferença Banco &times; Sankhya: ' + fmt_brl(abs(dif_bs)) + '</b> — o '
+                + _lado + ' movimentou mais. Composição por dia:'
+                '<ul style="margin:6px 0 0 0;padding-left:18px">' + _lista + '</ul>'
+                'O que está como <b>"a conferir"</b> ainda precisa da sua análise (suba o extrato da '
+                'adquirente pra nomear, ou veja nas abas "Sem baixa no Sankhya" / "Diferença de Cartão").</div>'
+            )
+        else:
+            # Sem detalhe por dia — banner simples (fallback).
+            st.html(
+                '<div style="background:#2a1d10; border-left:4px solid #FAC318; border-radius:8px; '
+                'padding:12px 16px; margin:10px 0 2px 0; color:#f2e6c8; font-size:14px; line-height:1.6;">'
+                '&#9888;&#65039; <b>Diferença Banco &times; Sankhya: ' + fmt_brl(abs(dif_bs)) + '</b> — o '
+                + _lado + ' movimentou mais. Essa diferença precisa da sua análise. Veja "Entenda os '
+                'cards" e as abas "Sem baixa no Sankhya" / "Diferença de Cartão".</div>'
+            )
     info_saldo = resultado.saldo_final_da_conta(conta)
     if info_saldo is not None:
         render_card_saldo_final(info_saldo)
