@@ -1663,10 +1663,10 @@ def _card_investimentos_de_df(df: pd.DataFrame) -> str:
     # Saldo líquido = Resgates - Aplicações (faz sentido contábil)
     saldo_liquido = val_r - val_a
 
-    # v5.35: deixa explícito que aplicar mais que resgatar NÃO é prejuízo.
+    # v5.45: card enxuto — o "por que não é prejuízo" já está em "Entenda seus
+    # cards"; aqui fica só o fato curto + um lembrete apontando pro detalhamento.
     if saldo_liquido < -0.005:
-        _status = ("Aplicou " + fmt_brl(abs(saldo_liquido)) + " a mais que resgatou · "
-                   "não é prejuízo (dinheiro aplicado, segue da empresa)")
+        _status = "Aplicou " + fmt_brl(abs(saldo_liquido)) + " a mais que resgatou"
     elif saldo_liquido > 0.005:
         _status = "Resgatou " + fmt_brl(saldo_liquido) + " a mais que aplicou no mês"
     else:
@@ -1679,6 +1679,7 @@ def _card_investimentos_de_df(df: pd.DataFrame) -> str:
         <div class="lle-kpi-sub-label">Resgates:</div>
         <div class="lle-kpi-sub-valor">{fmt_int(qtd_r)} mov. · {fmt_brl(val_r)}</div>
         <div class="lle-kpi-sub-label" style="margin-top:6px;">{_status}</div>
+        <div class="lle-kpi-sub-label" style="margin-top:2px; opacity:.65;">ℹ️ O que significa? veja em “Entenda seus cards”.</div>
     </div>
     """
     return card_kpi_html("Investimentos", fmt_brl(saldo_liquido), sub, classe="destaque-amarelo")
@@ -2716,65 +2717,97 @@ def render_painel_bancos(resultado: ResultadoConciliacao, mostrar_botao: bool = 
             )
         return
 
-    # ---- VÁRIAS contas: tabela do gestor com botão "Ver →" no fim de CADA linha ----
-    # v5.36: antes os botões vinham todos numa fileira embaixo (espremiam com muitas
-    # contas). Agora cada conta é uma linha nativa com seu próprio botão à direita.
-    _ratios = [3.2, 1.1, 1.1, 0.8, 1.6, 1.2]
+    # ---- VÁRIAS contas: card único (Opção 2) — tabela organizada + selo do banco ----
+    # v5.45: tudo dentro de UM card (st.container border), fonte padronizada, selo
+    # colorido por banco na 1ª coluna, separadores entre linhas e GRUPO como rodapé
+    # no mesmo card. O botão "Ver →" continua NATIVO por linha (botão do Streamlit
+    # não entra dentro de HTML), então não voltou a virar fileira embaixo.
+    _ratios = [3.4, 1.05, 1.05, 0.8, 1.6, 1.15]
 
-    def _cel(html, align="left", cor="#dfe8fb", peso="400"):
-        return f'<div style="text-align:{align}; color:{cor}; font-weight:{peso}; font-size:13px;">{html}</div>'
+    def _cel(html, align="left", cor="#dfe8fb", peso="400", size="14px"):
+        return (f'<div style="text-align:{align}; color:{cor}; font-weight:{peso}; '
+                f'font-size:{size}; line-height:1.9;">{html}</div>')
 
-    # Cabeçalho
-    hc = st.columns(_ratios)
-    for _col, _txt, _al in zip(
-        hc, ["CONTA", "EXPLICADO", "CONFIRMADO", "ITENS", "A RESOLVER", ""],
-        ["left", "center", "center", "center", "right", "left"],
-    ):
-        _col.markdown(_cel(_txt, _al, "#8BA3C7"), unsafe_allow_html=True)
+    def _cor_banco(nome: str) -> str:
+        u = nome.upper()
+        if "SICREDI" in u:
+            return "#3FA110"
+        if "ITAU" in u or "ITAÚ" in u:
+            return "#EC7000"
+        if "BRADESCO" in u:
+            return "#CC092F"
+        if "CAIXA" in u:
+            return "#0070AF"
+        if "SANTANDER" in u:
+            return "#EC0000"
+        return "#5B6B8C"
 
-    total_itens = 0
-    total_resolver = 0.0
-    fechadas = 0
-    for conta in contas_ordenadas:
-        _mov, explic, confirm, _pp, qtd, valor = _metricas(conta)
-        total_itens += qtd
-        total_resolver += valor
-        if qtd == 0:
-            fechadas += 1
-            dot = "#46d18a"
-            itens_cell = '<span style="background:#0F8C3B; color:#fff; font-size:11px; padding:3px 9px; border-radius:20px;">ok</span>'
-            resolver_cell = '<span style="color:#46d18a;">—</span>'
-        else:
-            dot = "#FAC318" if qtd <= 2 else "#D63031"
-            cor_badge = "#9a7b12" if qtd <= 2 else "#D63031"
-            itens_cell = f'<span style="background:{cor_badge}; color:#fff; font-size:11px; padding:3px 9px; border-radius:20px;">{qtd}</span>'
-            resolver_cell = f'<span style="color:#ff8a8a; font-weight:500;">{fmt_brl(valor)}</span>'
+    def _selo(nome: str) -> str:
+        cor = _cor_banco(nome)
+        return (
+            '<span style="display:inline-flex;align-items:center;gap:9px;">'
+            f'<span style="width:22px;height:22px;border-radius:6px;background:{cor};'
+            'display:inline-flex;align-items:center;justify-content:center;font-size:12px;">'
+            '🏦</span>'
+            f'<span style="color:#fff;font-weight:600;">{nome}</span></span>'
+        )
 
-        rc = st.columns(_ratios)
-        rc[0].markdown(
-            _cel(f'<span style="display:inline-block;width:8px;height:8px;border-radius:50%;'
-                 f'background:{dot};margin-right:8px;"></span>{conta}'),
+    _sep = '<div style="border-top:1px solid #16305d; margin:0;"></div>'
+
+    with st.container(border=True):
+        st.markdown(
+            '<div style="color:#fff; font-size:15px; font-weight:600; margin-bottom:6px;">'
+            'Contas processadas</div>', unsafe_allow_html=True)
+
+        # Cabeçalho
+        hc = st.columns(_ratios)
+        for _col, _txt, _al in zip(
+            hc, ["CONTA", "EXPLICADO", "CONFIRMADO", "ITENS", "A RESOLVER", ""],
+            ["left", "center", "center", "center", "right", "left"],
+        ):
+            _col.markdown(_cel(_txt, _al, "#8BA3C7", size="11px"), unsafe_allow_html=True)
+
+        total_itens = 0
+        total_resolver = 0.0
+        fechadas = 0
+        for conta in contas_ordenadas:
+            _mov, explic, confirm, _pp, qtd, valor = _metricas(conta)
+            total_itens += qtd
+            total_resolver += valor
+            if qtd == 0:
+                fechadas += 1
+                itens_cell = '<span style="background:#0F8C3B; color:#fff; font-size:11px; padding:3px 9px; border-radius:20px;">ok</span>'
+                resolver_cell = '<span style="color:#46d18a;">—</span>'
+            else:
+                cor_badge = "#9a7b12" if qtd <= 2 else "#D63031"
+                itens_cell = f'<span style="background:{cor_badge}; color:#fff; font-size:11px; padding:3px 9px; border-radius:20px;">{qtd}</span>'
+                resolver_cell = f'<span style="color:#ff8a8a; font-weight:500;">{fmt_brl(valor)}</span>'
+
+            st.markdown(_sep, unsafe_allow_html=True)
+            rc = st.columns(_ratios)
+            rc[0].markdown(_cel(_selo(conta)), unsafe_allow_html=True)
+            rc[1].markdown(_cel(fmt_pct(explic), "center"), unsafe_allow_html=True)
+            rc[2].markdown(_cel(fmt_pct(confirm), "center"), unsafe_allow_html=True)
+            rc[3].markdown(_cel(itens_cell, "center"), unsafe_allow_html=True)
+            rc[4].markdown(_cel(resolver_cell, "right"), unsafe_allow_html=True)
+            if mostrar_botao:
+                rc[5].button("Ver →", key=f"banco_btn_{conta}",
+                             on_click=selecionar_banco, args=(conta,),
+                             use_container_width=True)
+
+        # Rodapé GRUPO (no mesmo card)
+        st.markdown('<div style="border-top:1px solid #24427e; margin:0;"></div>', unsafe_allow_html=True)
+        gc = st.columns(_ratios)
+        gc[0].markdown(
+            _cel(f'GRUPO &middot; {fechadas} de {len(contas_ordenadas)} fechadas', "left", "#f4c430", "500"),
             unsafe_allow_html=True)
-        rc[1].markdown(_cel(fmt_pct(explic), "center"), unsafe_allow_html=True)
-        rc[2].markdown(_cel(fmt_pct(confirm), "center"), unsafe_allow_html=True)
-        rc[3].markdown(_cel(itens_cell, "center"), unsafe_allow_html=True)
-        rc[4].markdown(_cel(resolver_cell, "right"), unsafe_allow_html=True)
-        if mostrar_botao:
-            rc[5].button("Ver →", key=f"banco_btn_{conta}",
-                         on_click=selecionar_banco, args=(conta,),
-                         use_container_width=True)
+        gc[1].markdown(_cel("&mdash;", "center", "#6f86ad"), unsafe_allow_html=True)
+        gc[2].markdown(_cel("&mdash;", "center", "#6f86ad"), unsafe_allow_html=True)
+        gc[3].markdown(_cel(str(total_itens), "center", "#fff", "500"), unsafe_allow_html=True)
+        gc[4].markdown(_cel(fmt_brl(total_resolver), "right", "#ff8a8a", "500"), unsafe_allow_html=True)
 
-    # Rodapé GRUPO
-    gc = st.columns(_ratios)
-    gc[0].markdown(
-        _cel(f'GRUPO &middot; {fechadas} de {len(contas_ordenadas)} fechadas', "left", "#f4c430", "500"),
-        unsafe_allow_html=True)
-    gc[1].markdown(_cel("&mdash;", "center", "#6f86ad"), unsafe_allow_html=True)
-    gc[2].markdown(_cel("&mdash;", "center", "#6f86ad"), unsafe_allow_html=True)
-    gc[3].markdown(_cel(str(total_itens), "center", "#fff", "500"), unsafe_allow_html=True)
-    gc[4].markdown(_cel(fmt_brl(total_resolver), "right", "#ff8a8a", "500"), unsafe_allow_html=True)
     st.markdown(
-        '<div style="color:#6f86ad; font-size:11px; margin-top:10px;">As % do grupo ficam vazias '
+        '<div style="color:#6f86ad; font-size:11px; margin-top:8px;">As % do grupo ficam vazias '
         'de propósito — média de contas diferentes engana. Cada conta tem seu botão "Ver →" à direita.</div>',
         unsafe_allow_html=True)
 
