@@ -5412,6 +5412,197 @@ def pagina_auditoria_taxas():
 # ============================================================
 # Página: Conta 70 (v5.0 — módulo de controle provisório)
 # ============================================================
+def _render_conta70_casamento_numeracao():
+    """v5.6 — Atrelamento, numeração e esteira da Conta 70.
+
+    Três uploads: Capa consolidada (só leitura), movimentação do Sankhya e notas
+    emitidas não baixadas (com CNPJ). Aditivo e independente da conciliação. A
+    Capa original nunca é alterada — a "capa atualizada" sai como arquivo novo.
+    """
+    import io as _io
+    from datetime import date as _date
+    from src.conta70.casamento import (
+        carregar_movimento, atrelar, diagnosticar, carregar_faturamento, sugerir_atrelamentos_cnpj,
+    )
+
+    def _money(v):
+        try:
+            return ("R$ " + f"{float(v):,.2f}").replace(",", "X").replace(".", ",").replace("X", ".")
+        except Exception:
+            return "R$ 0,00"
+
+    section_title("ATRELAMENTO E NUMERAÇÃO — CONTA 70")
+    st.markdown(
+        "Suba a **Capa** (consolidada, somente leitura), a **movimentação da Conta 70 do Sankhya** "
+        "e, quando tiver, as **notas emitidas não baixadas** (com CNPJ). O app atrela pela identidade "
+        "do histórico (CNPJ/CPF/dados bancários), numera em sequência e organiza o que está aberto "
+        "numa esteira com diagnóstico e ação. Sua capa original nunca é alterada."
+    )
+
+    c1, c2, c3 = st.columns(3)
+    up_capa = c1.file_uploader("📄 Capa da Conta 70 (consolidada · só leitura)", type=["xlsx", "xls", "xlsm", "csv"], key="c70_capa")
+    up_sk = c2.file_uploader("📄 Movimentação Conta 70 (Sankhya)", type=["xlsx", "xls", "xlsm", "csv"], key="c70_sk")
+    up_fat = c3.file_uploader("📄 Notas emitidas não baixadas (com CNPJ)", type=["xlsx", "xls", "xlsm", "csv"], key="c70_fat")
+
+    if up_capa is None or up_sk is None:
+        st.caption("Suba pelo menos a Capa e a movimentação do Sankhya. As notas emitidas são opcionais (habilitam os atrelamentos sugeridos por CNPJ).")
+        return
+
+    def _mk(u):
+        b = _io.BytesIO(u.getvalue())
+        b.name = u.name
+        return b
+
+    try:
+        capa = carregar_movimento(_mk(up_capa))
+        sk = carregar_movimento(_mk(up_sk))
+    except Exception as e:
+        st.error(f"Não consegui ler um dos arquivos: {e}")
+        return
+
+    ultimo = int(pd.to_numeric(capa["numero"], errors="coerce").max() or 0)
+    res = atrelar(sk, capa, ultimo_numero=ultimo)
+    d = res.detalhado.copy()
+    k = res.kpis
+    pend = d[d["situacao"].isin(["Aguardando baixa", "A conferir"])]
+    esteira = diagnosticar(pend)
+    n_ident = k["ja_identificado"] + k["herdado"]
+    prox = res.proximo_numero
+
+    render_cards([
+        card_kpi("Identificado", fmt_int(n_ident), "número da capa", classe="destaque-verde" if n_ident > 0 else ""),
+        card_kpi("Numerado agora", fmt_int(k["numerado_agora"]), "atrelamentos novos", classe="destaque-amarelo" if k["numerado_agora"] > 0 else ""),
+        card_kpi("Na esteira", fmt_int(len(pend)), "abertos a resolver"),
+        card_kpi("Valor parado", _money(float(pend["valor"].abs().sum())), "na Conta 70"),
+    ])
+
+    numeros_confirmados = {}   # índice original em d -> número atribuído
+    seq = prox
+
+    # ---- 2) Atrelamentos sugeridos (faturamento por CNPJ) ----
+    st.markdown("##### 🔗 Atrelamentos sugeridos")
+    if up_fat is None:
+        st.caption("Suba as notas emitidas (com CNPJ) para o app sugerir atrelamentos pelo CNPJ do histórico.")
+    else:
+        fat = None
+        try:
+            fat = carregar_faturamento(_mk(up_fat))
+        except Exception as e:
+            st.warning(f"Não consegui ler o faturamento: {e}")
+        if fat is not None:
+            if int((fat["cnpj"] != "").sum()) == 0:
+                st.info("O faturamento veio **sem CNPJ preenchido**. Exporte com a coluna CNPJ/CPF (ou uma lista de parceiros código + CNPJ) para habilitar as sugestões.")
+            else:
+                sug = sugerir_atrelamentos_cnpj(esteira, fat)
+                if sug.empty:
+                    st.caption("Nenhum CNPJ do faturamento bateu com as entradas abertas.")
+                else:
+                    vis = pd.DataFrame({
+                        "Confirmar": False,
+                        "CNPJ": sug["cnpj"].values,
+                        "Cliente": sug["nome"].astype(str).str.slice(0, 34).values,
+                        "Nota": sug["nota"].astype(str).values,
+                        "Recebido": sug["valor_recebido"].values,
+                        "Confere": sug["valor_fecha"].map(lambda b: "valor fecha" if b else "valor a conferir").values,
+                    })
+                    ed = st.data_editor(
+                        vis, hide_index=True, use_container_width=True, key="c70_sug_ed",
+                        column_config={
+                            "Confirmar": st.column_config.CheckboxColumn("Confirmar", help="Marque para atrelar e numerar"),
+                            "Recebido": st.column_config.NumberColumn("Recebido", format="%.2f"),
+                        },
+                        disabled=["CNPJ", "Cliente", "Nota", "Recebido", "Confere"],
+                    )
+                    for pos, marc in enumerate(ed["Confirmar"].tolist()):
+                        if marc:
+                            idx = int(sug.iloc[pos]["idx"])
+                            numeros_confirmados[idx] = seq
+                            seq += 1
+                    nsel = int(pd.Series(ed["Confirmar"]).sum())
+                    if nsel:
+                        st.caption(f"{nsel} marcado(s) para atrelar · números {prox} a {prox + nsel - 1}")
+
+    # ---- 3) Esteira — todos os pendentes, com filtros + atrelar manual ----
+    st.markdown("##### 📋 Esteira — pendências abertas")
+    est = esteira.copy()
+    fc1, fc2, fc3, fc4 = st.columns([1.2, 1.2, 1.2, 2.2])
+    f_prio = fc1.selectbox("Prioridade", ["todas", "Alta", "Média", "Baixa"], key="c70_fprio")
+    f_tipo = fc2.selectbox("Tipo", ["todos"] + sorted(est["tipo"].dropna().unique().tolist()), key="c70_ftipo")
+    f_banco = fc3.selectbox("Banco", ["todos"] + sorted(est["banco"].dropna().unique().tolist()), key="c70_fbanco")
+    busca = fc4.text_input("Buscar (CNPJ, valor, histórico)", key="c70_busca")
+
+    view = est
+    if f_prio != "todas":
+        view = view[view["prioridade"] == f_prio]
+    if f_tipo != "todos":
+        view = view[view["tipo"] == f_tipo]
+    if f_banco != "todos":
+        view = view[view["banco"] == f_banco]
+    if busca.strip():
+        b = busca.strip().lower()
+        m = (view["historico"].astype(str).str.lower().str.contains(b, na=False)
+             | view["valor"].abs().round(2).astype(str).str.contains(b, na=False))
+        view = view[m]
+    st.caption(f"{len(view)} de {len(est)} pendentes")
+
+    vis2 = pd.DataFrame({
+        "Atrelar": False,
+        "Data": pd.to_datetime(view["data"], errors="coerce"),
+        "Banco": view["banco"].values,
+        "Tipo": view["tipo"].values,
+        "Histórico": view["historico"].astype(str).str.slice(0, 46).values,
+        "Valor": view["valor"].abs().values,
+        "Dias": view["dias"].values,
+        "Diagnóstico": view["diagnostico"].values,
+        "Ação": view["acao"].values,
+    }, index=view.index)
+    ed2 = st.data_editor(
+        vis2, hide_index=True, use_container_width=True, key="c70_est_ed",
+        column_config={
+            "Atrelar": st.column_config.CheckboxColumn("Atrelar", help="Marque quando localizar o par e quiser numerar"),
+            "Valor": st.column_config.NumberColumn("Valor", format="%.2f"),
+            "Data": st.column_config.DateColumn("Data", format="DD/MM/YYYY"),
+            "Dias": st.column_config.NumberColumn("Dias", format="%d"),
+        },
+        disabled=[c for c in vis2.columns if c != "Atrelar"],
+    )
+    for idx, marc in zip(vis2.index.tolist(), ed2["Atrelar"].tolist()):
+        if marc and idx not in numeros_confirmados:
+            numeros_confirmados[idx] = seq
+            seq += 1
+
+    # ---- 4) Gerar capa atualizada (reflete os atrelamentos confirmados) ----
+    st.markdown("##### ⬇️ Gerar capa atualizada")
+    for idx, num in numeros_confirmados.items():
+        if idx in d.index:
+            d.at[idx, "numero_final"] = num
+            d.at[idx, "situacao"] = "Atrelado (confirmado)"
+
+    cols = [c for c in ["data", "tipo_movimento", "num_documento", "valor", "receita_despesa",
+                        "historico", "num_unico", "numero_final", "situacao"] if c in d.columns]
+    ren = {"data": "Dt. Lançamento", "tipo_movimento": "Tipo de Movimento", "num_documento": "Núm. Documento",
+           "valor": "Vlr. Lançamento", "receita_despesa": "Receita/Despesa", "historico": "Histórico",
+           "num_unico": "Núm. Único Bancário", "numero_final": "Número", "situacao": "Situação"}
+    buf = _io.BytesIO()
+    with pd.ExcelWriter(buf, engine="openpyxl") as w:
+        d[cols].rename(columns=ren).to_excel(w, sheet_name="Capa atualizada", index=False)
+    buf.seek(0)
+
+    total_conf = len(numeros_confirmados)
+    st.caption(
+        f"Último número na capa: **{ultimo}** · numerados automaticamente: **{k['numerado_agora']}** · "
+        f"confirmados agora: **{total_conf}** · próximo número livre: **{seq}**. "
+        "A capa sai no layout de conferência, para você conferir e colar — o arquivo original não é alterado."
+    )
+    st.download_button(
+        "⬇️ Baixar capa atualizada (.xlsx)",
+        data=buf.getvalue(),
+        file_name=f"capa_conta70_atualizada_{_date.today().strftime('%Y%m%d')}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        type="primary",
+    )
+
+
 def pagina_conta70():
     from src.conta70 import gerar_conta_70, carregar_historico_conta_70, STATUS_VALIDOS
     from io import BytesIO
@@ -5426,6 +5617,10 @@ def pagina_conta70():
         "identifica de qual NF / cliente / pedido aquele valor pertence. Quando identificar, marca "
         "como **Regularizado**."
     )
+
+    # v5.5: Casamento e numeração (Capa × Sankhya) — aditivo e independente da conciliação
+    _render_conta70_casamento_numeracao()
+    st.divider()
 
     resultado = st.session_state.get("resultado")
     if resultado is None:
