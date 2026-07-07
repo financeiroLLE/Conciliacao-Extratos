@@ -5545,6 +5545,15 @@ def _render_conta70_casamento_numeracao():
         except Exception:
             return "R$ 0,00"
 
+    def _brl(v):
+        """Formato brasileiro com sinal: 1.750,00 / -1.028,76 (sem R$)."""
+        try:
+            v = float(v)
+        except Exception:
+            return ""
+        s = f"{abs(v):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        return ("-" if v < 0 else "") + s
+
     section_title("ATRELAMENTO E NUMERAÇÃO — CONTA 70")
     st.markdown(
         "Suba a **Capa** (consolidada, somente leitura), a **movimentação da Conta 70 do Sankhya** "
@@ -5623,8 +5632,8 @@ def _render_conta70_casamento_numeracao():
                         "CNPJ": sug["cnpj"].values,
                         "Cliente": sug["nome"].astype(str).str.slice(0, 28).values,
                         "Nota": sug["nota"].astype(str).values,
-                        "Recebido": (sug["valor_recebido"].astype(float) * _sinal).values,
-                        "Valor da nota": pd.to_numeric(sug["valor_nota"], errors="coerce").values,
+                        "Recebido": [_brl(x * sg) for x, sg in zip(sug["valor_recebido"].astype(float), _sinal)],
+                        "Valor da nota": [_brl(x) for x in pd.to_numeric(sug["valor_nota"], errors="coerce").fillna(0)],
                         "Confere": sug["valor_fecha"].map(lambda b: "✅ bate" if b else "⚠️ conferir valor").values,
                     })
 
@@ -5663,7 +5672,7 @@ def _render_conta70_casamento_numeracao():
             "Banco": view["banco"].values,
             "R/D": _rdv.map(lambda x: "Despesa" if "DESPESA" in x else "Receita").values,
             "Histórico": view["historico"].astype(str).str.slice(0, 44).values,
-            "Valor": valor_sinal.values,
+            "Valor": [_brl(v) for v in valor_sinal],
             "Dias": view["dias"].values,
             "Diagnóstico": view["diagnostico"].values,
             "Ação": view["acao"].values,
@@ -5679,8 +5688,6 @@ def _render_conta70_casamento_numeracao():
                 vis, hide_index=True, use_container_width=True, key="c70_sug_ed",
                 column_config={
                     "Confirmar": st.column_config.CheckboxColumn("Confirmar"),
-                    "Recebido": st.column_config.NumberColumn("Recebido", format="%.2f"),
-                    "Valor da nota": st.column_config.NumberColumn("Valor da nota", format="%.2f"),
                 },
                 disabled=["R/D", "CNPJ", "Cliente", "Nota", "Recebido", "Valor da nota", "Confere"],
             )
@@ -5690,7 +5697,6 @@ def _render_conta70_casamento_numeracao():
                 vis2, hide_index=True, use_container_width=True, key="c70_est_ed",
                 column_config={
                     "Atrelar": st.column_config.CheckboxColumn("Atrelar"),
-                    "Valor": st.column_config.NumberColumn("Valor", format="%.2f"),
                     "Data": st.column_config.DateColumn("Data", format="DD/MM/YYYY"),
                     "Dias": st.column_config.NumberColumn("Dias", format="%d"),
                 },
@@ -5699,24 +5705,41 @@ def _render_conta70_casamento_numeracao():
         submitted = st.form_submit_button("✅ Confirmar selecionados", type="primary")
 
     if submitted:
-        conf = {}
-        s = prox
+        # coleta os índices marcados (sugeridos + esteira)
+        selecionados = []
         if ed is not None and sug is not None:
             for pos, marc in enumerate(ed["Confirmar"].tolist()):
                 if marc:
-                    idx = int(sug.iloc[pos]["idx"])
-                    if idx not in conf:
-                        conf[idx] = s
-                        s += 1
+                    selecionados.append(int(sug.iloc[pos]["idx"]))
         if ed2 is not None and vis2 is not None:
             for idx, marc in zip(vis2.index.tolist(), ed2["Atrelar"].tolist()):
-                if marc and idx not in conf:
-                    conf[idx] = s
-                    s += 1
+                if marc:
+                    selecionados.append(idx)
+        selecionados = list(dict.fromkeys(selecionados))  # únicos, mantém ordem
+
+        # UM número por operação: mesma identidade + mesmo valor absoluto
+        # (a receita e a despesa do mesmo item recebem o MESMO número)
+        conf = {}
+        grupos = {}
+        s = prox
+        for idx in selecionados:
+            if idx not in d.index:
+                continue
+            ident = str(d.at[idx, "identidade"])
+            valor_abs = round(abs(float(d.at[idx, "valor"])), 2)
+            chave = (ident, valor_abs)
+            if chave not in grupos:
+                grupos[chave] = s
+                s += 1
+            conf[idx] = grupos[chave]
+
         st.session_state["c70_confirmados_num"] = conf
         st.session_state.pop("c70_capa_bytes", None)
+        n_ops = len(grupos)
         if conf:
-            st.success(f"{len(conf)} atrelamento(s) confirmado(s) — números {prox} a {s - 1}. Agora gere a capa abaixo.")
+            faixa = f"número {prox}" if n_ops == 1 else f"números {prox} a {s - 1}"
+            st.success(f"{len(conf)} linha(s) confirmada(s) em {n_ops} operação(ões) — {faixa}. "
+                       "Receita e despesa da mesma operação recebem o mesmo número. Agora gere a capa abaixo.")
         else:
             st.info("Nada marcado — nenhum atrelamento confirmado.")
 
@@ -5740,12 +5763,13 @@ def _render_conta70_casamento_numeracao():
                 d.at[idx, "numero_final"] = num
                 d.at[idx, "situacao"] = "Atrelado (confirmado)"
         try:
-            capa_out, preenchidos, n_novos = gerar_capa_acumulada(
-                _io.BytesIO(up_capa.getvalue()), d, ultimo,
-            )
-            buf = _io.BytesIO()
-            with pd.ExcelWriter(buf, engine="openpyxl") as w:
-                capa_out.to_excel(w, sheet_name="Capa Conta 70", index=False)
+            with st.spinner("Gerando a capa acumulada… isso leva alguns segundos (arquivo grande)."):
+                capa_out, preenchidos, n_novos = gerar_capa_acumulada(
+                    _io.BytesIO(up_capa.getvalue()), d, ultimo,
+                )
+                buf = _io.BytesIO()
+                with pd.ExcelWriter(buf, engine="openpyxl") as w:
+                    capa_out.to_excel(w, sheet_name="Capa Conta 70", index=False)
             st.session_state["c70_capa_bytes"] = buf.getvalue()
             st.session_state["c70_capa_info"] = (len(capa_out), preenchidos, n_novos - preenchidos)
         except Exception as e:
