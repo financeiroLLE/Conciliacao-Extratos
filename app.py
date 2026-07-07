@@ -5723,9 +5723,10 @@ def pagina_conta70():
 
     resultado = st.session_state.get("resultado")
     if resultado is None:
-        st.warning(
-            "⚠️ Você ainda não rodou uma conciliação nesta sessão. "
-            "Vá em `✅ Conciliação` e faça uma conciliação primeiro."
+        st.caption(
+            "ℹ️ O atrelamento e a numeração acima funcionam sozinhos — não precisam de conciliação. "
+            "A visão complementar da Conta 70 que vem do **fechamento da conciliação** (créditos não "
+            "identificados) aparece aqui depois que você rodar uma conciliação."
         )
         return
 
