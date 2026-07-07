@@ -2946,11 +2946,27 @@ def tela_upload():
             horizontal=True,
         )
     with col_data:
-        data_ref = st.date_input(
-            "Data de referência",
-            value=date.today(),
-            format="DD/MM/YYYY",
+        # v5.10: período opcional — ignora lançamentos fora da janela (ex.: extrato
+        # baixado até 02/07, mas você quer analisar só junho). Banco e Sankhya usam
+        # a mesma data efetiva, então o filtro simples resolve.
+        usar_periodo = st.checkbox(
+            "Filtrar por período",
+            value=False,
+            help="Ignora lançamentos fora da janela, no extrato e no Sankhya. "
+            "Útil quando o extrato baixa acumulando dias.",
         )
+        if usar_periodo:
+            cini, cfim = st.columns(2)
+            periodo_ini = cini.date_input("Início", value=date.today().replace(day=1), format="DD/MM/YYYY")
+            periodo_fim = cfim.date_input("Fim", value=date.today(), format="DD/MM/YYYY")
+            data_ref = periodo_fim
+        else:
+            periodo_ini = periodo_fim = None
+            data_ref = st.date_input(
+                "Data de referência",
+                value=date.today(),
+                format="DD/MM/YYYY",
+            )
 
     st.divider()
 
@@ -3250,6 +3266,27 @@ def tela_upload():
                     if "valor" in sistema.columns:
                         sistema["valor"] = pd.to_numeric(sistema["valor"], errors="coerce").fillna(0.0)
                     sistema = sistema.dropna(subset=["data"]).reset_index(drop=True)
+
+                # v5.10: aplica o filtro de período (quando ligado) — ignora tudo
+                # fora da janela, no extrato E no Sankhya. Como os dois usam a mesma
+                # data efetiva, o corte simples fecha certo (feriado empurra p/ o
+                # próximo período nos dois lados). O saldo se reajusta às bordas
+                # porque saldo_final_da_conta pega a 1ª/última linha de saldo por data.
+                if usar_periodo and periodo_ini and periodo_fim:
+                    _ini = pd.Timestamp(periodo_ini).normalize()
+                    _fim = pd.Timestamp(periodo_fim).normalize()
+                    _ab, _as = len(banco), len(sistema)
+                    if not banco.empty and "data" in banco.columns:
+                        _dn = banco["data"].dt.normalize()
+                        banco = banco[(_dn >= _ini) & (_dn <= _fim)].reset_index(drop=True)
+                    if not sistema.empty and "data" in sistema.columns:
+                        _dn = sistema["data"].dt.normalize()
+                        sistema = sistema[(_dn >= _ini) & (_dn <= _fim)].reset_index(drop=True)
+                    st.info(
+                        f"📅 Período {periodo_ini.strftime('%d/%m/%Y')}–{periodo_fim.strftime('%d/%m/%Y')}: "
+                        f"extrato {_ab}→{len(banco)} linha(s) · Sankhya {_as}→{len(sistema)} linha(s). "
+                        "Lançamentos fora da janela foram ignorados."
+                    )
 
                 if modo == "1 conta por vez" and not sistema.empty and (sistema["conta"] == "—").all():
                     sistema["conta"] = arquivos_banco[0][0]
