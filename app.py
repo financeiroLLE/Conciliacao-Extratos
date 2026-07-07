@@ -5575,18 +5575,18 @@ def _render_conta70_casamento_numeracao():
     n_ident = k["ja_identificado"] + k["herdado"]
     acum_dif = acum_rec - acum_desp
 
-    # cards de progresso do período
+    # cards do acumulado da Capa inteira (conta 70) — em cima
+    render_cards([
+        card_kpi("Receita acumulada", _money(acum_rec), "toda a Capa · Conta 70", classe="destaque-verde"),
+        card_kpi("Despesa acumulada", _money(acum_desp), "toda a Capa · Conta 70", classe="destaque-vermelho"),
+        card_kpi("Diferença acumulada", _money(acum_dif), "receita − despesa"),
+    ])
+    # cards de progresso do período — embaixo
     render_cards([
         card_kpi("Identificado", fmt_int(n_ident), "já com número na capa", classe="destaque-verde" if n_ident > 0 else ""),
         card_kpi("Atrelado agora", fmt_int(k["numerado_agora"]), "números novos", classe="destaque-amarelo" if k["numerado_agora"] > 0 else ""),
         card_kpi("Na esteira", fmt_int(len(pend)), "abertos a resolver"),
         card_kpi("Último número usado", fmt_int(ultimo), "na capa"),
-    ])
-    # cards do acumulado da Capa inteira (conta 70)
-    render_cards([
-        card_kpi("Receita acumulada", _money(acum_rec), "toda a Capa · Conta 70", classe="destaque-verde"),
-        card_kpi("Despesa acumulada", _money(acum_desp), "toda a Capa · Conta 70", classe="destaque-vermelho"),
-        card_kpi("Diferença acumulada", _money(acum_dif), "receita − despesa"),
     ])
 
     numeros_confirmados = {}   # índice original em d -> número atribuído
