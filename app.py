@@ -5706,17 +5706,34 @@ def _render_conta70_casamento_numeracao():
                 numeros_confirmados[idx] = seq
                 seq += 1
 
-    # ---- 4) Gerar capa atualizada — INDEPENDENTE da seleção ----
-    st.markdown("##### ⬇️ Gerar capa atualizada")
+    # ---- 4) Confirmar seleção (sequencia os números) ----
+    st.markdown("##### ✅ Confirmar atrelamentos selecionados")
     n_sel = len(numeros_confirmados)
     st.caption(
-        "Gera a **capa completa e acumulada** com os números **automáticos** já aplicados. "
-        "Marcar atrelamentos acima é **opcional** — se marcar, eles entram também; se não marcar, "
-        "a capa sai só com o que o app numerou sozinho. "
-        + (f"Marcados agora: **{n_sel}**." if n_sel else "Nada marcado no momento.")
+        f"Marque as caixinhas (nos **Sugeridos** e/ou na **Esteira**) e clique para confirmar. "
+        f"Marcados agora: **{n_sel}**. Ao confirmar, cada um recebe o próximo número em sequência."
+    )
+    ca, cb = st.columns([1, 1])
+    if ca.button("Confirmar selecionados", key="c70_confirmar", type="primary", disabled=(n_sel == 0)):
+        st.session_state["c70_confirmados_num"] = dict(numeros_confirmados)
+        st.session_state.pop("c70_capa_bytes", None)  # capa antiga fica obsoleta
+        st.success(f"{n_sel} atrelamento(s) confirmado(s) — números {prox} a {prox + n_sel - 1}. Agora gere a capa abaixo.")
+    if cb.button("Limpar confirmados", key="c70_limpar", disabled=(not st.session_state.get("c70_confirmados_num"))):
+        st.session_state.pop("c70_confirmados_num", None)
+        st.session_state.pop("c70_capa_bytes", None)
+
+    confirmados_persist = st.session_state.get("c70_confirmados_num", {})
+    if confirmados_persist:
+        st.caption(f"✔️ {len(confirmados_persist)} atrelamento(s) confirmado(s) e prontos para entrar na capa.")
+
+    # ---- 5) Gerar capa atualizada — INDEPENDENTE da seleção ----
+    st.markdown("##### ⬇️ Gerar capa atualizada")
+    st.caption(
+        "Gera a **capa completa e acumulada** com os números **automáticos** já aplicados, mais os "
+        "atrelamentos que você **confirmou** acima. Funciona mesmo sem confirmar nada (sai só com os automáticos)."
     )
     if st.button("Gerar capa atualizada", key="c70_gerar", type="primary"):
-        for idx, num in numeros_confirmados.items():
+        for idx, num in confirmados_persist.items():
             if idx in d.index:
                 d.at[idx, "numero_final"] = num
                 d.at[idx, "situacao"] = "Atrelado (confirmado)"
