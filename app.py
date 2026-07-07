@@ -5692,7 +5692,11 @@ def pagina_conta70():
     kpis_c70 = res_c70.kpis
 
     if res_c70.detalhado.empty:
-        st.success("🎉 Nenhum crédito não identificado! Tudo conciliado.")
+        st.info(
+            "A **conciliação bancária** desta sessão não deixou créditos não identificados. "
+            "As pendências da Conta 70 (atrelamento Capa × Sankhya) aparecem na **esteira acima** — "
+            "esta seção abaixo é só a visão que vem da conciliação."
+        )
         return
 
     st.write("")
