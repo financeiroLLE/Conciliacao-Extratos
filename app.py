@@ -2966,10 +2966,30 @@ def tela_upload():
                 key="banco_single",
             )
             # v5.8: auto-preenche o nome da conta a partir do nome do arquivo.
-            # O usu\u00e1rio pode editar livremente.
+            # v5.9: e, quando dá, LÊ a conta do cabeçalho do próprio extrato
+            # (banco + agência + conta), pra não depender do nome do arquivo.
             nome_default = ""
+            conta_det = None
             if arquivo_banco is not None:
                 nome_default = arquivo_banco.name.rsplit(".", 1)[0].strip()
+                try:
+                    import io as _io_det
+                    from src.parsers.deteccao_conta import detectar_conta_extrato
+                    _b = _io_det.BytesIO(arquivo_banco.getvalue())
+                    _b.name = arquivo_banco.name
+                    conta_det = detectar_conta_extrato(_b)
+                    if conta_det.confianca == "alta":
+                        st.caption(
+                            f"🔎 Lido do extrato: **{conta_det.banco}** · agência {conta_det.agencia} · "
+                            f"conta {conta_det.conta}"
+                            + (f" · {conta_det.empresa}" if conta_det.empresa else "")
+                        )
+                        if conta_det.identificador:
+                            nome_default = conta_det.identificador
+                    else:
+                        st.caption("🔎 Não consegui ler a conta do cabeçalho deste arquivo — confirme abaixo.")
+                except Exception:
+                    conta_det = None
 
             # v5.35: se o Sankhya já foi enviado, oferece os nomes de conta dele
             # numa lista (string idêntica à que o matcher usa), em vez de um campo
@@ -2978,6 +2998,15 @@ def tela_upload():
             if contas_sankhya:
                 opcoes = contas_sankhya + [_OPCAO_DIGITAR]
                 idx_match = _melhor_match_conta(nome_default, contas_sankhya)
+                # v5.9: se lemos o número da conta no extrato, ele é o critério
+                # mais forte — casa com a conta do Sankhya que contém esse número.
+                if conta_det is not None and getattr(conta_det, "conta_digitos", ""):
+                    import re as _re_conta
+                    alvo = conta_det.conta_digitos
+                    for _j, _opt in enumerate(contas_sankhya):
+                        if alvo and alvo in _re_conta.sub(r"\D", "", str(_opt)):
+                            idx_match = _j
+                            break
                 idx_default = idx_match if idx_match is not None else len(opcoes) - 1
                 escolha = st.selectbox(
                     "Extrato Bancário (identificador da conta)",
