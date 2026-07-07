@@ -5545,6 +5545,13 @@ def _render_conta70_casamento_numeracao():
     numeros_confirmados = {}   # índice original em d -> número atribuído
     seq = prox
 
+    if d.empty:
+        st.warning(
+            "A movimentação do Sankhya veio vazia ou não foi reconhecida. "
+            "Confira se o arquivo enviado é o relatório de **movimentação da Conta 70** "
+            "(com a linha de cabeçalho das colunas)."
+        )
+
     # ---- 2) Atrelamentos sugeridos (faturamento por CNPJ) ----
     st.markdown("##### 🔗 Atrelamentos sugeridos")
     if up_fat is None:
@@ -5591,51 +5598,54 @@ def _render_conta70_casamento_numeracao():
     # ---- 3) Esteira — todos os pendentes, com filtros + atrelar manual ----
     st.markdown("##### 📋 Esteira — pendências abertas")
     est = esteira.copy()
-    fc1, fc2, fc3, fc4 = st.columns([1.2, 1.2, 1.2, 2.2])
-    f_prio = fc1.selectbox("Prioridade", ["todas", "Alta", "Média", "Baixa"], key="c70_fprio")
-    f_tipo = fc2.selectbox("Tipo", ["todos"] + sorted(est["tipo"].dropna().unique().tolist()), key="c70_ftipo")
-    f_banco = fc3.selectbox("Banco", ["todos"] + sorted(est["banco"].dropna().unique().tolist()), key="c70_fbanco")
-    busca = fc4.text_input("Buscar (CNPJ, valor, histórico)", key="c70_busca")
+    if est.empty:
+        st.caption("Nenhuma pendência aberta no momento. 🎉")
+    else:
+        fc1, fc2, fc3, fc4 = st.columns([1.2, 1.2, 1.2, 2.2])
+        f_prio = fc1.selectbox("Prioridade", ["todas", "Alta", "Média", "Baixa"], key="c70_fprio")
+        f_tipo = fc2.selectbox("Tipo", ["todos"] + sorted(est["tipo"].dropna().unique().tolist()), key="c70_ftipo")
+        f_banco = fc3.selectbox("Banco", ["todos"] + sorted(est["banco"].dropna().unique().tolist()), key="c70_fbanco")
+        busca = fc4.text_input("Buscar (CNPJ, valor, histórico)", key="c70_busca")
 
-    view = est
-    if f_prio != "todas":
-        view = view[view["prioridade"] == f_prio]
-    if f_tipo != "todos":
-        view = view[view["tipo"] == f_tipo]
-    if f_banco != "todos":
-        view = view[view["banco"] == f_banco]
-    if busca.strip():
-        b = busca.strip().lower()
-        m = (view["historico"].astype(str).str.lower().str.contains(b, na=False)
-             | view["valor"].abs().round(2).astype(str).str.contains(b, na=False))
-        view = view[m]
-    st.caption(f"{len(view)} de {len(est)} pendentes")
+        view = est
+        if f_prio != "todas":
+            view = view[view["prioridade"] == f_prio]
+        if f_tipo != "todos":
+            view = view[view["tipo"] == f_tipo]
+        if f_banco != "todos":
+            view = view[view["banco"] == f_banco]
+        if busca.strip():
+            b = busca.strip().lower()
+            m = (view["historico"].astype(str).str.lower().str.contains(b, na=False)
+                 | view["valor"].abs().round(2).astype(str).str.contains(b, na=False))
+            view = view[m]
+        st.caption(f"{len(view)} de {len(est)} pendentes")
 
-    vis2 = pd.DataFrame({
-        "Atrelar": False,
-        "Data": pd.to_datetime(view["data"], errors="coerce"),
-        "Banco": view["banco"].values,
-        "Tipo": view["tipo"].values,
-        "Histórico": view["historico"].astype(str).str.slice(0, 46).values,
-        "Valor": view["valor"].abs().values,
-        "Dias": view["dias"].values,
-        "Diagnóstico": view["diagnostico"].values,
-        "Ação": view["acao"].values,
-    }, index=view.index)
-    ed2 = st.data_editor(
-        vis2, hide_index=True, use_container_width=True, key="c70_est_ed",
-        column_config={
-            "Atrelar": st.column_config.CheckboxColumn("Atrelar", help="Marque quando localizar o par e quiser numerar"),
-            "Valor": st.column_config.NumberColumn("Valor", format="%.2f"),
-            "Data": st.column_config.DateColumn("Data", format="DD/MM/YYYY"),
-            "Dias": st.column_config.NumberColumn("Dias", format="%d"),
-        },
-        disabled=[c for c in vis2.columns if c != "Atrelar"],
-    )
-    for idx, marc in zip(vis2.index.tolist(), ed2["Atrelar"].tolist()):
-        if marc and idx not in numeros_confirmados:
-            numeros_confirmados[idx] = seq
-            seq += 1
+        vis2 = pd.DataFrame({
+            "Atrelar": False,
+            "Data": pd.to_datetime(view["data"], errors="coerce"),
+            "Banco": view["banco"].values,
+            "Tipo": view["tipo"].values,
+            "Histórico": view["historico"].astype(str).str.slice(0, 46).values,
+            "Valor": view["valor"].abs().values,
+            "Dias": view["dias"].values,
+            "Diagnóstico": view["diagnostico"].values,
+            "Ação": view["acao"].values,
+        }, index=view.index)
+        ed2 = st.data_editor(
+            vis2, hide_index=True, use_container_width=True, key="c70_est_ed",
+            column_config={
+                "Atrelar": st.column_config.CheckboxColumn("Atrelar", help="Marque quando localizar o par e quiser numerar"),
+                "Valor": st.column_config.NumberColumn("Valor", format="%.2f"),
+                "Data": st.column_config.DateColumn("Data", format="DD/MM/YYYY"),
+                "Dias": st.column_config.NumberColumn("Dias", format="%d"),
+            },
+            disabled=[c for c in vis2.columns if c != "Atrelar"],
+        )
+        for idx, marc in zip(vis2.index.tolist(), ed2["Atrelar"].tolist()):
+            if marc and idx not in numeros_confirmados:
+                numeros_confirmados[idx] = seq
+                seq += 1
 
     # ---- 4) Gerar capa atualizada (reflete os atrelamentos confirmados) ----
     st.markdown("##### ⬇️ Gerar capa atualizada")
