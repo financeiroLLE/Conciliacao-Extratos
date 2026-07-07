@@ -5614,12 +5614,16 @@ def _render_conta70_casamento_numeracao():
                 else:
                     # dedup: uma linha por (recebimento, nota, valor recebido)
                     sug = sug.drop_duplicates(subset=["idx", "nota", "valor_recebido"]).reset_index(drop=True)
+                    _rds = sug["receita_despesa"].astype(str).str.upper()
+                    _rd_lbl = _rds.map(lambda x: "Despesa" if "DESPESA" in x else "Receita")
+                    _sinal = _rds.map(lambda x: -1 if "DESPESA" in x else 1)
                     vis = pd.DataFrame({
                         "Confirmar": False,
+                        "R/D": _rd_lbl.values,
                         "CNPJ": sug["cnpj"].values,
-                        "Cliente": sug["nome"].astype(str).str.slice(0, 30).values,
+                        "Cliente": sug["nome"].astype(str).str.slice(0, 28).values,
                         "Nota": sug["nota"].astype(str).values,
-                        "Recebido": sug["valor_recebido"].values,
+                        "Recebido": (sug["valor_recebido"].astype(float) * _sinal).values,
                         "Valor da nota": pd.to_numeric(sug["valor_nota"], errors="coerce").values,
                         "Confere": sug["valor_fecha"].map(lambda b: "✅ bate" if b else "⚠️ conferir valor").values,
                     })
@@ -5630,7 +5634,7 @@ def _render_conta70_casamento_numeracao():
                             "Recebido": st.column_config.NumberColumn("Recebido", format="%.2f"),
                             "Valor da nota": st.column_config.NumberColumn("Valor da nota", format="%.2f"),
                         },
-                        disabled=["CNPJ", "Cliente", "Nota", "Recebido", "Valor da nota", "Confere"],
+                        disabled=["R/D", "CNPJ", "Cliente", "Nota", "Recebido", "Valor da nota", "Confere"],
                     )
                     for pos, marc in enumerate(ed["Confirmar"].tolist()):
                         if marc:
@@ -5702,15 +5706,16 @@ def _render_conta70_casamento_numeracao():
                 numeros_confirmados[idx] = seq
                 seq += 1
 
-    # ---- 4) Confirmar selecionados e gerar a capa COMPLETA (só no clique) ----
-    st.markdown("##### ✅ Confirmar e gerar capa atualizada")
+    # ---- 4) Gerar capa atualizada — INDEPENDENTE da seleção ----
+    st.markdown("##### ⬇️ Gerar capa atualizada")
     n_sel = len(numeros_confirmados)
     st.caption(
-        f"Marque os atrelamentos acima e clique para gerar. Selecionados agora: **{n_sel}**. "
-        "A capa sai **completa e acumulada** (todas as linhas, com o sinal original) e recebe os números novos; "
-        "o arquivo original não é alterado."
+        "Gera a **capa completa e acumulada** com os números **automáticos** já aplicados. "
+        "Marcar atrelamentos acima é **opcional** — se marcar, eles entram também; se não marcar, "
+        "a capa sai só com o que o app numerou sozinho. "
+        + (f"Marcados agora: **{n_sel}**." if n_sel else "Nada marcado no momento.")
     )
-    if st.button("Confirmar selecionados e gerar capa atualizada", type="primary", key="c70_gerar"):
+    if st.button("Gerar capa atualizada", key="c70_gerar", type="primary"):
         for idx, num in numeros_confirmados.items():
             if idx in d.index:
                 d.at[idx, "numero_final"] = num
