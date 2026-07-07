@@ -2994,16 +2994,34 @@ def tela_upload():
                     _b = _io_det.BytesIO(arquivo_banco.getvalue())
                     _b.name = arquivo_banco.name
                     conta_det = detectar_conta_extrato(_b)
+                    _cores_banco = {
+                        "Bradesco": "#CC092F", "Santander": "#EC0000", "Sicredi": "#3FA110",
+                        "Caixa": "#005CA9", "Itaú": "#EC7000",
+                    }
                     if conta_det.confianca == "alta":
-                        st.caption(
-                            f"🔎 Lido do extrato: **{conta_det.banco}** · agência {conta_det.agencia} · "
-                            f"conta {conta_det.conta}"
-                            + (f" · {conta_det.empresa}" if conta_det.empresa else "")
+                        _cor = _cores_banco.get(conta_det.banco, "#6f88b8")
+                        _emp = f" · {conta_det.empresa}" if conta_det.empresa else ""
+                        st.markdown(
+                            f'<div style="display:flex;align-items:center;gap:12px;background:#0b2560;'
+                            f'border-radius:10px;border-left:6px solid {_cor};padding:9px 13px;margin:2px 0 8px;">'
+                            f'<span style="background:{_cor};color:#fff;font-size:11px;font-weight:700;'
+                            f'letter-spacing:.03em;padding:3px 11px;border-radius:6px;">{conta_det.banco.upper()}</span>'
+                            f'<span style="color:#eaf0fb;font-size:12.5px;">agência {conta_det.agencia} · '
+                            f'conta {conta_det.conta}{_emp}</span></div>',
+                            unsafe_allow_html=True,
                         )
                         if conta_det.identificador:
                             nome_default = conta_det.identificador
                     else:
-                        st.caption("🔎 Não consegui ler a conta do cabeçalho deste arquivo — confirme abaixo.")
+                        st.markdown(
+                            '<div style="display:flex;align-items:center;gap:12px;background:#0b2560;'
+                            'border-radius:10px;border-left:6px solid #6f88b8;padding:9px 13px;margin:2px 0 8px;">'
+                            '<span style="background:#6f88b8;color:#041747;font-size:11px;font-weight:700;'
+                            'letter-spacing:.03em;padding:3px 11px;border-radius:6px;">NÃO IDENTIFICADO</span>'
+                            '<span style="color:#9fb3d6;font-size:12.5px;">não consegui ler a conta do cabeçalho '
+                            '— confirme na lista abaixo</span></div>',
+                            unsafe_allow_html=True,
+                        )
                 except Exception:
                     conta_det = None
 
@@ -5489,6 +5507,7 @@ def _render_conta70_casamento_numeracao():
     from datetime import date as _date
     from src.conta70.casamento import (
         carregar_movimento, atrelar, diagnosticar, carregar_faturamento, sugerir_atrelamentos_cnpj,
+        gerar_capa_acumulada,
     )
 
     def _money(v):
@@ -5647,36 +5666,40 @@ def _render_conta70_casamento_numeracao():
                 numeros_confirmados[idx] = seq
                 seq += 1
 
-    # ---- 4) Gerar capa atualizada (reflete os atrelamentos confirmados) ----
+    # ---- 4) Gerar capa atualizada — CAPA COMPLETA (acumulada) + números novos ----
     st.markdown("##### ⬇️ Gerar capa atualizada")
     for idx, num in numeros_confirmados.items():
         if idx in d.index:
             d.at[idx, "numero_final"] = num
             d.at[idx, "situacao"] = "Atrelado (confirmado)"
+    res.detalhado = d  # reflete os atrelamentos confirmados
 
-    cols = [c for c in ["data", "tipo_movimento", "num_documento", "valor", "receita_despesa",
-                        "historico", "num_unico", "numero_final", "situacao"] if c in d.columns]
-    ren = {"data": "Dt. Lançamento", "tipo_movimento": "Tipo de Movimento", "num_documento": "Núm. Documento",
-           "valor": "Vlr. Lançamento", "receita_despesa": "Receita/Despesa", "historico": "Histórico",
-           "num_unico": "Núm. Único Bancário", "numero_final": "Número", "situacao": "Situação"}
-    buf = _io.BytesIO()
-    with pd.ExcelWriter(buf, engine="openpyxl") as w:
-        d[cols].rename(columns=ren).to_excel(w, sheet_name="Capa atualizada", index=False)
-    buf.seek(0)
+    capa_out = None
+    try:
+        capa_out, preenchidos, n_novos = gerar_capa_acumulada(_mk(up_capa), res, ultimo)
+    except Exception as e:
+        st.error(f"Não consegui montar a capa acumulada: {e}")
 
-    total_conf = len(numeros_confirmados)
-    st.caption(
-        f"Último número na capa: **{ultimo}** · numerados automaticamente: **{k['numerado_agora']}** · "
-        f"confirmados agora: **{total_conf}** · próximo número livre: **{seq}**. "
-        "A capa sai no layout de conferência, para você conferir e colar — o arquivo original não é alterado."
-    )
-    st.download_button(
-        "⬇️ Baixar capa atualizada (.xlsx)",
-        data=buf.getvalue(),
-        file_name=f"capa_conta70_atualizada_{_date.today().strftime('%Y%m%d')}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        type="primary",
-    )
+    if capa_out is not None:
+        buf = _io.BytesIO()
+        with pd.ExcelWriter(buf, engine="openpyxl") as w:
+            capa_out.to_excel(w, sheet_name="Capa Conta 70", index=False)
+        buf.seek(0)
+        nao_aloc = n_novos - preenchidos
+        st.caption(
+            f"A capa sai **completa e acumulada** — {len(capa_out):,} linhas, com o sinal original "
+            f"(despesa negativa) e os números antigos intactos. Foram preenchidos automaticamente "
+            f"**{preenchidos}** número(s) novo(s) nas linhas com correspondência única.".replace(",", ".")
+            + (f" {nao_aloc} atrelamento(s) não tiveram linha única na Capa e ficam na esteira para você posicionar (sem chute)."
+               if nao_aloc > 0 else "")
+        )
+        st.download_button(
+            "⬇️ Baixar capa atualizada (.xlsx)",
+            data=buf.getvalue(),
+            file_name=f"capa_conta70_atualizada_{_date.today().strftime('%Y%m%d')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            type="primary",
+        )
 
 
 def pagina_conta70():
