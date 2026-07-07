@@ -397,16 +397,16 @@ def diagnosticar(pend: pd.DataFrame, hoje=None) -> pd.DataFrame:
         dias = r["dias"]
         idt = str(r["identidade"])
         if r["situacao"] == "A conferir":
-            return ("A conferir", "Ambiguidade / valor não fecha", "Escolher documento ou validar composição", "Média")
+            return ("Precisa de conferência", "Vários candidatos — escolher", "Escolher o título certo", "Média")
         if "CARTORIO" in u or "CARTÓRIO" in u or "NITEROI" in u or "SISPAG" in u:
-            return ("Pendente", "Possível cartório/protesto", "Validar títulos protestados/cartório", "Alta")
+            return ("Pode ser cartório", "Pode ser cartório", "Verificar cartório", "Alta")
         if idt.startswith("SEM-ID"):
-            return ("Pendente", "Histórico sem identidade", "Solicitar comprovante/extrato ao banco", "Média")
+            return ("Sem CNPJ/CPF no histórico", "Sem CNPJ/CPF no histórico", "Pedir comprovante ao banco", "Média")
         if pd.notna(dias) and dias > 15:
-            return ("Pendente crítico", "Valor antigo (> 15 dias)", "Escalonar para supervisão", "Alta")
+            return ("Parado há mais de 15 dias", "Parado há mais de 15 dias", "Parado há muito tempo — revisar", "Alta")
         if pd.notna(dias) and dias > 7:
-            return ("Aguardando baixa", "Sem título localizado (> 7 dias)", "Revisar títulos/faturamento", "Alta")
-        return ("Aguardando baixa", "Sem título localizado", "Manter em fila", "Baixa")
+            return ("Parado há mais de 7 dias", "Parado há mais de 7 dias", "Revisar", "Alta")
+        return ("Recebido, falta identificar", "Recebido, falta identificar", "Procurar a nota/título", "Baixa")
 
     diag = d.apply(lambda r: pd.Series(_diag(r), index=["status_esteira", "diagnostico", "acao", "prioridade"]), axis=1)
     return pd.concat([d, diag], axis=1)
@@ -489,7 +489,7 @@ def sugerir_atrelamentos_cnpj(entradas_abertas: pd.DataFrame, faturamento: pd.Da
     return pd.DataFrame(linhas)
 
 
-def gerar_capa_acumulada(capa_arquivo, resultado, ultimo_numero: int, confirmados=None):
+def gerar_capa_acumulada(capa_arquivo, detalhado, ultimo_numero: int, confirmados=None):
     """Devolve a Capa COMPLETA (todas as linhas e colunas originais, com o sinal
     original — despesa negativa) e preenche a numeração SÓ nas linhas que o app
     identificou este período, quando há match único. Nunca sobrescreve número
@@ -546,7 +546,7 @@ def gerar_capa_acumulada(capa_arquivo, resultado, ultimo_numero: int, confirmado
     raw["_d"] = raw[c_dt].map(_to_data) if c_dt else pd.NaT
     raw["_cur"] = pd.to_numeric(raw[c_num], errors="coerce")
 
-    d = resultado.detalhado
+    d = detalhado
     novos = d[pd.to_numeric(d["numero_final"], errors="coerce") > ultimo_numero]
     preenchidos = 0
     for _, r in novos.iterrows():
