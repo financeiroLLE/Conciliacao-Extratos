@@ -449,8 +449,12 @@ def carregar_faturamento(arquivo) -> pd.DataFrame:
     c_val = col("Valor Líquido", "Vlr do Desdobramento", "Vlr Desdobramento", "Valor")
     c_cod = col("Parceiro", "Código Parceiro", "Cod Parceiro")
 
+    def _limpar_doc(v):
+        s = re.sub(r"\.0+$", "", str(v).strip())   # remove ".0" de número lido como float
+        return re.sub(r"\D", "", s)
+
     out = pd.DataFrame()
-    out["cnpj"] = df[c_cnpj].map(lambda v: re.sub(r"\D", "", str(v))) if c_cnpj else ""
+    out["cnpj"] = df[c_cnpj].map(_limpar_doc) if c_cnpj else ""
     out["nota"] = df[c_nota].astype(str).str.replace(r"\.0$", "", regex=True) if c_nota else ""
     out["nome"] = df[c_nome].astype(str) if c_nome else ""
     out["valor"] = pd.to_numeric(df[c_val], errors="coerce") if c_val else pd.NA
@@ -483,3 +487,82 @@ def sugerir_atrelamentos_cnpj(entradas_abertas: pd.DataFrame, faturamento: pd.Da
             "n_candidatos": len(cand),
         })
     return pd.DataFrame(linhas)
+
+
+def gerar_capa_acumulada(capa_arquivo, resultado, ultimo_numero: int, confirmados=None):
+    """Devolve a Capa COMPLETA (todas as linhas e colunas originais, com o sinal
+    original — despesa negativa) e preenche a numeração SÓ nas linhas que o app
+    identificou este período, quando há match único. Nunca sobrescreve número
+    existente e nunca chuta (match ambíguo fica em branco).
+
+    Retorna (df_capa_completa, n_preenchidos, n_novos_total).
+    """
+    confirmados = confirmados or {}
+    hdr = _detectar_header(capa_arquivo)
+    if hasattr(capa_arquivo, "seek"):
+        try:
+            capa_arquivo.seek(0)
+        except Exception:
+            pass
+    raw = _ler_planilha(capa_arquivo, header=hdr)
+    raw.columns = [str(c).strip() for c in raw.columns]
+    cols_orig = list(raw.columns)
+
+    def col(*nomes):
+        for n in nomes:
+            for c in raw.columns:
+                if c.lower() == n.lower():
+                    return c
+        return None
+
+    c_doc = col("Núm. Documento", "Num. Documento")
+    c_val = col("Vlr. Lançamento", "Valor", "Vlr Lancamento")
+    c_dt = col("Dt. Lançamento", "Data")
+    c_hist = col("Histórico", "Historico")
+
+    _sankhya_pos = {
+        "dt. conciliação", "dt. conciliacao", "núm. único bancário",
+        "num. unico bancario", "pré-data", "pre-data", "usuário", "usuario",
+        "dt. alteração", "dt. alteracao", "vlr. troco", "vlr. cheque", "conciliado",
+    }
+    c_num = None
+    if c_hist is not None:
+        depois = cols_orig[cols_orig.index(c_hist) + 1:]
+        for c in depois:
+            hl = c.strip().lower()
+            if hl in _sankhya_pos:
+                continue
+            if pd.to_numeric(raw[c], errors="coerce").notna().sum() > 0 and (
+                hl in ("x", "nan", "") or hl.startswith("unnamed")
+            ):
+                c_num = c
+                break
+    if c_num is None:
+        c_num = "Número"
+        raw[c_num] = pd.NA
+        cols_orig = cols_orig + [c_num]
+
+    raw["_v"] = pd.to_numeric(raw[c_val], errors="coerce").abs().round(2) if c_val else 0.0
+    raw["_d"] = raw[c_dt].map(_to_data) if c_dt else pd.NaT
+    raw["_cur"] = pd.to_numeric(raw[c_num], errors="coerce")
+
+    d = resultado.detalhado
+    novos = d[pd.to_numeric(d["numero_final"], errors="coerce") > ultimo_numero]
+    preenchidos = 0
+    for _, r in novos.iterrows():
+        num = r["numero_final"]
+        doc = str(r.get("num_documento", "")).strip()
+        v = round(abs(float(r["valor"])), 2)
+        dt = r.get("data")
+        mask = raw["_cur"].isna()
+        if doc and doc.lower() not in ("", "nan"):
+            cand = raw[mask & (raw[c_doc].astype(str) == doc) & (raw["_v"] == v)]
+        else:
+            cand = raw[mask & (raw["_v"] == v) & (raw["_d"] == dt)]
+        if len(cand) == 1:
+            raw.loc[cand.index[0], c_num] = num
+            raw.loc[cand.index[0], "_cur"] = num
+            preenchidos += 1
+
+    raw = raw.drop(columns=["_v", "_d", "_cur"])
+    return raw[cols_orig], preenchidos, len(novos)
