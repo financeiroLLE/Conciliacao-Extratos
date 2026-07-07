@@ -5589,15 +5589,17 @@ def _render_conta70_casamento_numeracao():
         card_kpi("Último número usado", fmt_int(ultimo), "na capa"),
     ])
 
-    numeros_confirmados = {}   # índice original em d -> número atribuído
-    seq = prox
+    # ---- SELEÇÃO: marca à vontade e confirma no fim (dentro de um form,
+    #      então marcar NÃO recarrega a tela — só o Confirmar processa) ----
+    st.markdown("##### 🔗 Selecionar atrelamentos")
+    st.caption("Marque à vontade nos **sugeridos** e/ou na **esteira** — nada é processado até você clicar "
+               "em **Confirmar selecionados** no fim. Confirmar = “esse recebimento é o pagamento dessa nota”.")
 
-    # ---- 2) Atrelamentos sugeridos (faturamento por CNPJ) ----
-    st.markdown("##### 🔗 Atrelamentos sugeridos")
-    st.caption("Quando o CNPJ da nota bate com o histórico do recebimento, o app sugere aqui. "
-               "Confirmar = “esse recebimento é o pagamento dessa nota”. Ao confirmar, ele ganha um número e entra na capa.")
+    # prepara SUGERIDOS (fora do form)
+    vis = None
+    sug = None
     if up_fat is None:
-        st.caption("Suba as notas emitidas (com CNPJ) para o app sugerir atrelamentos pelo CNPJ do histórico.")
+        st.caption("💡 Suba as notas emitidas (com CNPJ) para o app sugerir atrelamentos pelo CNPJ do histórico.")
     else:
         fat = None
         try:
@@ -5608,18 +5610,16 @@ def _render_conta70_casamento_numeracao():
             if int((fat["cnpj"] != "").sum()) == 0:
                 st.info("O faturamento veio **sem CNPJ preenchido**. Exporte com a coluna CNPJ/CPF para habilitar as sugestões.")
             else:
-                sug = sugerir_atrelamentos_cnpj(esteira, fat)
-                if sug.empty:
+                _sug = sugerir_atrelamentos_cnpj(esteira, fat)
+                if _sug.empty:
                     st.caption("Nenhum CNPJ do faturamento bateu com as entradas abertas.")
                 else:
-                    # dedup: uma linha por (recebimento, nota, valor recebido)
-                    sug = sug.drop_duplicates(subset=["idx", "nota", "valor_recebido"]).reset_index(drop=True)
+                    sug = _sug.drop_duplicates(subset=["idx", "nota", "valor_recebido"]).reset_index(drop=True)
                     _rds = sug["receita_despesa"].astype(str).str.upper()
-                    _rd_lbl = _rds.map(lambda x: "Despesa" if "DESPESA" in x else "Receita")
                     _sinal = _rds.map(lambda x: -1 if "DESPESA" in x else 1)
                     vis = pd.DataFrame({
                         "Confirmar": False,
-                        "R/D": _rd_lbl.values,
+                        "R/D": _rds.map(lambda x: "Despesa" if "DESPESA" in x else "Receita").values,
                         "CNPJ": sug["cnpj"].values,
                         "Cliente": sug["nome"].astype(str).str.slice(0, 28).values,
                         "Nota": sug["nota"].astype(str).values,
@@ -5627,41 +5627,22 @@ def _render_conta70_casamento_numeracao():
                         "Valor da nota": pd.to_numeric(sug["valor_nota"], errors="coerce").values,
                         "Confere": sug["valor_fecha"].map(lambda b: "✅ bate" if b else "⚠️ conferir valor").values,
                     })
-                    ed = st.data_editor(
-                        vis, hide_index=True, use_container_width=True, key="c70_sug_ed",
-                        column_config={
-                            "Confirmar": st.column_config.CheckboxColumn("Confirmar", help="Marque para atrelar e numerar"),
-                            "Recebido": st.column_config.NumberColumn("Recebido", format="%.2f"),
-                            "Valor da nota": st.column_config.NumberColumn("Valor da nota", format="%.2f"),
-                        },
-                        disabled=["R/D", "CNPJ", "Cliente", "Nota", "Recebido", "Valor da nota", "Confere"],
-                    )
-                    for pos, marc in enumerate(ed["Confirmar"].tolist()):
-                        if marc:
-                            idx = int(sug.iloc[pos]["idx"])
-                            if idx not in numeros_confirmados:
-                                numeros_confirmados[idx] = seq
-                                seq += 1
 
-    # ---- 3) Esteira — todos os pendentes, com submenu de contadores + filtros ----
-    st.markdown("##### 📋 Esteira — pendências abertas")
-    st.caption("São os lançamentos da Conta 70 ainda **sem número/baixa** (recebimentos parados + os que precisam de conferência). "
-               "Valor negativo = despesa (saída); positivo = receita (entrada).")
+    # prepara ESTEIRA + filtros (fora do form, pra os filtros reagirem na hora)
     est = esteira.copy()
+    vis2 = None
     if est.empty:
-        st.caption("Nenhuma pendência aberta no momento. 🎉")
+        st.caption("Esteira: nenhuma pendência aberta no momento. 🎉")
     else:
-        # submenu: quebra por diagnóstico com a quantidade de cada
         contagem = est["diagnostico"].value_counts()
         chips = " &nbsp;·&nbsp; ".join(f"**{nome}:** {qtd}" for nome, qtd in contagem.items())
+        st.markdown("**Esteira — pendências abertas.** Valor negativo = despesa (saída); positivo = receita (entrada).")
         st.markdown(f"<div style='color:#9fb3d6;font-size:13px;margin:2px 0 8px'>{chips}</div>", unsafe_allow_html=True)
-
         fc1, fc2, fc3, fc4 = st.columns([1.2, 1.5, 1.2, 2.0])
         f_prio = fc1.selectbox("Prioridade", ["todas", "Alta", "Média", "Baixa"], key="c70_fprio")
         f_diag = fc2.selectbox("Tipo de pendência", ["todos"] + sorted(est["diagnostico"].dropna().unique().tolist()), key="c70_fdiag")
         f_banco = fc3.selectbox("Banco", ["todos"] + sorted(est["banco"].dropna().unique().tolist()), key="c70_fbanco")
         busca = fc4.text_input("Buscar (CNPJ, valor, histórico)", key="c70_busca")
-
         view = est
         if f_prio != "todas":
             view = view[view["prioridade"] == f_prio]
@@ -5671,15 +5652,11 @@ def _render_conta70_casamento_numeracao():
             view = view[view["banco"] == f_banco]
         if busca.strip():
             b = busca.strip().lower()
-            m = (view["historico"].astype(str).str.lower().str.contains(b, na=False)
-                 | view["valor"].abs().round(2).astype(str).str.contains(b, na=False))
-            view = view[m]
+            view = view[view["historico"].astype(str).str.lower().str.contains(b, na=False)
+                        | view["valor"].abs().round(2).astype(str).str.contains(b, na=False)]
         st.caption(f"{len(view)} de {len(est)} pendentes")
-
-        # valor com sinal: despesa negativa, receita positiva
         _rdv = view["receita_despesa"].astype(str).str.upper()
         valor_sinal = view["valor"].abs() * _rdv.map(lambda x: -1 if "DESPESA" in x else 1)
-
         vis2 = pd.DataFrame({
             "Atrelar": False,
             "Data": pd.to_datetime(view["data"], errors="coerce"),
@@ -5691,42 +5668,67 @@ def _render_conta70_casamento_numeracao():
             "Diagnóstico": view["diagnostico"].values,
             "Ação": view["acao"].values,
         }, index=view.index)
-        ed2 = st.data_editor(
-            vis2, hide_index=True, use_container_width=True, key="c70_est_ed",
-            column_config={
-                "Atrelar": st.column_config.CheckboxColumn("Atrelar", help="Marque quando localizar o par e quiser numerar"),
-                "Valor": st.column_config.NumberColumn("Valor", format="%.2f"),
-                "Data": st.column_config.DateColumn("Data", format="DD/MM/YYYY"),
-                "Dias": st.column_config.NumberColumn("Dias", format="%d"),
-            },
-            disabled=[c for c in vis2.columns if c != "Atrelar"],
-        )
-        for idx, marc in zip(vis2.index.tolist(), ed2["Atrelar"].tolist()):
-            if marc and idx not in numeros_confirmados:
-                numeros_confirmados[idx] = seq
-                seq += 1
 
-    # ---- 4) Confirmar seleção (sequencia os números) ----
-    st.markdown("##### ✅ Confirmar atrelamentos selecionados")
-    n_sel = len(numeros_confirmados)
-    st.caption(
-        f"Marque as caixinhas (nos **Sugeridos** e/ou na **Esteira**) e clique para confirmar. "
-        f"Marcados agora: **{n_sel}**. Ao confirmar, cada um recebe o próximo número em sequência."
-    )
-    ca, cb = st.columns([1, 1])
-    if ca.button("Confirmar selecionados", key="c70_confirmar", type="primary", disabled=(n_sel == 0)):
-        st.session_state["c70_confirmados_num"] = dict(numeros_confirmados)
-        st.session_state.pop("c70_capa_bytes", None)  # capa antiga fica obsoleta
-        st.success(f"{n_sel} atrelamento(s) confirmado(s) — números {prox} a {prox + n_sel - 1}. Agora gere a capa abaixo.")
-    if cb.button("Limpar confirmados", key="c70_limpar", disabled=(not st.session_state.get("c70_confirmados_num"))):
-        st.session_state.pop("c70_confirmados_num", None)
+    # FORM: marcar aqui NÃO recarrega; só o Confirmar processa
+    ed = None
+    ed2 = None
+    with st.form("c70_selecao", border=True):
+        if vis is not None:
+            st.markdown("**Atrelamentos sugeridos (CNPJ bateu com o histórico):**")
+            ed = st.data_editor(
+                vis, hide_index=True, use_container_width=True, key="c70_sug_ed",
+                column_config={
+                    "Confirmar": st.column_config.CheckboxColumn("Confirmar"),
+                    "Recebido": st.column_config.NumberColumn("Recebido", format="%.2f"),
+                    "Valor da nota": st.column_config.NumberColumn("Valor da nota", format="%.2f"),
+                },
+                disabled=["R/D", "CNPJ", "Cliente", "Nota", "Recebido", "Valor da nota", "Confere"],
+            )
+        if vis2 is not None:
+            st.markdown("**Esteira — marque para atrelar manualmente:**")
+            ed2 = st.data_editor(
+                vis2, hide_index=True, use_container_width=True, key="c70_est_ed",
+                column_config={
+                    "Atrelar": st.column_config.CheckboxColumn("Atrelar"),
+                    "Valor": st.column_config.NumberColumn("Valor", format="%.2f"),
+                    "Data": st.column_config.DateColumn("Data", format="DD/MM/YYYY"),
+                    "Dias": st.column_config.NumberColumn("Dias", format="%d"),
+                },
+                disabled=[c for c in vis2.columns if c != "Atrelar"],
+            )
+        submitted = st.form_submit_button("✅ Confirmar selecionados", type="primary")
+
+    if submitted:
+        conf = {}
+        s = prox
+        if ed is not None and sug is not None:
+            for pos, marc in enumerate(ed["Confirmar"].tolist()):
+                if marc:
+                    idx = int(sug.iloc[pos]["idx"])
+                    if idx not in conf:
+                        conf[idx] = s
+                        s += 1
+        if ed2 is not None and vis2 is not None:
+            for idx, marc in zip(vis2.index.tolist(), ed2["Atrelar"].tolist()):
+                if marc and idx not in conf:
+                    conf[idx] = s
+                    s += 1
+        st.session_state["c70_confirmados_num"] = conf
         st.session_state.pop("c70_capa_bytes", None)
+        if conf:
+            st.success(f"{len(conf)} atrelamento(s) confirmado(s) — números {prox} a {s - 1}. Agora gere a capa abaixo.")
+        else:
+            st.info("Nada marcado — nenhum atrelamento confirmado.")
 
     confirmados_persist = st.session_state.get("c70_confirmados_num", {})
     if confirmados_persist:
-        st.caption(f"✔️ {len(confirmados_persist)} atrelamento(s) confirmado(s) e prontos para entrar na capa.")
+        st.caption(f"✔️ {len(confirmados_persist)} atrelamento(s) confirmado(s), prontos para entrar na capa.")
+        if st.button("Limpar confirmados", key="c70_limpar"):
+            st.session_state.pop("c70_confirmados_num", None)
+            st.session_state.pop("c70_capa_bytes", None)
+            st.rerun()
 
-    # ---- 5) Gerar capa atualizada — INDEPENDENTE da seleção ----
+    # ---- Gerar capa atualizada — INDEPENDENTE da seleção ----
     st.markdown("##### ⬇️ Gerar capa atualizada")
     st.caption(
         "Gera a **capa completa e acumulada** com os números **automáticos** já aplicados, mais os "
