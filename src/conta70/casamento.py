@@ -380,6 +380,13 @@ def diagnosticar(pend: pd.DataFrame, hoje=None) -> pd.DataFrame:
     prioridade. Camada atual — usa só o que já temos (Sankhya + Capa)."""
     d = pend.copy()
     hoje = pd.Timestamp(hoje) if hoje is not None else pd.Timestamp.today().normalize()
+    if d.empty:
+        # esteira vazia: devolve as colunas esperadas (vazias), sem apply/concat
+        # (que num DataFrame vazio duplicaria colunas e quebraria os filtros)
+        for _c in ["dias", "banco", "tipo", "status_esteira", "diagnostico", "acao", "prioridade"]:
+            if _c not in d.columns:
+                d[_c] = pd.Series(dtype="object")
+        return d
     dts = pd.to_datetime(d["data"], errors="coerce")
     d["dias"] = (hoje - dts).dt.days
     d["banco"] = d["historico"].map(_banco_hist)
