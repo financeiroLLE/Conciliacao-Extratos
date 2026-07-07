@@ -5512,7 +5512,11 @@ def _c70_processar(capa_bytes, capa_name, sk_bytes, sk_name):
     sk = carregar_movimento(_n(sk_bytes, sk_name))
     ult = int(pd.to_numeric(capa["numero"], errors="coerce").max() or 0)
     res = atrelar(sk, capa, ultimo_numero=ult)
-    return res.detalhado, dict(res.kpis), int(res.proximo_numero), ult
+    # acumulado da Capa inteira (conta 70): receita, despesa e diferença
+    _rd = capa["receita_despesa"].astype(str).str.upper()
+    acum_rec = float(capa[_rd.str.contains("RECEITA", na=False)]["valor"].abs().sum())
+    acum_desp = float(capa[_rd.str.contains("DESPESA", na=False)]["valor"].abs().sum())
+    return res.detalhado, dict(res.kpis), int(res.proximo_numero), ult, acum_rec, acum_desp
 
 
 @st.cache_data(show_spinner=False)
@@ -5560,7 +5564,7 @@ def _render_conta70_casamento_numeracao():
 
     # ---- parte pesada em cache: instantâneo nos cliques seguintes ----
     try:
-        d, k, prox, ultimo = _c70_processar(up_capa.getvalue(), up_capa.name, up_sk.getvalue(), up_sk.name)
+        d, k, prox, ultimo, acum_rec, acum_desp = _c70_processar(up_capa.getvalue(), up_capa.name, up_sk.getvalue(), up_sk.name)
         d = d.copy()
     except Exception as e:
         st.error(f"Não consegui ler um dos arquivos: {e}")
@@ -5569,23 +5573,21 @@ def _render_conta70_casamento_numeracao():
     pend = d[d["situacao"].isin(["Aguardando baixa", "A conferir"])]
     esteira = diagnosticar(pend)
     n_ident = k["ja_identificado"] + k["herdado"]
+    acum_dif = acum_rec - acum_desp
 
-    # receitas / despesas / líquido parado (o número que importa)
-    _rd = pend["receita_despesa"].astype(str).str.upper()
-    receitas = float(pend[_rd.str.contains("RECEITA", na=False)]["valor"].abs().sum())
-    despesas = float(pend[_rd.str.contains("DESPESA", na=False)]["valor"].abs().sum())
-    liquido = receitas - despesas
-
+    # cards de progresso do período
     render_cards([
         card_kpi("Identificado", fmt_int(n_ident), "já com número na capa", classe="destaque-verde" if n_ident > 0 else ""),
         card_kpi("Atrelado agora", fmt_int(k["numerado_agora"]), "números novos", classe="destaque-amarelo" if k["numerado_agora"] > 0 else ""),
         card_kpi("Na esteira", fmt_int(len(pend)), "abertos a resolver"),
         card_kpi("Último número usado", fmt_int(ultimo), "na capa"),
     ])
-    st.markdown(
-        f"**Receitas em aberto:** {_money(receitas)} &nbsp;·&nbsp; **Despesas em aberto:** {_money(despesas)} "
-        f"&nbsp;·&nbsp; **Saldo parado na Conta 70:** {_money(liquido)}"
-    )
+    # cards do acumulado da Capa inteira (conta 70)
+    render_cards([
+        card_kpi("Receita acumulada", _money(acum_rec), "toda a Capa · Conta 70", classe="destaque-verde"),
+        card_kpi("Despesa acumulada", _money(acum_desp), "toda a Capa · Conta 70", classe="destaque-vermelho"),
+        card_kpi("Diferença acumulada", _money(acum_dif), "receita − despesa"),
+    ])
 
     numeros_confirmados = {}   # índice original em d -> número atribuído
     seq = prox
