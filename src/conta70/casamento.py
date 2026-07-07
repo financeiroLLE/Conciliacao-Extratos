@@ -482,6 +482,7 @@ def sugerir_atrelamentos_cnpj(entradas_abertas: pd.DataFrame, faturamento: pd.Da
         linhas.append({
             "idx": r.name,
             "cnpj": r["cnpj"], "nome": nota.get("nome", ""), "nota": nota.get("nota", ""),
+            "receita_despesa": r.get("receita_despesa", ""),
             "valor_recebido": alvo, "valor_nota": pd.to_numeric(nota.get("valor"), errors="coerce"),
             "valor_fecha": (not fecha.empty), "historico": r["historico"],
             "n_candidatos": len(cand),
