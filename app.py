@@ -5644,7 +5644,7 @@ def _render_conta70_casamento_numeracao():
         st.caption("Esteira: nenhuma pendência aberta no momento. 🎉")
     else:
         contagem = est["diagnostico"].value_counts()
-        chips = " &nbsp;·&nbsp; ".join(f"**{nome}:** {qtd}" for nome, qtd in contagem.items())
+        chips = " &nbsp;·&nbsp; ".join(f"<b>{nome}:</b> {qtd}" for nome, qtd in contagem.items())
         st.markdown("**Esteira — pendências abertas.** Valor negativo = despesa (saída); positivo = receita (entrada).")
         st.markdown(f"<div style='color:#9fb3d6;font-size:13px;margin:2px 0 8px'>{chips}</div>", unsafe_allow_html=True)
         fc1, fc2, fc3, fc4 = st.columns([1.2, 1.5, 1.2, 2.0])
