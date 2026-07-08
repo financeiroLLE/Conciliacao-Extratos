@@ -2653,95 +2653,91 @@ def pagina_dashboard():
         cor = "#7ee0a6" if bom else "#ff9a9a"
         return f"<span style='color:{cor}'>{'▲' if subiu else '▼'}</span>"
 
-    # ---- 1 · veredito + 7 · cobertura ----
+    # ================= PAINEL (Opção 2 — duas colunas) =================
+    # veredito
     if bate:
-        _bg, _fg, _txt, _sub = "#123f2e", "#a8f0c8", "✓ Bate com o banco", "Sankhya × Banco · diferença R$ 0,00"
+        _hero_grad, _hero_fg, _hero_txt, _hero_sub = "linear-gradient(135deg,#124a34,#0e3a29)", "#b6f5cf", "✓ Bate com o banco", "Sankhya × Banco · diferença R$ 0,00"
     else:
-        _bg, _fg, _txt, _sub = "#3a1717", "#ff9a9a", "✗ Não bate com o banco", f"diferença Sankhya × Banco · R$ {_brl(div)}"
+        _hero_grad, _hero_fg, _hero_txt, _hero_sub = "linear-gradient(135deg,#4a1a1a,#3a1414)", "#ffc2c2", "✗ Não bate com o banco", f"diferença Sankhya × Banco · R$ {_brl(div)}"
     _cob_cor = "#7ee0a6" if n_contas >= TOTAL_CONTAS_GRUPO else "#FAC318"
-    _cob_sub = "todas conciliadas" if n_contas >= TOTAL_CONTAS_GRUPO else f"faltam {TOTAL_CONTAS_GRUPO - n_contas} contas"
-    st.markdown(
-        f"<div style='background:{_bg};border-radius:12px;padding:16px 22px;margin-bottom:12px;"
-        f"display:flex;justify-content:space-between;align-items:center'>"
-        f"<div><div style='font-size:22px;font-weight:700;color:{_fg}'>{_txt}</div>"
-        f"<div style='font-size:12px;color:{_fg};margin-top:2px'>{_sub}</div></div>"
-        f"<div style='text-align:right;border-left:1px solid #ffffff22;padding-left:20px'>"
-        f"<div style='font-size:10px;color:#9fb3d6'>COBERTURA</div>"
-        f"<div style='font-size:22px;font-weight:700;color:{_cob_cor}'>{n_contas} de {TOTAL_CONTAS_GRUPO}</div>"
-        f"<div style='font-size:10px;color:{_cob_cor}'>{_cob_sub}</div></div></div>",
-        unsafe_allow_html=True,
-    )
+    _cob_sub = "· todas conciliadas" if n_contas >= TOTAL_CONTAS_GRUPO else f"· faltam {TOTAL_CONTAS_GRUPO - n_contas}"
 
-    # ---- 2 · saldo (sempre da conta rodada) ----
+    # saldo (da conta rodada)
     if tem_saldo:
-        fech = (f"Saldo inicial <b style='color:#fff'>{_brl(saldo_ini)}</b> + receitas "
-                f"<b style='color:#7ee0a6'>{_brl(rec_b)}</b> − despesas <b style='color:#ff9a9a'>{_brl(desp_b)}</b> "
-                f"= saldo final <b style='color:#fff'>{_brl(saldo_fim)}</b> <span style='color:#7ee0a6;font-weight:600'>= extrato ✓</span>")
+        _saldo_inner = (
+            f"<div style='display:flex;justify-content:space-between;font-size:13px;color:#cdd9f2;padding:5px 0'><span>Saldo inicial</span><b style='color:#fff'>{_brl(saldo_ini)}</b></div>"
+            f"<div style='display:flex;justify-content:space-between;font-size:13px;color:#cdd9f2;padding:5px 0'><span>+ Receitas</span><b style='color:#7ee0a6'>{_brl(rec_b)}</b></div>"
+            f"<div style='display:flex;justify-content:space-between;font-size:13px;color:#cdd9f2;padding:5px 0;border-bottom:1px solid #163062;padding-bottom:10px'><span>− Despesas</span><b style='color:#ff9a9a'>{_brl(desp_b)}</b></div>"
+            f"<div style='display:flex;justify-content:space-between;align-items:center;margin-top:10px'><span style='font-size:13px;font-weight:700;color:#fff'>= Saldo final</span><span style='font-size:22px;font-weight:800;color:#fff'>{_brl(saldo_fim)} <span style='font-size:11px;color:#7ee0a6'>= extrato ✓</span></span></div>"
+        )
     else:
-        fech = "este extrato não traz linha de saldo — o saldo aparece quando o extrato da conta rodada tiver saldo inicial/final."
-    st.markdown(
-        f"<div style='background:#0b2560;border-radius:10px;padding:13px 18px;margin-bottom:12px'>"
-        f"<div style='font-size:10px;letter-spacing:.4px;color:#9fb3d6;margin-bottom:5px'>SALDO DA CONTA RODADA</div>"
-        f"<div style='font-size:12px;color:#cdd9f2'>{fech}</div></div>",
-        unsafe_allow_html=True,
-    )
+        _saldo_inner = "<div style='font-size:12px;color:#9fb3d6;padding:10px 0'>este extrato não traz linha de saldo — o saldo aparece quando o extrato da conta rodada tiver saldo inicial/final.</div>"
 
-    # ---- 3 · movimentação ----
-    render_cards([
-        card_kpi("Receitas", fmt_brl(rec_b), "no período", classe="destaque-verde"),
-        card_kpi("Despesas", fmt_brl(desp_b), "no período", classe="destaque-vermelho"),
-        card_kpi("Líquido do mês", fmt_brl(liq), f"investimentos {_brl(inv_net)}"),
-    ])
-
-    # ---- 4 · divergências + 6 · investimentos (tiras) ----
-    _dv_cor = "#7ee0a6" if qtd_div == 0 else "#ff9a9a"
-    st.markdown(
-        f"<div style='display:grid;grid-template-columns:1fr 1fr;gap:12px;margin:6px 0 12px'>"
-        f"<div style='background:#0b2560;border-left:3px solid {_dv_cor};border-radius:10px;padding:12px 16px;"
-        f"display:flex;justify-content:space-between;align-items:center'>"
-        f"<span style='font-size:12px;color:#9fb3d6'>Divergências (Sankhya × Banco)</span>"
-        f"<span style='font-size:16px;font-weight:700;color:{_dv_cor}'>{qtd_div} · R$ {_brl(kpis.get('divergencia_sankhya_banco',0))}</span></div>"
-        f"<div style='background:#0b2560;border-left:3px solid #FAC318;border-radius:10px;padding:12px 16px;"
-        f"display:flex;justify-content:space-between;align-items:center'>"
-        f"<span style='font-size:12px;color:#9fb3d6'>Investimentos (aplic × resgate)</span>"
-        f"<span style='font-size:16px;font-weight:700;color:#FAC318'>R$ {_brl(inv_net)}</span></div></div>",
-        unsafe_allow_html=True,
-    )
-
-    # ---- 5 · Conta 70 — TIRA FINA ----
+    # conta 70
     if c70:
-        ag = c70.get("aging", {})
-        maior = ""
-        if c70.get("maior_val") is not None:
-            maior = f" · maior R$ {_brl(abs(c70['maior_val']))} ({c70.get('maior_dias', 0)}d)"
-        st.markdown(
-            f"<div style='background:#0b2560;border-left:3px solid #ff9a9a;border-radius:10px;padding:11px 16px;margin-bottom:12px;"
-            f"display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px'>"
-            f"<span style='font-size:12px;color:#9fb3d6'>Parado na Conta 70 &nbsp;<b style='color:#ff9a9a;font-size:15px'>R$ {_brl(c70.get('parado',0))}</b> "
-            f"<span style='color:#9fb3d6'>· {c70.get('itens',0)} itens{maior}</span></span>"
-            f"<span style='font-size:11px;color:#9fb3d6'>≤30d <b style='color:#7ee0a6'>{ag.get('ate30',0)}</b> · "
-            f"31–60 <b style='color:#FAC318'>{ag.get('d31_60',0)}</b> · 61–90 <b>{ag.get('d61_90',0)}</b> · +90 <b style='color:#ff9a9a'>{ag.get('mais90',0)}</b></span></div>",
-            unsafe_allow_html=True,
+        _ag = c70.get("aging", {})
+        _maior = f" · maior R$ {_brl(abs(c70['maior_val']))} ({c70.get('maior_dias', 0)}d)" if c70.get("maior_val") is not None else ""
+        _c70_card = (
+            "<div style='background:#0b2560;border:1px solid #163062;border-left:3px solid #ff9a9a;border-radius:14px;padding:16px 18px'>"
+            f"<div style='display:flex;justify-content:space-between;align-items:baseline'><span style='font-size:10px;letter-spacing:.4px;color:#9fb3d6'>PARADO NA CONTA 70</span><b style='font-size:19px;color:#ff9a9a'>R$ {_brl(c70.get('parado', 0))}</b></div>"
+            f"<div style='font-size:11px;color:#6f88b8;margin:4px 0 10px'>{c70.get('itens', 0)} itens{_maior}</div>"
+            "<div style='display:flex;justify-content:space-between;border-top:1px solid #163062;padding-top:9px'>"
+            f"<div style='text-align:center'><div style='font-size:15px;font-weight:800;color:#7ee0a6'>{_ag.get('ate30',0)}</div><div style='font-size:9px;color:#9fb3d6'>≤30d</div></div>"
+            f"<div style='text-align:center'><div style='font-size:15px;font-weight:800;color:#FAC318'>{_ag.get('d31_60',0)}</div><div style='font-size:9px;color:#9fb3d6'>31–60</div></div>"
+            f"<div style='text-align:center'><div style='font-size:15px;font-weight:800;color:#cdd9f2'>{_ag.get('d61_90',0)}</div><div style='font-size:9px;color:#9fb3d6'>61–90</div></div>"
+            f"<div style='text-align:center'><div style='font-size:15px;font-weight:800;color:#ff9a9a'>{_ag.get('mais90',0)}</div><div style='font-size:9px;color:#9fb3d6'>+90d</div></div>"
+            "</div></div>"
         )
     else:
-        st.markdown(
-            "<div style='background:#0b2560;border-left:3px solid #6f88b8;border-radius:10px;padding:11px 16px;margin-bottom:12px;"
-            "font-size:12px;color:#9fb3d6'>Parado na Conta 70 · abra a aba <b style='color:#fff'>Atrelamento e Numeração — Conta 70</b> e processe para ver aqui.</div>",
-            unsafe_allow_html=True,
-        )
+        _c70_card = ("<div style='background:#0b2560;border:1px solid #163062;border-left:3px solid #6f88b8;border-radius:14px;padding:16px 18px;font-size:12px;color:#9fb3d6'>"
+                     "<b style='color:#cdd9f2'>Parado na Conta 70</b><br>abra a aba <b style='color:#fff'>Atrelamento e Numeração — Conta 70</b> e processe para ver aqui.</div>")
 
-    # ---- 8 · tendência ----
+    # tendência
     if prev is not None:
-        t_pct = _seta(atual["% Conciliado"], prev.get("% Conciliado"), bom_subir=True)
-        t_div = _seta(atual["Qtd Divergências"], prev.get("Qtd Divergências"), bom_subir=False)
-        t_c70 = _seta(abs(atual["Conta 70 (R$)"] or 0), abs(pd.to_numeric(prev.get("Conta 70 (R$)"), errors="coerce") or 0), bom_subir=False)
-        st.markdown(
-            f"<div style='font-size:12px;color:#9fb3d6;padding:2px 4px;margin-bottom:6px'>"
-            f"Tendência vs {prev.get('Mês','mês anterior')}: % conciliado {t_pct} · divergências {t_div} · Conta 70 {t_c70}</div>",
-            unsafe_allow_html=True,
-        )
+        _t_pct = _seta(atual["% Conciliado"], prev.get("% Conciliado"), bom_subir=True)
+        _t_div = _seta(atual["Qtd Divergências"], prev.get("Qtd Divergências"), bom_subir=False)
+        _t_c70 = _seta(abs(atual["Conta 70 (R$)"] or 0), abs(pd.to_numeric(prev.get("Conta 70 (R$)"), errors="coerce") or 0), bom_subir=False)
+        _trend_label = f"TENDÊNCIA vs {prev.get('Mês', 'mês anterior')}"
+        _trend_html = f"<span style='font-size:13px;color:#cdd9f2'>% conc. <b>{_t_pct}</b> &nbsp; diverg. <b>{_t_div}</b> &nbsp; Conta 70 <b>{_t_c70}</b></span>"
     else:
-        st.caption("Tendência vs mês anterior: suba o histórico de fechamentos abaixo para ativar (▲/▼).")
+        _trend_label = "TENDÊNCIA vs mês anterior"
+        _trend_html = "<span style='font-size:11px;color:#6f88b8'>suba o histórico abaixo para ativar ▲/▼</span>"
+
+    _dv_cor = "#7ee0a6" if qtd_div == 0 else "#ff9a9a"
+
+    st.markdown(
+        "<div style='max-width:1180px;margin:0 auto'>"
+        "<div style='display:grid;grid-template-columns:1.15fr 1fr;gap:16px'>"
+        # ---- coluna esquerda: provas ----
+        "<div style='display:flex;flex-direction:column;gap:16px'>"
+        f"<div style='background:{_hero_grad};border-radius:16px;padding:24px;flex:1'>"
+        "<div style='font-size:11px;letter-spacing:.5px;color:#6ee3a0;margin-bottom:4px'>FECHAMENTO DO MÊS</div>"
+        f"<div style='font-size:27px;font-weight:800;color:{_hero_fg};line-height:1.1'>{_hero_txt}</div>"
+        f"<div style='font-size:13px;color:{_hero_fg};margin:6px 0 16px'>{_hero_sub}</div>"
+        "<div style='display:flex;justify-content:space-between;align-items:center;border-top:1px solid #ffffff22;padding-top:12px'>"
+        "<span style='font-size:12px;color:#cdd9f2'>Contas conciliadas</span>"
+        f"<span style='font-size:20px;font-weight:800;color:{_cob_cor}'>{n_contas} <span style='font-size:13px'>de {TOTAL_CONTAS_GRUPO}</span> <span style='font-size:11px'>{_cob_sub}</span></span></div></div>"
+        "<div style='background:#0b2560;border:1px solid #1b3a6e;border-radius:16px;padding:22px'>"
+        "<div style='font-size:11px;letter-spacing:.5px;color:#9fb3d6;margin-bottom:14px'>SALDO DA CONTA RODADA</div>"
+        f"{_saldo_inner}</div>"
+        "</div>"
+        # ---- coluna direita: o resto ----
+        "<div style='display:flex;flex-direction:column;gap:12px'>"
+        "<div style='background:#0b2560;border:1px solid #163062;border-radius:14px;padding:16px 18px'>"
+        "<div style='font-size:10px;letter-spacing:.4px;color:#9fb3d6;margin-bottom:10px'>MOVIMENTAÇÃO DO MÊS</div>"
+        f"<div style='display:flex;justify-content:space-between'><span style='font-size:12px;color:#9fb3d6'>Receitas</span><b style='font-size:16px;color:#7ee0a6'>{_brl(rec_b)}</b></div>"
+        f"<div style='display:flex;justify-content:space-between;margin-top:4px'><span style='font-size:12px;color:#9fb3d6'>Despesas</span><b style='font-size:16px;color:#ff9a9a'>{_brl(desp_b)}</b></div>"
+        f"<div style='display:flex;justify-content:space-between;margin-top:4px;border-top:1px solid #163062;padding-top:6px'><span style='font-size:12px;color:#9fb3d6'>Líquido <span style='color:#FAC318'>(foi p/ invest.)</span></span><b style='font-size:16px;color:#fff'>{_brl(liq)}</b></div></div>"
+        "<div style='display:grid;grid-template-columns:1fr 1fr;gap:12px'>"
+        f"<div style='background:#0b2560;border:1px solid #163062;border-top:3px solid {_dv_cor};border-radius:14px;padding:15px'><div style='font-size:10px;color:#9fb3d6'>DIVERGÊNCIAS</div><div style='font-size:20px;font-weight:800;color:{_dv_cor};margin-top:6px'>{qtd_div}</div><div style='font-size:10px;color:#6f88b8'>R$ {_brl(kpis.get('divergencia_sankhya_banco',0))}</div></div>"
+        f"<div style='background:#0b2560;border:1px solid #163062;border-top:3px solid #FAC318;border-radius:14px;padding:15px'><div style='font-size:10px;color:#9fb3d6'>INVESTIMENTOS</div><div style='font-size:20px;font-weight:800;color:#FAC318;margin-top:6px'>{_brl(inv_net)}</div><div style='font-size:10px;color:#6f88b8'>aplic × resgate</div></div>"
+        "</div>"
+        f"{_c70_card}"
+        f"<div style='background:#0b2560;border:1px solid #163062;border-radius:14px;padding:14px 18px;display:flex;justify-content:space-between;align-items:center'><span style='font-size:11px;color:#9fb3d6'>{_trend_label}</span>{_trend_html}</div>"
+        "</div>"
+        "</div></div>",
+        unsafe_allow_html=True,
+    )
 
     # ---- histórico de fechamentos (para a tendência) ----
     with st.expander("Tendência — histórico de fechamentos", expanded=False):
