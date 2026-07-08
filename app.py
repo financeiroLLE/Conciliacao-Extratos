@@ -5960,9 +5960,39 @@ def _render_conta70_casamento_numeracao():
                 capa_out, preenchidos, n_novos = gerar_capa_acumulada(
                     _io.BytesIO(up_capa.getvalue()), d, ultimo, acoes=acoes,
                 )
+
+                # normaliza a coluna de data (mistura datetime + série do Excel)
+                _cdt = next((c for c in capa_out.columns if str(c).strip().lower() in ("dt. lançamento", "dt. lancamento", "data")), None)
+                if _cdt is not None:
+                    def _fix_data(v):
+                        try:
+                            if hasattr(v, "year"):
+                                return pd.Timestamp(v)
+                            n = pd.to_numeric(v, errors="coerce")
+                            if pd.notna(n) and 10000 < float(n) < 90000:  # série do Excel
+                                return pd.Timestamp("1899-12-30") + pd.Timedelta(days=int(n))
+                            return pd.to_datetime(v, errors="coerce", dayfirst=True)
+                        except Exception:
+                            return pd.NaT
+                    capa_out[_cdt] = capa_out[_cdt].map(_fix_data)
+
+                _cval = next((c for c in capa_out.columns if str(c).strip().lower() in ("vlr. lançamento", "vlr. lancamento", "valor", "vlr lancamento")), None)
+
                 buf = _io.BytesIO()
                 with pd.ExcelWriter(buf, engine="openpyxl") as w:
                     capa_out.to_excel(w, sheet_name="Capa Conta 70", index=False)
+                    from openpyxl.utils import get_column_letter as _gcl
+                    ws = w.sheets["Capa Conta 70"]
+                    cols = list(capa_out.columns)
+                    nrows = len(capa_out)
+                    if _cval is not None:
+                        _lv = _gcl(cols.index(_cval) + 1)
+                        for row in range(2, nrows + 2):
+                            ws[f"{_lv}{row}"].number_format = "#,##0.00"
+                    if _cdt is not None:
+                        _ld = _gcl(cols.index(_cdt) + 1)
+                        for row in range(2, nrows + 2):
+                            ws[f"{_ld}{row}"].number_format = "DD/MM/YYYY"
             st.session_state["c70_capa_bytes"] = buf.getvalue()
             st.session_state["c70_capa_info"] = (len(capa_out), preenchidos, n_novos - preenchidos)
         except Exception as e:
