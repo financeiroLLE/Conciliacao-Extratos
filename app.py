@@ -5883,8 +5883,13 @@ def _render_conta70_casamento_numeracao():
         # UM número por operação: mesma identidade + mesmo valor absoluto
         # (a receita e a despesa do mesmo item recebem o MESMO número)
         conf = {}
+        conf_nota = {}
         grupos = {}
         s = prox
+        sug_notas = {}
+        if sug is not None:
+            for _p in range(len(sug)):
+                sug_notas[int(sug.iloc[_p]["idx"])] = str(sug.iloc[_p].get("nota", "")).strip()
         for idx in selecionados:
             if idx not in d.index:
                 continue
@@ -5895,8 +5900,10 @@ def _render_conta70_casamento_numeracao():
                 grupos[chave] = s
                 s += 1
             conf[idx] = grupos[chave]
+            conf_nota[idx] = sug_notas.get(idx)  # nota se veio dos sugeridos; None se veio da esteira
 
         st.session_state["c70_confirmados_num"] = conf
+        st.session_state["c70_confirmados_nota"] = conf_nota
         st.session_state.pop("c70_capa_bytes", None)
         n_ops = len(grupos)
         if conf:
@@ -5926,14 +5933,32 @@ def _render_conta70_casamento_numeracao():
             "Funciona mesmo sem confirmar nada (sai só com os automáticos)."
         )
     if st.button("Gerar capa atualizada", key="c70_gerar", type="primary"):
+        conf_nota = st.session_state.get("c70_confirmados_nota", {})
         for idx, num in confirmados_persist.items():
             if idx in d.index:
                 d.at[idx, "numero_final"] = num
                 d.at[idx, "situacao"] = "Atrelado (confirmado)"
+        # coluna I — o que fazer no Sankhya, por número
+        acoes = {}
+        _novos = pd.to_numeric(d["numero_final"], errors="coerce") > ultimo
+        for idx in d.index[_novos]:
+            try:
+                num = int(d.at[idx, "numero_final"])
+            except Exception:
+                continue
+            sit = str(d.at[idx, "situacao"])
+            if sit == "Atrelado (confirmado)":
+                nota = (conf_nota or {}).get(idx)
+                if nota and str(nota).lower() not in ("", "nan", "none"):
+                    acoes[num] = f"Baixar NF {nota} no Sankhya"
+                else:
+                    acoes[num] = "Atrelado manualmente — conferir baixa"
+            elif sit == "Numerado agora":
+                acoes.setdefault(num, "Baixa já lançada no Sankhya")
         try:
             with st.spinner("Gerando a capa acumulada… isso leva alguns segundos (arquivo grande)."):
                 capa_out, preenchidos, n_novos = gerar_capa_acumulada(
-                    _io.BytesIO(up_capa.getvalue()), d, ultimo,
+                    _io.BytesIO(up_capa.getvalue()), d, ultimo, acoes=acoes,
                 )
                 buf = _io.BytesIO()
                 with pd.ExcelWriter(buf, engine="openpyxl") as w:
