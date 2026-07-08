@@ -5744,19 +5744,24 @@ def _render_conta70_casamento_numeracao():
             st.info("Nada marcado — nenhum atrelamento confirmado.")
 
     confirmados_persist = st.session_state.get("c70_confirmados_num", {})
-    if confirmados_persist:
-        st.caption(f"✔️ {len(confirmados_persist)} atrelamento(s) confirmado(s), prontos para entrar na capa.")
-        if st.button("Limpar confirmados", key="c70_limpar"):
-            st.session_state.pop("c70_confirmados_num", None)
-            st.session_state.pop("c70_capa_bytes", None)
-            st.rerun()
 
     # ---- Gerar capa atualizada — INDEPENDENTE da seleção ----
     st.markdown("##### ⬇️ Gerar capa atualizada")
-    st.caption(
-        "Gera a **capa completa e acumulada** com os números **automáticos** já aplicados, mais os "
-        "atrelamentos que você **confirmou** acima. Funciona mesmo sem confirmar nada (sai só com os automáticos)."
-    )
+    if confirmados_persist:
+        gc1, gc2 = st.columns([3, 1])
+        gc1.caption(
+            f"Gera a **capa completa e acumulada** com os números **automáticos** + os "
+            f"**{len(confirmados_persist)} que você confirmou**."
+        )
+        if gc2.button("Limpar confirmados", key="c70_limpar"):
+            st.session_state.pop("c70_confirmados_num", None)
+            st.session_state.pop("c70_capa_bytes", None)
+            st.rerun()
+    else:
+        st.caption(
+            "Gera a **capa completa e acumulada** com os números **automáticos** já aplicados. "
+            "Funciona mesmo sem confirmar nada (sai só com os automáticos)."
+        )
     if st.button("Gerar capa atualizada", key="c70_gerar", type="primary"):
         for idx, num in confirmados_persist.items():
             if idx in d.index:
