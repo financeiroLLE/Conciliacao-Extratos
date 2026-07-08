@@ -2553,64 +2553,166 @@ def pagina_dashboard():
         return
 
     kpis = resultado.kpis_globais()
+    from datetime import datetime as _dt
 
-    section_title("INDICADORES EXECUTIVOS")
+    def _brl(v):
+        try:
+            v = float(v)
+        except Exception:
+            return "—"
+        s = f"{abs(v):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+        return ("-" if v < 0 else "") + s
 
-    # Linha 1: principais
-    sub_banco = _card_total_com_rec_desp(kpis["receitas_banco"], kpis["despesas_banco"])
-    sub_sankhya = _card_total_com_rec_desp(kpis["receitas_sistema"], kpis["despesas_sistema"])
-    cards1 = [
-        card_kpi_html("Total Movimentado no Banco", fmt_brl(kpis["total_movimentado_banco"]),
-                      sub_banco),
-        card_kpi_html("Total Extrato Sankhya", fmt_brl(kpis["total_extrato_sistema"]),
-                      sub_sankhya),
-        _card_investimentos(resultado),
-        card_kpi("Percentual Conciliado", fmt_pct(kpis["percentual_conciliado"]),
-                 classe="destaque-amarelo"),
-    ]
-    render_cards(cards1)
+    # ---- dados reais ----
+    div = float(kpis.get("divergencia_sankhya_banco", 0.0))
+    bate = abs(div) < 0.005
+    rec_b = float(kpis.get("receitas_banco", 0.0))
+    desp_b = float(kpis.get("despesas_banco", 0.0))
+    liq = rec_b - desp_b
+    pct = float(kpis.get("percentual_conciliado", 0.0))
+    n_contas = len(resultado.contas_processadas)
 
-    # Linha 2: Falta Conciliar vertical + Divergência + Qtd + Contas
-    sub_falta_conciliar = _card_falta_conciliar_vertical(
-        kpis["falta_conciliar_receitas"],
-        kpis["falta_conciliar_despesas"],
+    # saldo inicial/final (do extrato do banco), agregando as contas que têm saldo
+    saldo_ini = saldo_fim = 0.0
+    tem_saldo = False
+    for _c in resultado.contas_processadas:
+        try:
+            _info = resultado.saldo_final_da_conta(_c)
+        except Exception:
+            _info = None
+        if _info and _info.get("tem_saldo_no_extrato"):
+            if _info.get("saldo_inicial") is not None:
+                saldo_ini += float(_info["saldo_inicial"])
+            if _info.get("saldo_final") is not None:
+                saldo_fim += float(_info["saldo_final"])
+            tem_saldo = True
+
+    # investimentos (líquido)
+    inv_df = getattr(resultado, "aplicacoes_resgates", None)
+    inv_net = float(inv_df["valor"].sum()) if (inv_df is not None and not inv_df.empty and "valor" in inv_df.columns) else 0.0
+
+    # período de referência
+    per_txt = "—"
+    try:
+        _d = pd.to_datetime(resultado.banco_completo["data"], errors="coerce").dropna()
+        if not _d.empty:
+            per_txt = f"{_d.min().strftime('%d/%m/%Y')} a {_d.max().strftime('%d/%m/%Y')}"
+    except Exception:
+        pass
+    gerado = _dt.now().strftime("%d/%m %H:%M")
+
+    # ---- cabeçalho ----
+    st.markdown(
+        f"<div style='display:flex;justify-content:space-between;align-items:baseline;margin-bottom:14px'>"
+        f"<div style='font-size:14px;font-weight:600;color:#fff'>Visão executiva "
+        f"<span style='font-size:11px;font-weight:400;color:#9fb3d6'>· referência {per_txt}</span></div>"
+        f"<div style='font-size:11px;color:#6f88b8'>painel gerado em {gerado}</div></div>",
+        unsafe_allow_html=True,
     )
 
-    cards2 = [
-        card_kpi_html("Falta Conciliar", fmt_brl(kpis["falta_conciliar"]),
-                      sub_falta_conciliar, classe="destaque-vermelho"),
-        card_kpi_html("Divergência (Sankhya × Banco)",
-                      fmt_brl(kpis["divergencia_sankhya_banco"]),
-                      _card_falta_conciliar_vertical(
-                          kpis["divergencia_sankhya_banco_receitas"],
-                          kpis["divergencia_sankhya_banco_despesas"],
-                      ),
-                      classe="destaque-vermelho"),
-        card_kpi("Qtd Divergências", fmt_int(kpis["qtd_divergencia_sankhya_banco"]),
-                 "lançamentos do Sankhya sem par no banco",
-                 classe="destaque-amarelo" if kpis["qtd_divergencia_sankhya_banco"] > 0 else ""),
-        card_kpi("Contas processadas", fmt_int(len(resultado.contas_processadas))),
-    ]
-    render_cards(cards2)
+    # ---- 1 · faixa de veredito (cockpit) ----
+    if bate:
+        _sel_bg, _sel_fg, _sel_txt, _sel_sub = "#123f2e", "#a8f0c8", "✓ Bate com o banco", f"Sankhya × Banco zerado · R$ {_brl(0)}"
+    else:
+        _sel_bg, _sel_fg, _sel_txt, _sel_sub = "#3a1717", "#ff9a9a", "✗ Não bate com o banco", f"diferença Sankhya × Banco · R$ {_brl(div)}"
+    _saldo_fim_txt = _brl(saldo_fim) if tem_saldo else "a calcular"
+    st.markdown(
+        f"<div style='background:{_sel_bg};border-radius:12px;padding:18px 22px;margin-bottom:12px;"
+        f"display:grid;grid-template-columns:1.6fr 1fr 1fr;gap:18px;align-items:center'>"
+        f"<div><div style='font-size:20px;font-weight:700;color:{_sel_fg};line-height:1.2'>{_sel_txt}</div>"
+        f"<div style='font-size:12px;color:{_sel_fg};margin-top:3px'>{_sel_sub}</div></div>"
+        f"<div style='border-left:1px solid #ffffff22;padding-left:16px'><div style='font-size:10px;color:#9fb3d6'>SALDO FINAL (BANCO)</div>"
+        f"<div style='font-size:20px;font-weight:700;color:#fff;margin-top:3px'>{_saldo_fim_txt}</div></div>"
+        f"<div style='border-left:1px solid #ffffff22;padding-left:16px'><div style='font-size:10px;color:#9fb3d6'>CONTAS PROCESSADAS</div>"
+        f"<div style='font-size:20px;font-weight:700;color:#FAC318;margin-top:3px'>{n_contas}</div></div>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
 
-    # Linha 3: contagens
-    cards3 = [
-        card_kpi("Registros Processados", fmt_int(kpis["qtd_registros_banco"] + kpis["qtd_registros_sistema"])),
-        card_kpi("Conciliados", fmt_int(kpis["qtd_conciliados"]), classe="destaque-verde"),
-        card_kpi("Movimentações Banco", fmt_int(kpis["qtd_movimentacoes_banco"])),
-        card_kpi("Movimentações Sistema", fmt_int(kpis["qtd_movimentacoes_sistema"])),
-    ]
-    render_cards(cards3)
+    # linha do fechamento (saldo inicial + receitas - despesas = saldo final)
+    if tem_saldo:
+        fech = (f"<b style='color:#6f88b8;font-size:10px;letter-spacing:.3px'>FECHAMENTO</b> "
+                f"Saldo inicial <b style='color:#fff'>{_brl(saldo_ini)}</b> + receitas "
+                f"<b style='color:#7ee0a6'>{_brl(rec_b)}</b> − despesas <b style='color:#ff9a9a'>{_brl(desp_b)}</b> "
+                f"= saldo final <b style='color:#fff'>{_brl(saldo_fim)}</b>")
+    else:
+        fech = ("<b style='color:#6f88b8;font-size:10px;letter-spacing:.3px'>FECHAMENTO</b> "
+                "o extrato desta conta não traz linha de saldo — o fechamento aparece quando o extrato tiver saldo inicial/final.")
+    st.markdown(
+        f"<div style='background:#0b2560;border-radius:8px;padding:11px 18px;margin-bottom:18px;font-size:12px;color:#cdd9f2'>{fech}</div>",
+        unsafe_allow_html=True,
+    )
 
-    st.divider()
+    # ---- 2 · quanto movimentou ----
+    render_cards([
+        card_kpi("Receitas", fmt_brl(rec_b), "no período", classe="destaque-verde"),
+        card_kpi("Despesas", fmt_brl(desp_b), "no período", classe="destaque-vermelho"),
+        card_kpi("Líquido do mês", fmt_brl(liq), f"investimentos {_brl(inv_net)}"),
+    ])
+    st.caption("Tendência vs mês anterior: disponível quando houver histórico salvo de fechamentos (a combinar).")
 
-    # v5.14: Seção "Exceções e Regras Aplicadas" removida.
-    # TOP 1722 e Estornos seguem funcionando; aparecem dentro do detalhamento da conta.
+    # ---- 3 · risco (Conta 70) ----
+    c70 = st.session_state.get("c70_dashboard")
+    if c70:
+        ag = c70.get("aging", {})
+        maior = ""
+        if c70.get("maior_val") is not None:
+            maior = f" · maior: R$ {_brl(abs(c70['maior_val']))} · há {c70.get('maior_dias', 0)} dias"
+        st.markdown(
+            f"<div style='background:#0b2560;border-left:4px solid #ff9a9a;border-radius:10px;padding:15px 18px;margin-bottom:14px'>"
+            f"<div style='font-size:10px;letter-spacing:.4px;color:#9fb3d6'>RISCO — PARADO NA CONTA 70</div>"
+            f"<div style='font-size:24px;font-weight:700;color:#ff9a9a;margin:5px 0 8px'>R$ {_brl(c70.get('parado', 0))} "
+            f"<span style='font-size:12px;color:#9fb3d6'>· {c70.get('itens', 0)} itens{maior}</span></div>"
+            f"<div style='display:grid;grid-template-columns:repeat(4,1fr);gap:8px;font-size:11px;border-top:1px solid #163062;padding-top:10px'>"
+            f"<div style='text-align:center'><div style='color:#7ee0a6;font-weight:700;font-size:15px'>{ag.get('ate30',0)}</div><div style='color:#9fb3d6'>até 30d</div></div>"
+            f"<div style='text-align:center'><div style='color:#FAC318;font-weight:700;font-size:15px'>{ag.get('d31_60',0)}</div><div style='color:#9fb3d6'>31–60d</div></div>"
+            f"<div style='text-align:center'><div style='color:#f0a35a;font-weight:700;font-size:15px'>{ag.get('d61_90',0)}</div><div style='color:#9fb3d6'>61–90d</div></div>"
+            f"<div style='text-align:center'><div style='color:#ff9a9a;font-weight:700;font-size:15px'>{ag.get('mais90',0)}</div><div style='color:#9fb3d6'>+90d</div></div>"
+            f"</div></div>",
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            "<div style='background:#0b2560;border-left:4px solid #6f88b8;border-radius:10px;padding:14px 18px;margin-bottom:14px;"
+            "font-size:12px;color:#9fb3d6'>RISCO — PARADO NA CONTA 70 · abra a aba <b style='color:#fff'>Atrelamento e Numeração — Conta 70</b> "
+            "e processe para o valor, o aging e o maior item parado aparecerem aqui.</div>",
+            unsafe_allow_html=True,
+        )
 
-    # v3.10: Dashboard é visão gerencial — cards das contas são só informativos.
-    # Drill-down (Ver detalhamento) só acontece na aba Conciliação.
-    section_title("CONTAS PROCESSADAS")
-    render_painel_bancos(resultado, mostrar_botao=False)
+    # ---- 4 · precisa de ação ----
+    qtd_div = int(kpis.get("qtd_divergencia_sankhya_banco", 0))
+    acoes = []
+    if not bate or qtd_div > 0:
+        acoes.append(("#ff9a9a", "#3a1717", f"{qtd_div} divergência(s) Sankhya × Banco", "GRAVE"))
+    if c70 and c70.get("aging", {}).get("mais90", 0) > 0:
+        acoes.append(("#FAC318", "#3a2e0b", f"{c70['aging']['mais90']} itens parados há +90 dias na Conta 70", "ATENÇÃO"))
+    if acoes:
+        st.markdown("<div style='font-size:10px;letter-spacing:.6px;color:#ff9a9a;font-weight:600;margin-bottom:8px'>PRECISA DE AÇÃO</div>", unsafe_allow_html=True)
+        for cor, bg, texto, tag in acoes:
+            st.markdown(
+                f"<div style='background:{bg};border-left:3px solid {cor};border-radius:6px;padding:11px 15px;margin-bottom:7px;"
+                f"display:flex;justify-content:space-between;align-items:center'>"
+                f"<span style='font-size:13px;color:#e8eefc'>{texto}</span>"
+                f"<span style='font-size:10px;color:{cor};font-weight:600'>{tag}</span></div>",
+                unsafe_allow_html=True,
+            )
+    else:
+        st.markdown(
+            "<div style='background:#123f2e;border-radius:6px;padding:11px 15px;margin-bottom:7px;font-size:13px;color:#a8f0c8'>"
+            "✓ Nada pendente de ação nas contas processadas.</div>",
+            unsafe_allow_html=True,
+        )
+
+    # ---- detalhe operacional (recolhido) ----
+    with st.expander("Detalhe operacional (conciliados, registros, movimentações, por conta)", expanded=False):
+        render_cards([
+            card_kpi("Conciliados", fmt_int(kpis["qtd_conciliados"]), classe="destaque-verde"),
+            card_kpi("Registros processados", fmt_int(kpis["qtd_registros_banco"] + kpis["qtd_registros_sistema"])),
+            card_kpi("Movimentações Banco", fmt_int(kpis["qtd_movimentacoes_banco"])),
+            card_kpi("Movimentações Sistema", fmt_int(kpis["qtd_movimentacoes_sistema"])),
+        ])
+        st.divider()
+        render_painel_bancos(resultado, mostrar_botao=False)
 
 
 # ============================================================
@@ -5593,6 +5695,30 @@ def _render_conta70_casamento_numeracao():
     esteira = diagnosticar(pend)
     n_ident = k["ja_identificado"] + k["herdado"]
     acum_dif = acum_rec - acum_desp
+
+    # publica um resumo pro Dashboard (só leitura; nunca chuta)
+    try:
+        _dias = pd.to_numeric(esteira["dias"], errors="coerce") if "dias" in esteira.columns else pd.Series(dtype=float)
+        _aging = {
+            "ate30": int((_dias <= 30).sum()),
+            "d31_60": int(((_dias > 30) & (_dias <= 60)).sum()),
+            "d61_90": int(((_dias > 60) & (_dias <= 90)).sum()),
+            "mais90": int((_dias > 90).sum()),
+        }
+        _maior_val = _maior_dias = None
+        if not esteira.empty:
+            _im = esteira["valor"].abs().idxmax()
+            _maior_val = float(esteira.loc[_im, "valor"])
+            _maior_dias = int(pd.to_numeric(pd.Series([esteira.loc[_im, "dias"]]), errors="coerce").fillna(0).iloc[0])
+        st.session_state["c70_dashboard"] = {
+            "parado": float(acum_dif),
+            "itens": int(len(pend)),
+            "aging": _aging,
+            "maior_val": _maior_val,
+            "maior_dias": _maior_dias,
+        }
+    except Exception:
+        pass
 
     # cards do acumulado da Capa inteira (conta 70) — em cima
     render_cards([
