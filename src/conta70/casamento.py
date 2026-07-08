@@ -503,15 +503,19 @@ def sugerir_atrelamentos_cnpj(entradas_abertas: pd.DataFrame, faturamento: pd.Da
     return pd.DataFrame(linhas)
 
 
-def gerar_capa_acumulada(capa_arquivo, detalhado, ultimo_numero: int, confirmados=None):
+def gerar_capa_acumulada(capa_arquivo, detalhado, ultimo_numero: int, confirmados=None, acoes=None):
     """Devolve a Capa COMPLETA (todas as linhas e colunas originais, com o sinal
     original — despesa negativa) e preenche a numeração SÓ nas linhas que o app
     identificou este período, quando há match único. Nunca sobrescreve número
     existente e nunca chuta (match ambíguo fica em branco).
 
+    `acoes` = {numero: texto} escreve, na coluna I ("O que fazer no Sankhya"),
+    a instrução de baixa para cada linha numerada.
+
     Retorna (df_capa_completa, n_preenchidos, n_novos_total).
     """
     confirmados = confirmados or {}
+    acoes = acoes or {}
     hdr = _detectar_header(capa_arquivo)
     if hasattr(capa_arquivo, "seek"):
         try:
@@ -556,6 +560,12 @@ def gerar_capa_acumulada(capa_arquivo, detalhado, ultimo_numero: int, confirmado
         raw[c_num] = pd.NA
         cols_orig = cols_orig + [c_num]
 
+    # coluna I — instrução de baixa (o que fazer no Sankhya)
+    c_acao = "O que fazer no Sankhya"
+    if c_acao not in raw.columns:
+        raw[c_acao] = ""
+        cols_orig = cols_orig + [c_acao]
+
     raw["_v"] = pd.to_numeric(raw[c_val], errors="coerce").abs().round(2) if c_val else 0.0
     raw["_d"] = raw[c_dt].map(_to_data) if c_dt else pd.NaT
     raw["_cur"] = pd.to_numeric(raw[c_num], errors="coerce")
@@ -576,6 +586,10 @@ def gerar_capa_acumulada(capa_arquivo, detalhado, ultimo_numero: int, confirmado
         if len(cand) == 1:
             raw.loc[cand.index[0], c_num] = num
             raw.loc[cand.index[0], "_cur"] = num
+            try:
+                raw.loc[cand.index[0], c_acao] = str(acoes.get(int(num), ""))
+            except Exception:
+                pass
             preenchidos += 1
 
     raw = raw.drop(columns=["_v", "_d", "_cur"])
