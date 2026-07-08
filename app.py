@@ -5556,11 +5556,21 @@ def _render_conta70_casamento_numeracao():
 
     section_title("ATRELAMENTO E NUMERAÇÃO — CONTA 70")
     st.markdown(
-        "Suba a **Capa** (consolidada, somente leitura), a **movimentação da Conta 70 do Sankhya** "
-        "e, quando tiver, as **notas emitidas não baixadas** (com CNPJ). O app atrela pela identidade "
-        "do histórico (CNPJ/CPF/dados bancários), numera em sequência e organiza o que está aberto "
-        "numa esteira com diagnóstico e ação. Sua capa original nunca é alterada."
+        "Suba a **Capa**, a **movimentação da Conta 70 do Sankhya** e (opcional) as "
+        "**notas com CNPJ**. O app atrela, numera em sequência e organiza o que está aberto na esteira."
     )
+    with st.expander("Como funciona / como conferir com o Sankhya"):
+        st.markdown(
+            "O app lê a **Capa** (consolidada, somente leitura) e a **movimentação da Conta 70 do "
+            "Sankhya**. Ele atrela cada lançamento pela **identidade do histórico** (CNPJ/CPF/dados "
+            "bancários), numera em sequência e organiza o que está aberto numa **esteira** com "
+            "diagnóstico e ação. Quando você sobe as **notas emitidas não baixadas** (com CNPJ), o app "
+            "sugere atrelamentos onde o CNPJ da nota bate com o recebimento.\n\n"
+            "**Para conferir com o Sankhya:** cada número (atrelamento) cobre os **dois lados** da "
+            "operação — a receita e a despesa do mesmo item recebem o **mesmo número**. A capa "
+            "atualizada sai completa/acumulada, com o sinal original (despesa negativa) e o número "
+            "único bancário, para bater linha a linha com o Sankhya. **Sua capa original nunca é alterada.**"
+        )
 
     c1, c2, c3 = st.columns(3)
     up_capa = c1.file_uploader("📄 Capa da Conta 70 (consolidada · só leitura)", type=["xlsx", "xls", "xlsm", "csv"], key="c70_capa")
@@ -5647,11 +5657,12 @@ def _render_conta70_casamento_numeracao():
         chips = " &nbsp;·&nbsp; ".join(f"<b>{nome}:</b> {qtd}" for nome, qtd in contagem.items())
         st.markdown("**Esteira — pendências abertas.** Valor negativo = despesa (saída); positivo = receita (entrada).")
         st.markdown(f"<div style='color:#9fb3d6;font-size:13px;margin:2px 0 8px'>{chips}</div>", unsafe_allow_html=True)
-        fc1, fc2, fc3, fc4 = st.columns([1.2, 1.5, 1.2, 2.0])
+        fc1, fc2, fc3, fc4, fc5 = st.columns([1, 1.2, 1, 1.3, 1.6])
         f_prio = fc1.selectbox("Prioridade", ["todas", "Alta", "Média", "Baixa"], key="c70_fprio")
         f_diag = fc2.selectbox("Tipo de pendência", ["todos"] + sorted(est["diagnostico"].dropna().unique().tolist()), key="c70_fdiag")
         f_banco = fc3.selectbox("Banco", ["todos"] + sorted(est["banco"].dropna().unique().tolist()), key="c70_fbanco")
-        busca = fc4.text_input("Buscar (CNPJ, valor, histórico)", key="c70_busca")
+        f_col = fc4.selectbox("Filtrar por coluna", ["Todas as colunas", "CNPJ / Histórico", "Data", "Banco", "R/D", "Valor", "Diagnóstico"], key="c70_fcol")
+        busca = fc5.text_input("Buscar", key="c70_busca", placeholder="digite e tecle Enter")
         view = est
         if f_prio != "todas":
             view = view[view["prioridade"] == f_prio]
@@ -5660,9 +5671,35 @@ def _render_conta70_casamento_numeracao():
         if f_banco != "todos":
             view = view[view["banco"] == f_banco]
         if busca.strip():
-            b = busca.strip().lower()
-            view = view[view["historico"].astype(str).str.lower().str.contains(b, na=False)
-                        | view["valor"].abs().round(2).astype(str).str.contains(b, na=False)]
+            termo = busca.strip().lower()
+            dig = re.sub(r"\D", "", busca)  # só dígitos (para CNPJ com/sem pontuação)
+            hist_l = view["historico"].astype(str).str.lower()
+            hist_dig = view["historico"].astype(str).str.replace(r"\D", "", regex=True)
+            ident_dig = view["identidade"].astype(str).str.replace(r"\D", "", regex=True)
+            if f_col == "CNPJ / Histórico":
+                m = hist_l.str.contains(termo, na=False)
+                if dig:
+                    m = m | hist_dig.str.contains(dig, na=False) | ident_dig.str.contains(dig, na=False)
+                view = view[m]
+            elif f_col == "Data":
+                dstr = pd.to_datetime(view["data"], errors="coerce").dt.strftime("%d/%m/%Y")
+                view = view[dstr.str.contains(termo, na=False)]
+            elif f_col == "Banco":
+                view = view[view["banco"].astype(str).str.lower().str.contains(termo, na=False)]
+            elif f_col == "R/D":
+                view = view[view["receita_despesa"].astype(str).str.lower().str.contains(termo, na=False)]
+            elif f_col == "Valor":
+                view = view[view["valor"].abs().round(2).astype(str).str.contains(termo, na=False)]
+            elif f_col == "Diagnóstico":
+                view = view[view["diagnostico"].astype(str).str.lower().str.contains(termo, na=False)]
+            else:  # Todas as colunas
+                m = (hist_l.str.contains(termo, na=False)
+                     | view["valor"].abs().round(2).astype(str).str.contains(termo, na=False)
+                     | view["banco"].astype(str).str.lower().str.contains(termo, na=False)
+                     | view["diagnostico"].astype(str).str.lower().str.contains(termo, na=False))
+                if dig:
+                    m = m | hist_dig.str.contains(dig, na=False) | ident_dig.str.contains(dig, na=False)
+                view = view[m]
         st.caption(f"{len(view)} de {len(est)} pendentes")
         _rdv = view["receita_despesa"].astype(str).str.upper()
         valor_sinal = view["valor"].abs() * _rdv.map(lambda x: -1 if "DESPESA" in x else 1)
