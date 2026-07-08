@@ -283,11 +283,24 @@ def atrelar(sankhya: pd.DataFrame, capa: pd.DataFrame, ultimo_numero: int | None
             continue
         ent = g[g["lado"] == "entrada"]
         bx = g[g["lado"] == "baixa"]
-        if len(ent) >= 1 and len(bx) >= 1 and abs(ent["valor"].abs().sum() - bx["valor"].abs().sum()) <= tol:
-            sk.loc[g.index, "numero_final"] = prox
-            sk.loc[g.index, "situacao"] = "Numerado agora"
-            sk.loc[g.index, "motivo"] = "Casamento novo (entrada + baixa que fecham)"
-            prox += 1
+        if ent.empty or bx.empty:
+            continue
+        # emparelha CADA entrada com uma baixa DO MESMO VALOR (mesma operação).
+        # Um número por PAR — nunca junta valores diferentes só por serem do mesmo CNPJ.
+        bx_disp = list(bx.index)
+        for ei in ent.index:
+            ev = abs(float(sk.at[ei, "valor"]))
+            match = None
+            for bi in bx_disp:
+                if abs(abs(float(sk.at[bi, "valor"])) - ev) <= tol:
+                    match = bi
+                    break
+            if match is not None:
+                sk.loc[[ei, match], "numero_final"] = prox
+                sk.loc[[ei, match], "situacao"] = "Numerado agora"
+                sk.loc[[ei, match], "motivo"] = "Casamento novo (entrada + baixa de mesmo valor)"
+                prox += 1
+                bx_disp.remove(match)
 
     # D/E) resto
     for idx in sk[sk["situacao"] == ""].index:
