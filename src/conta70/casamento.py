@@ -537,6 +537,9 @@ def gerar_capa_acumulada(capa_arquivo, detalhado, ultimo_numero: int, confirmado
     c_val = col("Vlr. Lançamento", "Valor", "Vlr Lancamento")
     c_dt = col("Dt. Lançamento", "Data")
     c_hist = col("Histórico", "Historico")
+    c_tipo = col("Tipo de Movimento", "Tipo Movimento", "Tipo")
+    c_conc = col("Conciliado")
+    c_rd = col("Receita/Despesa", "Receita / Despesa", "Receita Despesa")
 
     _sankhya_pos = {
         "dt. conciliação", "dt. conciliacao", "núm. único bancário",
@@ -573,24 +576,63 @@ def gerar_capa_acumulada(capa_arquivo, detalhado, ultimo_numero: int, confirmado
     d = detalhado
     novos = d[pd.to_numeric(d["numero_final"], errors="coerce") > ultimo_numero]
     preenchidos = 0
+    acrescentados = 0
+    novas_linhas = []
+    _rd_col = raw[c_rd].astype(str).str.upper() if c_rd else None
     for _, r in novos.iterrows():
         num = r["numero_final"]
         doc = str(r.get("num_documento", "")).strip()
         v = round(abs(float(r["valor"])), 2)
         dt = r.get("data")
-        mask = raw["_cur"].isna()
-        if doc and doc.lower() not in ("", "nan"):
-            cand = raw[mask & (raw[c_doc].astype(str) == doc) & (raw["_v"] == v)]
+        rd = str(r.get("receita_despesa", "")).upper()
+        eh_desp = "DESPESA" in rd
+        # só o mesmo lado (não mistura receita com despesa de mesmo valor)
+        if _rd_col is not None:
+            side = _rd_col.str.contains("DESPESA" if eh_desp else "RECEITA", na=False)
         else:
-            cand = raw[mask & (raw["_v"] == v) & (raw["_d"] == dt)]
+            side = pd.Series(True, index=raw.index)
+        if doc and doc.lower() not in ("", "nan"):
+            existe = raw[side & (raw[c_doc].astype(str) == doc) & (raw["_v"] == v)]
+        else:
+            existe = raw[side & (raw["_v"] == v) & (raw["_d"] == dt)]
+        cand = existe[existe["_cur"].isna()]  # candidatos ainda sem número
         if len(cand) == 1:
-            raw.loc[cand.index[0], c_num] = num
-            raw.loc[cand.index[0], "_cur"] = num
+            i0 = cand.index[0]
+            raw.loc[i0, c_num] = num
+            raw.loc[i0, "_cur"] = num
             try:
-                raw.loc[cand.index[0], c_acao] = str(acoes.get(int(num), ""))
+                raw.loc[i0, c_acao] = str(acoes.get(int(num), ""))
             except Exception:
                 pass
             preenchidos += 1
+        elif len(existe) == 0:
+            # o lado não existe na Capa -> acrescenta (com o mesmo número)
+            nova = {c: pd.NA for c in cols_orig}
+            if c_tipo:
+                nova[c_tipo] = r.get("tipo_movimento", "")
+            if c_doc:
+                nova[c_doc] = r.get("num_documento", "")
+            if c_val:
+                nova[c_val] = -v if eh_desp else v
+            if c_conc:
+                nova[c_conc] = "Sim"
+            if c_rd:
+                nova[c_rd] = r.get("receita_despesa", "")
+            if c_dt:
+                nova[c_dt] = r.get("data")
+            if c_hist:
+                nova[c_hist] = r.get("historico", "")
+            nova[c_num] = num
+            try:
+                nova[c_acao] = str(acoes.get(int(num), ""))
+            except Exception:
+                nova[c_acao] = ""
+            novas_linhas.append(nova)
+            acrescentados += 1
+        # len(existe) > 0 mas nenhum candidato livre => já está na capa (numerado/ambíguo): não mexe
 
-    raw = raw.drop(columns=["_v", "_d", "_cur"])
-    return raw[cols_orig], preenchidos, len(novos)
+    if novas_linhas:
+        raw = pd.concat([raw, pd.DataFrame(novas_linhas)], ignore_index=True)
+
+    raw = raw.drop(columns=["_v", "_d", "_cur"], errors="ignore")
+    return raw[cols_orig], preenchidos + acrescentados, len(novos)
