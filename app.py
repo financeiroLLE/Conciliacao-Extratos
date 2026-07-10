@@ -4577,20 +4577,13 @@ def render_tab_top1722_diferenca(df: pd.DataFrame, conta: str):
     status = str(linha.get("status", ""))
     motivo = str(linha.get("motivo", ""))
 
-    if "provável taxa" in status.lower() or "Diferença" in status and "NÃO" not in status:
-        st.warning(
-            f"⚠️ **TOP 1722 com Diferença** · {conta}\n\n"
-            f"A diferença de **{fmt_brl(diferenca)}** ({pct:.2f}%) entre Sankhya e Banco "
-            f"foi tratada como **provável taxa de cartão** e o agrupamento foi feito. "
-            f"As linhas foram tiradas de Pendentes. Confira se a taxa faz sentido pra você."
-        )
-    else:
-        st.error(
-            f"❌ **TOP 1722 NÃO Agrupado** · {conta}\n\n"
-            f"A diferença de **{fmt_brl(abs(diferenca))}** ({pct:.2f}%) é grande demais "
-            f"para ser taxa de cartão. As linhas continuam em Pendentes/Divergência "
-            f"para análise manual."
-        )
+    st.warning(
+        f"⚠️ **TOP 1722 com Diferença — a analisar** · {conta}\n\n"
+        f"Há uma diferença de **{fmt_brl(abs(diferenca))}** ({pct:.2f}%) entre o cartão no "
+        f"Banco e no Sankhya. **Não foi confirmada como taxa** — pode ser venda ainda sem "
+        f"baixa, taxa, ou estorno. As linhas **continuam em Pendentes/Divergência** (não "
+        f"foram escondidas). Confira as transações abaixo antes de fechar."
+    )
 
     col1, col2, col3 = st.columns(3)
     with col1:
