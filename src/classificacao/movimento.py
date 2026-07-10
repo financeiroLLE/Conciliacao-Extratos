@@ -50,8 +50,10 @@ RE_SALDO = re.compile(
 RE_APLICACAO = re.compile(
     r"\b("
     r"APLIC(A[CÇ][AÃ]O)?\.?\s+AUT|"  # APLIC AUT, APLIC. AUT (v5.26), APLICAÇÃO AUTOM
+    r"APLIC\.?\s*AUTOM|"             # APLIC.AUTOM.INVESTFACIL (Bradesco, ponto sem espaço)
     r"APLIC\.?\s*FINANC|"            # APLIC.FINANC (Sicredi)
     r"APLIC\.?\s*INVEST|"           # APLIC.INVEST FACIL (Bradesco)
+    r"INVEST\.?\s*F[AÁ]CIL|"        # INVESTFACIL / INVEST FACIL (Bradesco, aplicação automática)
     r"APLICA[CÇ][AÃ]O|"
     r"INVESTIMENTO|"
     r"COMPRA\s+(CDB|RDB|LCI|LCA|TESOURO)|"
