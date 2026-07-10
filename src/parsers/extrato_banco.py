@@ -40,9 +40,13 @@ def _mapear_colunas(df: pd.DataFrame) -> dict[str, str]:
     canonicos = {
         "data": ["data", "datalancamento", "dtlancamento"],
         "historico": ["historico", "descricao", "memo", "lancamento", "movimentacao"],
-        "documento": ["documento", "doc", "numdoc", "numerodoc"],
+        "documento": ["documento", "doc", "numdoc", "numerodoc", "dcto"],
         # "valorr" cobre 'Valor (R$)' depois da normalização que remove parênteses
         "valor": ["valor", "valorr", "valorrs", "vlrlancamento", "vlr"],
+        # extratos com Crédito/Débito em colunas separadas (ex.: Bradesco .xls)
+        "credito": ["credito", "creditor", "creditors", "credit"],
+        "debito": ["debito", "debitor", "debitors", "debit"],
+        "saldo": ["saldo", "saldor", "saldors"],
     }
     encontrados: dict[str, str] = {}
     for col_real in df.columns:
@@ -63,8 +67,11 @@ def _detectar_linha_cabecalho(df: pd.DataFrame, max_linhas: int = 20) -> int | N
     canonicos_aceitos = {
         "data", "datalancamento", "dtlancamento",
         "historico", "descricao", "memo", "lancamento", "movimentacao",
-        "documento", "doc", "numdoc", "numerodoc",
+        "documento", "doc", "numdoc", "numerodoc", "dcto",
         "valor", "valorr", "valorrs", "vlrlancamento", "vlr",
+        "credito", "creditor", "creditors", "credit",
+        "debito", "debitor", "debitors", "debit",
+        "saldo", "saldor", "saldors",
     }
     n = min(len(df), max_linhas)
     for i in range(n):
@@ -265,7 +272,11 @@ def carregar_extrato_banco(
         # antes do cabeçalho real. Vamos procurar dinamicamente a linha que contém
         # o cabeçalho (presença de 'Data' + 'Valor' ou 'Lançamento'/'Histórico').
         mapa = _mapear_colunas(df_aba)
-        if "data" not in mapa or "valor" not in mapa:
+
+        def _tem_valor(m):
+            return ("valor" in m) or ("credito" in m) or ("debito" in m)
+
+        if "data" not in mapa or not _tem_valor(mapa):
             # Procura nas primeiras 20 linhas qual delas é o cabeçalho real
             header_linha = _detectar_linha_cabecalho(df_aba, max_linhas=20)
             if header_linha is not None:
@@ -274,7 +285,7 @@ def carregar_extrato_banco(
                 df_aba = df_aba.dropna(axis=1, how="all")
                 mapa = _mapear_colunas(df_aba)
 
-        if "data" not in mapa or "valor" not in mapa:
+        if "data" not in mapa or not _tem_valor(mapa):
             # aba não parece ser extrato — pula
             continue
 
@@ -284,8 +295,51 @@ def carregar_extrato_banco(
         out["documento"] = (
             df_aba[mapa["documento"]].fillna("") if "documento" in mapa else ""
         )
-        out["valor"] = df_aba[mapa["valor"]].apply(_parse_valor_brl)
+        # valor: coluna única OU Crédito(+) − Débito(−).
+        # Crédito e Débito podem vir com ou sem sinal; usamos o módulo de cada um
+        # (crédito soma, débito subtrai) para não depender de como o banco assina.
+        if "valor" in mapa:
+            out["valor"] = df_aba[mapa["valor"]].apply(_parse_valor_brl)
+        else:
+            cred = df_aba[mapa["credito"]].apply(_parse_valor_brl).abs() if "credito" in mapa else 0.0
+            deb = df_aba[mapa["debito"]].apply(_parse_valor_brl).abs() if "debito" in mapa else 0.0
+            cred = cred.fillna(0.0) if hasattr(cred, "fillna") else cred
+            deb = deb.fillna(0.0) if hasattr(deb, "fillna") else deb
+            out["valor"] = cred - deb
         out["conta"] = conta
+
+        # descarta linhas que NÃO são transação: totalizadores ("Total") e
+        # cabeçalhos repetidos no meio do extrato ("Data"/"Lançamento").
+        _h = out["historico"].astype(str).str.strip().str.upper()
+        _lixo = _h.isin(["TOTAL", "TOTAIS", "LANÇAMENTO", "LANCAMENTO", "DATA", "SALDO ANTERIOR", "SALDO FINAL", "HISTÓRICO", "HISTORICO"])
+        out = out[~_lixo].reset_index(drop=True)
+
+        # alguns extratos (ex.: Bradesco) trazem um recap "Últimos Lançamentos"
+        # que REPETE linhas do corpo principal. Remove duplicatas exatas
+        # (mesma data + histórico + valor) para não contar em dobro.
+        out = out.drop_duplicates(subset=["data", "historico", "valor"]).reset_index(drop=True)
+
+        # saldo do extrato (coluna "Saldo (R$)"): emite saldo inicial e final,
+        # para o fechamento (saldo inicial + receitas − despesas = saldo final).
+        if "saldo" in mapa:
+            _saldo_col = df_aba[mapa["saldo"]].apply(_parse_valor_brl)
+            _hist_raw = (df_aba[mapa["historico"]].fillna("").astype(str) if "historico" in mapa else pd.Series([""] * len(df_aba)))
+            _dt = _parse_data_robusto(df_aba[mapa["data"]], ano_referencia=ano_referencia)
+            _val = pd.DataFrame({"data": _dt.values, "saldo": _saldo_col.values, "hist": _hist_raw.str.upper().values})
+            _val = _val.dropna(subset=["data"])
+            _val = _val[_val["saldo"].notna()]
+            # tira totalizador da busca do saldo final
+            _val = _val[~_val["hist"].str.strip().isin(["TOTAL", "TOTAIS"])]
+            if not _val.empty:
+                _val = _val.sort_values("data")
+                _ant = _val[_val["hist"].str.contains("SALDO ANTERIOR", na=False)]
+                _lin_ini = _ant.iloc[0] if not _ant.empty else _val.iloc[0]
+                _lin_fim = _val.iloc[-1]
+                _saldos = pd.DataFrame([
+                    {"data": _lin_ini["data"], "historico": "SALDO ANTERIOR", "documento": "", "valor": float(_lin_ini["saldo"]), "conta": conta},
+                    {"data": _lin_fim["data"], "historico": "SALDO FINAL", "documento": "", "valor": float(_lin_fim["saldo"]), "conta": conta},
+                ])
+                out = pd.concat([out, _saldos], ignore_index=True)
 
         # remove linhas sem data ou valor zero/sem valor
         out = out.dropna(subset=["data"])
