@@ -176,9 +176,11 @@ def detectar_top_1722(
             # Consome todas as linhas
             indices_banco_casados.update(int(i) for i in creditos_cartao["_idx_banco"].tolist())
             indices_sankhya_casados.update(int(i) for i in sis_conta["_idx_sis"].tolist())
-        elif pct_diff <= TOLERANCIA_REL_DIFERENCA:
-            # Bateu COM DIFERENÇA (provavelmente taxa)
-            status = "TOP 1722 com Diferença (provável taxa)"
+        else:
+            # QUALQUER diferença (pequena ou grande) — NÃO agrupa e NÃO consome.
+            # Regra da usuária: só sai de Pendentes quando bate EXATO. Nunca supõe
+            # taxa de cartão nem esconde o valor; fica como alerta "a analisar" e as
+            # linhas continuam visíveis em Pendentes/Divergência.
             com_diff.append({
                 "id_grupo": id_grupo,
                 "conta": conta,
@@ -188,36 +190,15 @@ def detectar_top_1722(
                 "valor_sankhya_total": soma_sankhya,
                 "diferenca": diferenca,
                 "percentual_diferenca": round(pct_diff * 100, 3),
-                "status": status,
+                "status": "TOP 1722 com Diferença — a analisar",
                 "motivo": (
                     f"Sankhya R$ {soma_sankhya:.2f} × Banco R$ {soma_banco:.2f}. "
                     f"Diferença R$ {abs(diferenca):.2f} ({pct_diff*100:.2f}%). "
-                    f"Provável taxa de cartão."
+                    f"Não confirmado como taxa — valor em aberto, a analisar. "
+                    f"As linhas continuam em Pendentes."
                 ),
             })
-            # Mesmo "com diferença", consome as linhas pra elas saírem de Pendentes/Divergência
-            indices_banco_casados.update(int(i) for i in creditos_cartao["_idx_banco"].tolist())
-            indices_sankhya_casados.update(int(i) for i in sis_conta["_idx_sis"].tolist())
-        else:
-            # Diferença grande demais (> 3.5%) — não agrupa, mas registra pra análise
-            com_diff.append({
-                "id_grupo": id_grupo,
-                "conta": conta,
-                "qtd_creditos_banco": len(creditos_cartao),
-                "valor_banco_total": soma_banco,
-                "qtd_linhas_sankhya": len(sis_conta),
-                "valor_sankhya_total": soma_sankhya,
-                "diferenca": diferenca,
-                "percentual_diferenca": round(pct_diff * 100, 3),
-                "status": "TOP 1722 com Diferença Grande (NÃO agrupado)",
-                "motivo": (
-                    f"Sankhya R$ {soma_sankhya:.2f} × Banco R$ {soma_banco:.2f}. "
-                    f"Diferença R$ {abs(diferenca):.2f} ({pct_diff*100:.2f}%) excede o "
-                    f"limite de {TOLERANCIA_REL_DIFERENCA*100:.1f}%. "
-                    f"Linhas continuam em Pendentes."
-                ),
-            })
-            # NÃO consome — deixa pra análise manual
+            # NÃO consome — linhas seguem visíveis
             continue
 
         # Registra linhas individuais consumidas (banco)
