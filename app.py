@@ -5664,7 +5664,8 @@ def _c70_processar(capa_bytes, capa_name, sk_bytes, sk_name):
 
     capa = carregar_movimento(_n(capa_bytes, capa_name))
     sk = carregar_movimento(_n(sk_bytes, sk_name))
-    ult = int(pd.to_numeric(capa["numero"], errors="coerce").max() or 0)
+    _m = pd.to_numeric(capa["numero"], errors="coerce").max()
+    ult = int(_m) if pd.notna(_m) else 0
     res = atrelar(sk, capa, ultimo_numero=ult)
     # acumulado da Capa inteira (conta 70): receita, despesa e diferença
     _rd = capa["receita_despesa"].astype(str).str.upper()
