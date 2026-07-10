@@ -275,7 +275,8 @@ def atrelar(sankhya: pd.DataFrame, capa: pd.DataFrame, ultimo_numero: int | None
 
     # C) casamento totalmente novo (entrada + baixa sem número que fecham) dentro do Sankhya
     if ultimo_numero is None:
-        ultimo_numero = int(pd.to_numeric(capa["numero"], errors="coerce").max() or 0)
+        _m = pd.to_numeric(capa["numero"], errors="coerce").max()
+        ultimo_numero = int(_m) if pd.notna(_m) else 0
     prox = int(ultimo_numero) + 1
     sem = sk[(sk["numero_final"].isna()) & (sk["situacao"] == "")]
     for idv, g in sem.groupby("identidade"):
