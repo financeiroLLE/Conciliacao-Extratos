@@ -6289,20 +6289,25 @@ def pagina_conta70():
 # Roteamento
 # ============================================================
 pagina = st.session_state.pagina
-if pagina == "Dashboard":
-    pagina_dashboard()
-elif pagina == "Conciliação":
-    pagina_conciliacao()
-elif pagina == "Cadastro de Taxas":
-    pagina_cadastro_taxas()
-elif pagina == "Auditoria de Taxas":
-    pagina_auditoria_taxas()
-elif pagina == "Conta 70":
-    pagina_conta70()
-elif pagina == "Histórico":
-    pagina_historico()
-elif pagina == "Sobre":
-    pagina_sobre()
+_PAGINAS = {
+    "Dashboard": pagina_dashboard,
+    "Conciliação": pagina_conciliacao,
+    "Cadastro de Taxas": pagina_cadastro_taxas,
+    "Auditoria de Taxas": pagina_auditoria_taxas,
+    "Conta 70": pagina_conta70,
+    "Histórico": pagina_historico,
+    "Sobre": pagina_sobre,
+}
+try:
+    _fn = _PAGINAS.get(pagina)
+    if _fn is not None:
+        _fn()
+except Exception as _err_pagina:
+    st.error(
+        "Ocorreu um erro ao montar esta tela. O detalhe técnico está abaixo — "
+        "tire um print e mande para o suporte para correção."
+    )
+    st.exception(_err_pagina)
 
 
 # ============================================================
