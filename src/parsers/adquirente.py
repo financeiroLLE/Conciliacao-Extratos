@@ -215,8 +215,96 @@ def carregar_pagbank(arquivo) -> pd.DataFrame:
 
 
 # ------------------------------------------------------------- detecção/roteamento
+def _categoria_cielo(tipo: str) -> str:
+    """Categoria a partir do 'Tipo de lançamento' da Cielo. Nada é inventado."""
+    t = _sem_acento(tipo)
+    if "cancelamento" in t or "chargeback" in t or "estorno" in t:
+        return "estorno"
+    if "venda" in t:
+        return "venda"
+    if "aluguel" in t:
+        return "aluguel"
+    if "tarifa" in t or "taxa" in t:
+        return "tarifa"
+    if "saldo" in t:
+        return "saldo"
+    return "outros"
+
+
+def _achar_header_cielo(raw: pd.DataFrame) -> int | None:
+    """Header do 'Recebíveis Detalhado' da Cielo: linha com 'Data de pagamento'
+    e 'Valor líquido' (59 colunas)."""
+    for i in range(min(20, len(raw))):
+        blob = _sem_acento(" ".join(str(x) for x in raw.iloc[i].tolist()))
+        if "data de pagamento" in blob and "valor liquido" in blob:
+            return i
+    return None
+
+
+def carregar_cielo_recebiveis(arquivo) -> pd.DataFrame:
+    """Relatório 'Recebíveis Detalhado' da Cielo (xls/xlsx, 59 colunas).
+
+    Cada linha é UMA venda sendo paga. O que bate com o banco é o VALOR
+    LÍQUIDO somado por dia de pagamento e bandeira (Visa cai como 'VENDA
+    CARTAO DE CREDITO'; Master/Elo como 'CIELO VDA CREDITO ...'). O Sankhya
+    baixa pelo líquido — validado ao centavo com dados reais (v5.53).
+    """
+    conteudo = _bytes(arquivo)
+    try:
+        xl = pd.ExcelFile(io.BytesIO(conteudo))
+    except Exception:
+        return pd.DataFrame(columns=COLUNAS_SAIDA)
+    raw = xl.parse(xl.sheet_names[0], header=None)
+    h = _achar_header_cielo(raw)
+    if h is None:
+        return pd.DataFrame(columns=COLUNAS_SAIDA)
+    df = xl.parse(xl.sheet_names[0], header=h)
+    df.columns = [_sem_acento(str(c)) for c in df.columns]
+
+    def col(*alvos):
+        for c in df.columns:
+            if any(a in c for a in alvos):
+                return c
+        return None
+
+    c_data = col("data de pagamento")
+    c_band = col("bandeira")
+    c_tipo = col("tipo de lancamento")
+    c_forma = col("forma de pagamento")
+    c_liq = col("valor liquido")
+    c_bruto = col("valor bruto")
+    c_taxa = col("taxa/tarifa")
+    if c_data is None or c_liq is None:
+        return pd.DataFrame(columns=COLUNAS_SAIDA)
+
+    out = pd.DataFrame()
+    out["data"] = pd.to_datetime(df[c_data], format="%d/%m/%Y", errors="coerce")
+    out["bandeira"] = df[c_band].astype(str).str.strip() if c_band else ""
+    out["tipo"] = df[c_tipo].astype(str).str.strip() if c_tipo else ""
+    _forma = df[c_forma].astype(str).str.strip() if c_forma else ""
+    _bruto = df[c_bruto].map(_num_br) if c_bruto else 0.0
+    _taxa = df[c_taxa].map(_num_br) if c_taxa else 0.0
+    out["descricao"] = [
+        (f"{f} · bruto R$ {b:,.2f} · taxa R$ {abs(t):,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+        for f, b, t in zip(
+            _forma if c_forma else [""] * len(df),
+            _bruto if c_bruto else [0.0] * len(df),
+            _taxa if c_taxa else [0.0] * len(df),
+        )
+    ]
+    out["valor"] = df[c_liq].map(_num_br)  # LÍQUIDO — é o que entra no banco
+    out["adquirente"] = "Cielo"
+    out["categoria"] = [_categoria_cielo(t) for t in out["tipo"]]
+    out = out[out["data"].notna() & out["valor"].notna()].copy()
+    return out[COLUNAS_SAIDA].reset_index(drop=True)
+
+
 def detectar_adquirente(arquivo) -> str:
     nome = _sem_acento(_nome(arquivo))
+    # v5.53: 'cielo' ANTES de 'recebivel' — o relatório da Cielo se chama
+    # "Recebiveis_cielo_detalhe" e caía no GetNet pelo termo 'recebivel'.
+    if "cielo" in nome:
+        return "cielo"
     if "getnet" in nome or "recebivel" in nome:
         return "getnet"
     if "pagbank" in nome or "pagseguro" in nome:
@@ -231,11 +319,23 @@ def detectar_adquirente(arquivo) -> str:
         try:
             raw = pd.read_excel(io.BytesIO(conteudo), header=None, nrows=12)
             blob = _sem_acento(" ".join(str(x) for x in raw.values.ravel()))
+            if "cielo" in blob or ("data de pagamento" in blob and "valor liquido" in blob):
+                return "cielo"
             if "tipo de lancamento" in blob or "recebimentos" in blob or "ec centralizador" in blob:
                 return "getnet"
         except Exception:
             pass
         return "desconhecido"
+    # v5.53: xls antigo (BIFF) não decodifica em latin-1 — sniff via pandas
+    try:
+        raw = pd.read_excel(io.BytesIO(conteudo), header=None, nrows=12)
+        blob = _sem_acento(" ".join(str(x) for x in raw.values.ravel()))
+        if "cielo" in blob or ("data de pagamento" in blob and "valor liquido" in blob):
+            return "cielo"
+        if "tipo de lancamento" in blob or "recebimentos" in blob or "ec centralizador" in blob:
+            return "getnet"
+    except Exception:
+        pass
     txt = _sem_acento(cabeca.decode("latin-1", errors="ignore"))
     if "codigo da transacao" in txt or ("data;" in txt and "descricao" in txt):
         return "pagbank"
@@ -245,6 +345,8 @@ def detectar_adquirente(arquivo) -> str:
 def carregar_extrato_adquirente(arquivo) -> pd.DataFrame:
     """Roteia pro parser certo. Devolve DataFrame no esquema comum (ou vazio)."""
     tipo = detectar_adquirente(arquivo)
+    if tipo == "cielo":
+        return carregar_cielo_recebiveis(arquivo)
     if tipo == "getnet":
         return carregar_getnet_recebiveis(arquivo)
     if tipo == "pagbank":
