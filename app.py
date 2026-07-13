@@ -2578,12 +2578,21 @@ def pagina_dashboard():
     pct = float(kpis.get("percentual_conciliado", 0.0))
     n_contas = len(resultado.contas_processadas)
 
-    # saldo inicial/final (do extrato do banco), agregando as contas que têm saldo
+    # saldo inicial/final (do extrato do banco), agregando as contas que têm saldo.
+    # v5.47: exigir_conciliado=False — o fechamento do extrato (saldo inicial +
+    # movimentos = saldo final) é teste de LEITURA do extrato e não depende de
+    # a conta estar 100% conciliada. Antes o card ficava vazio à toa.
     saldo_ini = saldo_fim = 0.0
     tem_saldo = False
     for _c in resultado.contas_processadas:
         try:
-            _info = resultado.saldo_final_da_conta(_c)
+            _info = resultado.saldo_final_da_conta(_c, exigir_conciliado=False)
+        except TypeError:
+            # resultado antigo em sessão (sem o parâmetro novo)
+            try:
+                _info = resultado.saldo_final_da_conta(_c)
+            except Exception:
+                _info = None
         except Exception:
             _info = None
         if _info and _info.get("tem_saldo_no_extrato"):
@@ -2673,13 +2682,48 @@ def pagina_dashboard():
     _cob_cor = "#7ee0a6" if n_contas >= TOTAL_CONTAS_GRUPO else "#FAC318"
     _cob_sub = "· todas conciliadas" if n_contas >= TOTAL_CONTAS_GRUPO else f"· faltam {TOTAL_CONTAS_GRUPO - n_contas}"
 
-    # saldo (da conta rodada)
+    # saldo (da conta rodada) — v5.47: a conta do card agora FECHA de verdade.
+    # Antes faltava a linha de investimentos (o líquido que foi p/ aplicação sai
+    # do saldo mas não está em Receitas/Despesas) e o "= extrato ✓" era fixo.
+    # Agora: inicial + receitas − despesas ± investimentos = final CALCULADO,
+    # comparado com o saldo final LIDO do extrato (✓ só quando bate).
     if tem_saldo:
+        # Líquido de investimentos do LADO DO BANCO (aplicações/resgates/rend.
+        # do extrato) — é o que sai/entra do saldo. O card "Investimentos" ao
+        # lado usa a visão deduplicada banco×Sankhya (outra finalidade).
+        _inv_liq_saldo = 0.0
+        try:
+            _bc = resultado.banco_completo
+            if _bc is not None and not _bc.empty and "categoria_mov" in _bc.columns:
+                _inv_liq_saldo = float(
+                    _bc[_bc["categoria_mov"].isin(
+                        ["aplicacao", "resgate", "rendimento", "investimento_outro"]
+                    )]["valor"].sum()
+                )
+        except Exception:
+            _inv_liq_saldo = 0.0
+        if _inv_liq_saldo < -0.005:
+            _linha_inv = (
+                f"<div style='display:flex;justify-content:space-between;font-size:13px;color:#cdd9f2;padding:5px 0'>"
+                f"<span>− Foi p/ investimento (líq.)</span><b style='color:#FAC318'>{_brl(abs(_inv_liq_saldo))}</b></div>"
+            )
+        elif _inv_liq_saldo > 0.005:
+            _linha_inv = (
+                f"<div style='display:flex;justify-content:space-between;font-size:13px;color:#cdd9f2;padding:5px 0'>"
+                f"<span>+ Voltou de investimento (líq.)</span><b style='color:#FAC318'>{_brl(_inv_liq_saldo)}</b></div>"
+            )
+        else:
+            _linha_inv = ""
+        _saldo_calc = round(saldo_ini + rec_b - desp_b + _inv_liq_saldo, 2)
+        _fecha_saldo = abs(_saldo_calc - saldo_fim) < 0.01
+        _selo_saldo = ("<span style='font-size:11px;color:#7ee0a6'>= extrato ✓</span>" if _fecha_saldo
+                       else f"<span style='font-size:11px;color:#ffc94d'>calculado {_brl(_saldo_calc)} · conferir ⚠</span>")
         _saldo_inner = (
             f"<div style='display:flex;justify-content:space-between;font-size:13px;color:#cdd9f2;padding:5px 0'><span>Saldo inicial</span><b style='color:#fff'>{_brl(saldo_ini)}</b></div>"
             f"<div style='display:flex;justify-content:space-between;font-size:13px;color:#cdd9f2;padding:5px 0'><span>+ Receitas</span><b style='color:#7ee0a6'>{_brl(rec_b)}</b></div>"
-            f"<div style='display:flex;justify-content:space-between;font-size:13px;color:#cdd9f2;padding:5px 0;border-bottom:1px solid #163062;padding-bottom:10px'><span>− Despesas</span><b style='color:#ff9a9a'>{_brl(desp_b)}</b></div>"
-            f"<div style='display:flex;justify-content:space-between;align-items:center;margin-top:10px'><span style='font-size:13px;font-weight:700;color:#fff'>= Saldo final</span><span style='font-size:22px;font-weight:800;color:#fff'>{_brl(saldo_fim)} <span style='font-size:11px;color:#7ee0a6'>= extrato ✓</span></span></div>"
+            f"<div style='display:flex;justify-content:space-between;font-size:13px;color:#cdd9f2;padding:5px 0'><span>− Despesas</span><b style='color:#ff9a9a'>{_brl(desp_b)}</b></div>"
+            f"<div style='border-bottom:1px solid #163062;padding-bottom:6px'>{_linha_inv}</div>"
+            f"<div style='display:flex;justify-content:space-between;align-items:center;margin-top:10px'><span style='font-size:13px;font-weight:700;color:#fff'>= Saldo final</span><span style='font-size:22px;font-weight:800;color:#fff'>{_brl(saldo_fim)} {_selo_saldo}</span></div>"
         )
     else:
         _saldo_inner = "<div style='font-size:12px;color:#9fb3d6;padding:10px 0'>este extrato não traz linha de saldo — o saldo aparece quando o extrato da conta rodada tiver saldo inicial/final.</div>"
