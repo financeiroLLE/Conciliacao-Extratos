@@ -3057,16 +3057,38 @@ def render_resumo_termometros(resultado: ResultadoConciliacao, kpis: dict):
                                 fmt_brl(falta + diverg) + " a resolver", classe="destaque-vermelho")
     # v5.35: a diferença vai no card do lado que movimentou MAIS, e só cita "cartão"
     # quando a conta tem cartão. Sem cartão, fala a verdade: "a analisar".
+    # v5.47: separa a parte que são pares anulados por estorno (PIX recebido e
+    # devolvido — já explicados, não precisam de análise) do restante a analisar.
     diff_assinado = round(total_banco - total_sis, 2)
     abs_diff = abs(diff_assinado)
+    _ea_g = getattr(resultado, "estornos_anulados", None)
+    _vol_anul_g = 0.0
+    if _ea_g is not None and not getattr(_ea_g, "empty", True):
+        try:
+            _vol_anul_g = round(
+                float(_ea_g["valor_original"].abs().sum())
+                + float(_ea_g["valor_estornado"].abs().sum()), 2
+            )
+        except Exception:
+            _vol_anul_g = 0.0
     nota_diff = ""
     if abs_diff >= 0.01:
         _tem_cartao = int(kpis.get("qtd_top1722_grupos", 0)) > 0
         _lado = ("Banco movimentou " + fmt_brl(abs_diff) + " a mais que o Sankhya"
                  if diff_assinado > 0
                  else "Sankhya movimentou " + fmt_brl(abs_diff) + " a mais que o banco")
-        nota_diff = _lado + (" — pode incluir taxa de cartão lançada 2x; o restante a analisar."
-                             if _tem_cartao else " — a analisar.")
+        if diff_assinado > 0 and _vol_anul_g >= 0.01:
+            _resto = round(abs_diff - _vol_anul_g, 2)
+            if _resto >= 0.01:
+                nota_diff = (_lado + " — " + fmt_brl(_vol_anul_g)
+                             + " são estornos anulados (recebido e devolvido); "
+                             + fmt_brl(_resto) + " a analisar.")
+            else:
+                nota_diff = (_lado + " — 100% são estornos anulados "
+                             "(recebido e devolvido); nada a analisar.")
+        else:
+            nota_diff = _lado + (" — pode incluir taxa de cartão lançada 2x; o restante a analisar."
+                                 if _tem_cartao else " — a analisar.")
     if diff_assinado > 0:
         banco_card = card_kpi("Movimentado no Banco", fmt_brl(total_banco), nota_diff)
         sankhya_card = card_kpi("Movimentado no Sankhya", fmt_brl(total_sis))
@@ -3689,12 +3711,41 @@ def tela_resultado():
 # ============================================================
 # Detalhamento por banco — cards + abas internas
 # ============================================================
+def _volume_estornos_anulados_por_dia(resultado, conta: str) -> dict:
+    """v5.47: volume (valor absoluto das DUAS pontas) dos pares anulados por
+    estorno, por dia. Um PIX recebido e devolvido conta 2× no volume do banco,
+    mas o par se anula e já está explicado na aba ♻️ Estornos — por isso NÃO é
+    diferença Banco × Sankhya e precisa ser descontado do banner e do detalhe
+    por dia. Sem esse desconto, um dia 100% de estornos aparecia com valor alto
+    e nenhuma linha listada (o número do dia não fechava com as linhas)."""
+    ea = getattr(resultado, "estornos_anulados", None)
+    if ea is None or getattr(ea, "empty", True):
+        return {}
+    df = ea
+    if "conta" in df.columns:
+        df = df[df["conta"] == conta]
+    if df.empty:
+        return {}
+    vol: dict = {}
+    for _, r in df.iterrows():
+        try:
+            d1 = pd.Timestamp(r["data_original"]).normalize()
+            d2 = pd.Timestamp(r["data_estorno"]).normalize()
+            vol[d1] = vol.get(d1, 0.0) + abs(float(r["valor_original"]))
+            vol[d2] = vol.get(d2, 0.0) + abs(float(r["valor_estornado"]))
+        except Exception:
+            continue
+    return vol
+
+
 def _diferenca_bxs_por_dia(resultado: "ResultadoConciliacao", conta: str) -> list[tuple]:
     """Diferença |banco| − |Sankhya| por dia, com o MESMO filtro do KPI de
-    'movimentado' (exclui saldo/aplicação/resgate/rendimento). Retorna lista de
-    (data, dif) só com os dias que divergem (|dif| >= 0,01), ordenada do maior
-    para o menor em módulo. Serve pra apontar no alerta EM QUE DIA está a
-    diferença — num extrato de 30 dias, isso leva direto ao ponto."""
+    'movimentado' (exclui saldo/aplicação/resgate/rendimento) e DESCONTANDO os
+    pares anulados por estorno (v5.47 — eles se anulam e não são diferença).
+    Retorna lista de (data, dif) só com os dias que divergem (|dif| >= 0,01),
+    ordenada do maior para o menor em módulo. Serve pra apontar no alerta EM QUE
+    DIA está a diferença — e agora o valor de cada dia fecha exatamente com as
+    linhas listadas no detalhe."""
     _excl = ("saldo", "aplicacao", "resgate", "rendimento")
 
     def _abs_por_dia(df):
@@ -3712,10 +3763,16 @@ def _diferenca_bxs_por_dia(resultado: "ResultadoConciliacao", conta: str) -> lis
 
     gb = _abs_por_dia(resultado.banco_completo)
     gs = _abs_por_dia(resultado.sistema_completo)
+    vol_anulados = _volume_estornos_anulados_por_dia(resultado, conta)
     dias = sorted(set(gb.index) | set(gs.index))
     out = []
     for dia in dias:
-        dif = round(float(gb.get(dia, 0.0)) - float(gs.get(dia, 0.0)), 2)
+        dif = round(
+            float(gb.get(dia, 0.0))
+            - float(vol_anulados.get(dia, 0.0))
+            - float(gs.get(dia, 0.0)),
+            2,
+        )
         if abs(dif) >= 0.01:
             out.append((dia, dif))
     out.sort(key=lambda x: abs(x[1]), reverse=True)
@@ -3833,15 +3890,18 @@ def _explicar_diferenca_por_dia(resultado, conta):
     return out
 
 
-def _render_alerta_diferenca_por_dia(dif_bs, explicacao):
+def _render_alerta_diferenca_por_dia(dif_bs, explicacao, nota_extra: str = ""):
     """Banner enxuto + seta (expander) que explica a diferença por dia e por
-    origem. NUNCA rotula como cartão — só descreve o que não casou em cada dia."""
+    origem. NUNCA rotula como cartão — só descreve o que não casou em cada dia.
+    v5.47: `dif_bs` já vem LÍQUIDO de estornos anulados; `nota_extra` (HTML)
+    informa quanto foi anulado, pra conta fechar com os cards acima."""
     _val = fmt_brl(abs(dif_bs))
     st.html(
         '<div style="background:#2a1d10;border-left:4px solid #FAC318;border-radius:8px;'
         'padding:10px 14px;margin:10px 0 2px 0;color:#e9eef7;font-size:14px;line-height:1.5;">'
         '&#9888;&#65039; <b>Diferença Banco &times; Sankhya: ' + _val + '</b> &middot; '
-        '<b>a analisar por dia</b> &middot; abra o detalhe abaixo para ver o que aconteceu em cada dia.</div>'
+        '<b>a analisar por dia</b> &middot; abra o detalhe abaixo para ver o que aconteceu em cada dia.'
+        + (nota_extra or '') + '</div>'
     )
     with st.expander("Ver o que aconteceu em cada dia", expanded=False):
         if not explicacao:
@@ -4071,12 +4131,23 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
     # v5.38: ALERTA da diferença Banco × Sankhya — antes ela só aparecia no texto do
     # explainer e nas abas, então passava batido. Agora grita num banner sempre que
     # existir, apontando pra onde investigar.
-    dif_bs = round(float(k["total_movimentado_banco"]) - float(k["total_extrato_sistema"]), 2)
+    # v5.47: pares ANULADOS POR ESTORNO (PIX recebido e devolvido) se anulam e já
+    # estão explicados na aba ♻️ — eles NÃO contam como diferença. O banner mostra
+    # só o que precisa de análise; quando há anulados, a nota fecha a conta com os
+    # cards acima (líquido + anulados = banco − sankhya).
+    dif_bruta = round(float(k["total_movimentado_banco"]) - float(k["total_extrato_sistema"]), 2)
+    _vol_anulados = round(sum(_volume_estornos_anulados_por_dia(resultado, conta).values()), 2)
+    dif_bs = round(dif_bruta - _vol_anulados, 2)
     if abs(dif_bs) >= 0.01:
         _adq_alert = st.session_state.get("adquirente_df")
         _partes, _todos = _explicar_diferenca_cartao(resultado, conta, _adq_alert)
         _val = fmt_brl(abs(dif_bs))
         _tem_adq = _adq_alert is not None and not getattr(_adq_alert, "empty", True)
+        _nota_anulados = (
+            ' &middot; <span style="color:#9fb3d6;">além de ' + fmt_brl(_vol_anulados)
+            + ' em PIX recebidos e devolvidos que se anulam (aba ♻️ Estornos — não precisam de análise)</span>'
+            if _vol_anulados >= 0.01 else ''
+        )
 
         if _tem_adq and _partes and _todos:
             # Só quando HÁ adquirente E ela explica 100% da diferença (taxa comprovada).
@@ -4085,13 +4156,25 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
                 'padding:10px 14px;margin:10px 0 2px 0;color:#e9eef7;font-size:14px;line-height:1.5;">'
                 '&#9989; <b>Diferença Banco &times; Sankhya: ' + _val + '</b> &middot; '
                 '<b>identificada 100% pela adquirente</b> &middot; taxa descontada no repasse '
-                '(não é erro de conciliação). Detalhe na aba &ldquo;Diferença de Cartão&rdquo;.</div>'
+                '(não é erro de conciliação). Detalhe na aba &ldquo;Diferença de Cartão&rdquo;.'
+                + _nota_anulados + '</div>'
             )
         else:
             # Caso geral (com ou sem cartão): explica por dia, pela origem real.
             # NUNCA rotula como cartão por padrão.
             _explic = _explicar_diferenca_por_dia(resultado, conta)
-            _render_alerta_diferenca_por_dia(dif_bs, _explic)
+            _render_alerta_diferenca_por_dia(dif_bs, _explic, nota_extra=_nota_anulados)
+    elif abs(dif_bruta) >= 0.01 and _vol_anulados >= 0.01:
+        # v5.47: a diferença entre os cards existe, mas é 100% de pares anulados
+        # por estorno — nada a analisar. Banner verde explicando por que os
+        # totais dos cards não batem entre si.
+        st.html(
+            '<div style="background:#0c2b1a;border-left:4px solid #0F8C3B;border-radius:8px;'
+            'padding:10px 14px;margin:10px 0 2px 0;color:#e9eef7;font-size:14px;line-height:1.5;">'
+            '&#9989; <b>Diferença Banco &times; Sankhya: ' + fmt_brl(abs(dif_bruta)) + '</b> &middot; '
+            '<b>100% são PIX recebidos e devolvidos que se anulam</b> (anulados por estorno) '
+            '&middot; nada a analisar. Detalhe na aba &ldquo;&#9851;&#65039; Estornos &middot; pares anulados&rdquo;.</div>'
+        )
     info_saldo = resultado.saldo_final_da_conta(conta)
     if info_saldo is not None:
         render_card_saldo_final(info_saldo)
@@ -4148,7 +4231,33 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
             # v5.38: escapa o cifrão pra o Streamlit NÃO interpretar R$...R$ como LaTeX.
             st.markdown(_msg_inv.replace("$", "\\$"))
         if _diff > 0.01:
-            if _tem_cartao:
+            # v5.47: separa a parte anulada por estorno (recebido e devolvido —
+            # já explicada na aba ♻️) do restante que precisa de análise.
+            _vol_anul_c = round(
+                sum(_volume_estornos_anulados_por_dia(resultado, conta).values()), 2
+            )
+            _resto_c = round(_diff - _vol_anul_c, 2)
+            if _vol_anul_c >= 0.01 and _resto_c < 0.01:
+                st.markdown((
+                    "**Diferença entre Banco e Sankhya (" + fmt_brl(_diff) + "):** é "
+                    "**100% de PIX recebidos e devolvidos que se anulam** (anulados por "
+                    "estorno — veja a aba ♻️). Nada a analisar."
+                ).replace("$", "\\$"))
+            elif _vol_anul_c >= 0.01:
+                _txt_causa = (
+                    "pode incluir a taxa de cartão lançada **duas vezes** no Sankhya "
+                    "(uma no valor bruto, outra como despesa), lançamento não lançado, ou item a conciliar."
+                    if _tem_cartao else
+                    "o app **não crava** a causa — pode ser lançamento não lançado no "
+                    "Sankhya (ex.: devolução), lançamento a mais/duplicado, tarifa, ou item a conciliar."
+                )
+                st.markdown((
+                    "**Diferença entre Banco e Sankhya (" + fmt_brl(_diff) + "):** "
+                    + fmt_brl(_vol_anul_c) + " são **PIX recebidos e devolvidos que se "
+                    "anulam** (aba ♻️ — não precisam de análise). Restam **"
+                    + fmt_brl(_resto_c) + "** a analisar: " + _txt_causa
+                ).replace("$", "\\$"))
+            elif _tem_cartao:
                 st.markdown((
                     "**Diferença entre Banco e Sankhya (" + fmt_brl(_diff) + "):** pode incluir a "
                     "taxa de cartão lançada **duas vezes** no Sankhya (uma no valor bruto, outra como "
