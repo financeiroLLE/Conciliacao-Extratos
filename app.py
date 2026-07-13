@@ -2565,7 +2565,13 @@ def pagina_dashboard():
 
     # ---- dados reais ----
     div = float(kpis.get("divergencia_sankhya_banco", 0.0))
-    bate = abs(div) < 0.005
+    # v5.47: o veredito olha os DOIS lados — banco sem explicação (falta
+    # conciliar) E Sankhya sem confirmação (divergência). Antes só olhava a
+    # divergência: quando ela zerava, o painel dizia "✓ Bate" mesmo com
+    # centenas de milhares sem explicação no banco.
+    falta_dash = float(kpis.get("falta_conciliar", 0.0))
+    pend_dash = round(abs(falta_dash) + abs(div), 2)
+    bate = pend_dash < 0.005
     rec_b = float(kpis.get("receitas_banco", 0.0))
     desp_b = float(kpis.get("despesas_banco", 0.0))
     liq = rec_b - desp_b
@@ -2656,9 +2662,14 @@ def pagina_dashboard():
     # ================= PAINEL (Opção 2 — duas colunas) =================
     # veredito
     if bate:
-        _hero_grad, _hero_fg, _hero_txt, _hero_sub = "linear-gradient(135deg,#124a34,#0e3a29)", "#b6f5cf", "✓ Bate com o banco", "Sankhya × Banco · diferença R$ 0,00"
+        _hero_grad, _hero_fg, _hero_txt, _hero_sub = "linear-gradient(135deg,#124a34,#0e3a29)", "#b6f5cf", "✓ Bate com o banco", "banco 100% explicado · Sankhya 100% confirmado · R$ 0,00 pendente"
     else:
-        _hero_grad, _hero_fg, _hero_txt, _hero_sub = "linear-gradient(135deg,#4a1a1a,#3a1414)", "#ffc2c2", "✗ Não bate com o banco", f"diferença Sankhya × Banco · R$ {_brl(div)}"
+        _partes_hero = []
+        if abs(falta_dash) >= 0.005:
+            _partes_hero.append(f"R$ {_brl(abs(falta_dash))} do banco sem explicação")
+        if abs(div) >= 0.005:
+            _partes_hero.append(f"R$ {_brl(abs(div))} do Sankhya sem confirmação")
+        _hero_grad, _hero_fg, _hero_txt, _hero_sub = "linear-gradient(135deg,#4a1a1a,#3a1414)", "#ffc2c2", "✗ Não bate com o banco", " · ".join(_partes_hero) if _partes_hero else f"diferença Sankhya × Banco · R$ {_brl(div)}"
     _cob_cor = "#7ee0a6" if n_contas >= TOTAL_CONTAS_GRUPO else "#FAC318"
     _cob_sub = "· todas conciliadas" if n_contas >= TOTAL_CONTAS_GRUPO else f"· faltam {TOTAL_CONTAS_GRUPO - n_contas}"
 
