@@ -245,14 +245,36 @@ def carregar_extrato_banco(
     if hasattr(arquivo, "read"):
         # UploadedFile do Streamlit
         nome = getattr(arquivo, "name", "")
-        engine = "xlrd" if nome.lower().endswith(".xls") else "openpyxl"
         try:
             arquivo.seek(0)
         except Exception:
             pass
+        # v5.54: engine pela ASSINATURA do conteúdo, não pela extensão —
+        # bancos/ERPs às vezes exportam xlsx renomeado de .xls (e vice-versa).
+        _cab = arquivo.read(4)
+        try:
+            arquivo.seek(0)
+        except Exception:
+            pass
+        if _cab[:4] == b"PK\x03\x04":
+            engine = "openpyxl"
+        elif _cab[:4] == b"\xd0\xcf\x11\xe0":
+            engine = "xlrd"
+        else:
+            engine = "xlrd" if nome.lower().endswith(".xls") else "openpyxl"
         sheets = pd.read_excel(arquivo, sheet_name=None, engine=engine, dtype=str)
     else:
-        engine = "xlrd" if str(arquivo).lower().endswith(".xls") else "openpyxl"
+        try:
+            with open(arquivo, "rb") as _fh:
+                _cab = _fh.read(4)
+        except Exception:
+            _cab = b""
+        if _cab[:4] == b"PK\x03\x04":
+            engine = "openpyxl"
+        elif _cab[:4] == b"\xd0\xcf\x11\xe0":
+            engine = "xlrd"
+        else:
+            engine = "xlrd" if str(arquivo).lower().endswith(".xls") else "openpyxl"
         sheets = pd.read_excel(arquivo, sheet_name=None, engine=engine, dtype=str)
 
     frames: list[pd.DataFrame] = []
@@ -383,8 +405,25 @@ def carregar_extrato_banco(
                 # 2) saldo final — última linha COM transação real (data + valor)
                 _pool_fim = _val.dropna(subset=["data"])
                 _pool_fim = _pool_fim[_pool_fim["tem_vtx"]]
+                # v5.54: TRAVA DE CONSISTÊNCIA — quando o extrato tem saldo
+                # corrido (saldo nas linhas de transação), só emite saldos se o
+                # encadeamento confere: saldo[i] ≈ saldo[i-1] + valor[i] em ≥90%
+                # dos pares. O Santander diário vem em ordem inversa com saldo
+                # espúrio na 1ª linha — sem a trava, o app exibiria inicial/final
+                # errados. Extratos estilo Itaú (saldo só em linhas "S A L D O")
+                # não têm corrido para validar e seguem o caminho de fallback.
+                if not _pool_fim.empty and len(_pool_fim) >= 3:
+                    _ok_fwd = _tot_par = 0
+                    _sv = _pool_fim[["saldo", "vtx"]].to_numpy()
+                    for _i in range(1, len(_sv)):
+                        _tot_par += 1
+                        if abs((_sv[_i - 1][0] + _sv[_i][1]) - _sv[_i][0]) < 0.011:
+                            _ok_fwd += 1
+                    if _tot_par >= 2 and (_ok_fwd / _tot_par) < 0.9:
+                        _pool_fim = _pool_fim.iloc[0:0]  # descarta: corrido não confere
                 if _pool_fim.empty:
                     _pool_fim = _val.dropna(subset=["data"])
+                    _pool_fim = _pool_fim[~_pool_fim["tem_vtx"]]  # só marcadores tipo "S A L D O"
                 if not _pool_fim.empty:
                     _pool_fim = _pool_fim.sort_values("data")
                     _lin_fim = _pool_fim.iloc[-1]
