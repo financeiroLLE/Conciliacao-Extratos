@@ -2619,9 +2619,9 @@ def pagina_dashboard():
     # ---- cabeçalho ----
     st.markdown(
         f"<div style='display:flex;justify-content:space-between;align-items:baseline;margin-bottom:14px'>"
-        f"<div style='font-size:14px;font-weight:600;color:#fff'>Visão executiva "
-        f"<span style='font-size:11px;font-weight:400;color:#9fb3d6'>· referência {per_txt}</span></div>"
-        f"<div style='font-size:11px;color:#6f88b8'>painel gerado em {gerado}</div></div>",
+        f"<div style='font-size:16px;font-weight:600;color:#fff'>Visão executiva "
+        f"<span style='font-size:12px;font-weight:400;color:#9fb3d6'>· referência {per_txt}</span></div>"
+        f"<div style='font-size:12px;color:#6f88b8'>painel gerado em {gerado}</div></div>",
         unsafe_allow_html=True,
     )
 
@@ -2704,26 +2704,27 @@ def pagina_dashboard():
             _inv_liq_saldo = 0.0
         if _inv_liq_saldo < -0.005:
             _linha_inv = (
-                f"<div style='display:flex;justify-content:space-between;font-size:13px;color:#cdd9f2;padding:5px 0'>"
-                f"<span>− Foi p/ investimento (líq.)</span><b style='color:#FAC318'>{_brl(abs(_inv_liq_saldo))}</b></div>"
+                f"<div style='display:flex;justify-content:space-between;font-size:14px;color:#cdd9f2;padding:8px 0'>"
+                f"<span>− Foi p/ investimento (líq.)</span><b style='color:#FAC318;font-weight:600'>{_brl(abs(_inv_liq_saldo))}</b></div>"
             )
         elif _inv_liq_saldo > 0.005:
             _linha_inv = (
-                f"<div style='display:flex;justify-content:space-between;font-size:13px;color:#cdd9f2;padding:5px 0'>"
-                f"<span>+ Voltou de investimento (líq.)</span><b style='color:#FAC318'>{_brl(_inv_liq_saldo)}</b></div>"
+                f"<div style='display:flex;justify-content:space-between;font-size:14px;color:#cdd9f2;padding:8px 0'>"
+                f"<span>+ Voltou de investimento (líq.)</span><b style='color:#FAC318;font-weight:600'>{_brl(_inv_liq_saldo)}</b></div>"
             )
         else:
             _linha_inv = ""
         _saldo_calc = round(saldo_ini + rec_b - desp_b + _inv_liq_saldo, 2)
         _fecha_saldo = abs(_saldo_calc - saldo_fim) < 0.01
-        _selo_saldo = ("<span style='font-size:11px;color:#7ee0a6'>= extrato ✓</span>" if _fecha_saldo
-                       else f"<span style='font-size:11px;color:#ffc94d'>calculado {_brl(_saldo_calc)} · conferir ⚠</span>")
+        _selo_saldo = ("<span style='font-size:12px;color:#7ee0a6;font-weight:600;margin-left:6px'>= extrato ✓</span>" if _fecha_saldo
+                       else f"<span style='font-size:12px;color:#ffc94d;font-weight:600;margin-left:6px'>calculado {_brl(_saldo_calc)} · conferir ⚠</span>")
         _saldo_inner = (
-            f"<div style='display:flex;justify-content:space-between;font-size:13px;color:#cdd9f2;padding:5px 0'><span>Saldo inicial</span><b style='color:#fff'>{_brl(saldo_ini)}</b></div>"
-            f"<div style='display:flex;justify-content:space-between;font-size:13px;color:#cdd9f2;padding:5px 0'><span>+ Receitas</span><b style='color:#7ee0a6'>{_brl(rec_b)}</b></div>"
-            f"<div style='display:flex;justify-content:space-between;font-size:13px;color:#cdd9f2;padding:5px 0'><span>− Despesas</span><b style='color:#ff9a9a'>{_brl(desp_b)}</b></div>"
-            f"<div style='border-bottom:1px solid #163062;padding-bottom:6px'>{_linha_inv}</div>"
-            f"<div style='display:flex;justify-content:space-between;align-items:center;margin-top:10px'><span style='font-size:13px;font-weight:700;color:#fff'>= Saldo final</span><span style='font-size:22px;font-weight:800;color:#fff'>{_brl(saldo_fim)} {_selo_saldo}</span></div>"
+            f"<div style='display:flex;justify-content:space-between;font-size:14px;color:#cdd9f2;padding:8px 0'><span>Saldo inicial</span><b style='color:#fff;font-weight:600'>{_brl(saldo_ini)}</b></div>"
+            f"<div style='display:flex;justify-content:space-between;font-size:14px;color:#cdd9f2;padding:8px 0'><span>+ Receitas</span><b style='color:#7ee0a6;font-weight:600'>{_brl(rec_b)}</b></div>"
+            f"<div style='display:flex;justify-content:space-between;font-size:14px;color:#cdd9f2;padding:8px 0'><span>− Despesas</span><b style='color:#ff9a9a;font-weight:600'>{_brl(desp_b)}</b></div>"
+            f"{_linha_inv}"
+            f"<div style='border-top:1px solid #1d3a72;margin:6px 0 10px'></div>"
+            f"<div style='display:flex;justify-content:space-between;align-items:baseline'><span style='font-size:14px;font-weight:700;color:#fff'>= Saldo final</span><span style='font-size:26px;font-weight:800;color:#fff'>{_brl(saldo_fim)}{_selo_saldo}</span></div>"
         )
     else:
         _saldo_inner = "<div style='font-size:12px;color:#9fb3d6;padding:10px 0'>este extrato não traz linha de saldo — o saldo aparece quando o extrato da conta rodada tiver saldo inicial/final.</div>"
@@ -2734,17 +2735,17 @@ def pagina_dashboard():
         _maior = f" · maior R$ {_brl(abs(c70['maior_val']))} ({c70.get('maior_dias', 0)}d)" if c70.get("maior_val") is not None else ""
         _c70_card = (
             "<div style='background:#0b2560;border:1px solid #163062;border-left:3px solid #ff9a9a;border-radius:14px;padding:16px 18px'>"
-            f"<div style='display:flex;justify-content:space-between;align-items:baseline'><span style='font-size:10px;letter-spacing:.4px;color:#9fb3d6'>PARADO NA CONTA 70</span><b style='font-size:19px;color:#ff9a9a'>R$ {_brl(c70.get('parado', 0))}</b></div>"
-            f"<div style='font-size:11px;color:#6f88b8;margin:4px 0 10px'>{c70.get('itens', 0)} itens{_maior}</div>"
+            f"<div style='display:flex;justify-content:space-between;align-items:baseline'><span style='font-size:12px;letter-spacing:1px;color:#9fb3d6'>PARADO NA CONTA 70</span><b style='font-size:22px;color:#ff9a9a'>R$ {_brl(c70.get('parado', 0))}</b></div>"
+            f"<div style='font-size:12px;color:#6f88b8;margin:4px 0 10px'>{c70.get('itens', 0)} itens{_maior}</div>"
             "<div style='display:flex;justify-content:space-between;border-top:1px solid #163062;padding-top:9px'>"
-            f"<div style='text-align:center'><div style='font-size:15px;font-weight:800;color:#7ee0a6'>{_ag.get('ate30',0)}</div><div style='font-size:9px;color:#9fb3d6'>≤30d</div></div>"
-            f"<div style='text-align:center'><div style='font-size:15px;font-weight:800;color:#FAC318'>{_ag.get('d31_60',0)}</div><div style='font-size:9px;color:#9fb3d6'>31–60</div></div>"
-            f"<div style='text-align:center'><div style='font-size:15px;font-weight:800;color:#cdd9f2'>{_ag.get('d61_90',0)}</div><div style='font-size:9px;color:#9fb3d6'>61–90</div></div>"
-            f"<div style='text-align:center'><div style='font-size:15px;font-weight:800;color:#ff9a9a'>{_ag.get('mais90',0)}</div><div style='font-size:9px;color:#9fb3d6'>+90d</div></div>"
+            f"<div style='text-align:center'><div style='font-size:16px;font-weight:800;color:#7ee0a6'>{_ag.get('ate30',0)}</div><div style='font-size:10px;color:#9fb3d6'>≤30d</div></div>"
+            f"<div style='text-align:center'><div style='font-size:16px;font-weight:800;color:#FAC318'>{_ag.get('d31_60',0)}</div><div style='font-size:10px;color:#9fb3d6'>31–60</div></div>"
+            f"<div style='text-align:center'><div style='font-size:16px;font-weight:800;color:#cdd9f2'>{_ag.get('d61_90',0)}</div><div style='font-size:10px;color:#9fb3d6'>61–90</div></div>"
+            f"<div style='text-align:center'><div style='font-size:16px;font-weight:800;color:#ff9a9a'>{_ag.get('mais90',0)}</div><div style='font-size:10px;color:#9fb3d6'>+90d</div></div>"
             "</div></div>"
         )
     else:
-        _c70_card = ("<div style='background:#0b2560;border:1px solid #163062;border-left:3px solid #6f88b8;border-radius:14px;padding:16px 18px;font-size:12px;color:#9fb3d6'>"
+        _c70_card = ("<div style='background:#0b2560;border:1px solid #163062;border-left:3px solid #6f88b8;border-radius:14px;padding:16px 18px;font-size:13.5px;color:#9fb3d6'>"
                      "<b style='color:#cdd9f2'>Parado na Conta 70</b><br>abra a aba <b style='color:#fff'>Atrelamento e Numeração — Conta 70</b> e processe para ver aqui.</div>")
 
     # tendência
@@ -2753,42 +2754,42 @@ def pagina_dashboard():
         _t_div = _seta(atual["Qtd Divergências"], prev.get("Qtd Divergências"), bom_subir=False)
         _t_c70 = _seta(abs(atual["Conta 70 (R$)"] or 0), abs(pd.to_numeric(prev.get("Conta 70 (R$)"), errors="coerce") or 0), bom_subir=False)
         _trend_label = f"TENDÊNCIA vs {prev.get('Mês', 'mês anterior')}"
-        _trend_html = f"<span style='font-size:13px;color:#cdd9f2'>% conc. <b>{_t_pct}</b> &nbsp; diverg. <b>{_t_div}</b> &nbsp; Conta 70 <b>{_t_c70}</b></span>"
+        _trend_html = f"<span style='font-size:13.5px;color:#cdd9f2'>% conc. <b>{_t_pct}</b> &nbsp; diverg. <b>{_t_div}</b> &nbsp; Conta 70 <b>{_t_c70}</b></span>"
     else:
         _trend_label = "TENDÊNCIA vs mês anterior"
-        _trend_html = "<span style='font-size:11px;color:#6f88b8'>suba o histórico abaixo para ativar ▲/▼</span>"
+        _trend_html = "<span style='font-size:12px;color:#6f88b8'>suba o histórico abaixo para ativar ▲/▼</span>"
 
     _dv_cor = "#7ee0a6" if qtd_div == 0 else "#ff9a9a"
 
     st.markdown(
-        "<div style='max-width:1180px;margin:0 auto'>"
+        "<div>"
         "<div style='display:grid;grid-template-columns:1.15fr 1fr;gap:16px'>"
         # ---- coluna esquerda: provas ----
         "<div style='display:flex;flex-direction:column;gap:16px'>"
         f"<div style='background:{_hero_grad};border-radius:16px;padding:24px;flex:1'>"
-        "<div style='font-size:11px;letter-spacing:.5px;color:#6ee3a0;margin-bottom:4px'>FECHAMENTO DO MÊS</div>"
-        f"<div style='font-size:27px;font-weight:800;color:{_hero_fg};line-height:1.1'>{_hero_txt}</div>"
-        f"<div style='font-size:13px;color:{_hero_fg};margin:6px 0 16px'>{_hero_sub}</div>"
+        "<div style='font-size:12px;letter-spacing:1.2px;color:#6ee3a0;margin-bottom:8px'>FECHAMENTO DO MÊS</div>"
+        f"<div style='font-size:30px;font-weight:800;color:{_hero_fg};line-height:1.15'>{_hero_txt}</div>"
+        f"<div style='font-size:14px;color:{_hero_fg};margin:8px 0 20px'>{_hero_sub}</div>"
         "<div style='display:flex;justify-content:space-between;align-items:center;border-top:1px solid #ffffff22;padding-top:12px'>"
-        "<span style='font-size:12px;color:#cdd9f2'>Contas conciliadas</span>"
-        f"<span style='font-size:20px;font-weight:800;color:{_cob_cor}'>{n_contas} <span style='font-size:13px'>de {TOTAL_CONTAS_GRUPO}</span> <span style='font-size:11px'>{_cob_sub}</span></span></div></div>"
+        "<span style='font-size:13px;color:#cdd9f2'>Contas conciliadas</span>"
+        f"<span style='font-size:22px;font-weight:800;color:{_cob_cor}'>{n_contas} <span style='font-size:14px'>de {TOTAL_CONTAS_GRUPO}</span> <span style='font-size:12px'>{_cob_sub}</span></span></div></div>"
         "<div style='background:#0b2560;border:1px solid #1b3a6e;border-radius:16px;padding:22px'>"
-        "<div style='font-size:11px;letter-spacing:.5px;color:#9fb3d6;margin-bottom:14px'>SALDO DA CONTA RODADA</div>"
+        "<div style='font-size:12px;letter-spacing:1.2px;color:#9fb3d6;margin-bottom:12px'>SALDO DA CONTA RODADA</div>"
         f"{_saldo_inner}</div>"
         "</div>"
         # ---- coluna direita: o resto ----
         "<div style='display:flex;flex-direction:column;gap:12px'>"
         "<div style='background:#0b2560;border:1px solid #163062;border-radius:14px;padding:16px 18px'>"
-        "<div style='font-size:10px;letter-spacing:.4px;color:#9fb3d6;margin-bottom:10px'>MOVIMENTAÇÃO DO MÊS</div>"
-        f"<div style='display:flex;justify-content:space-between'><span style='font-size:12px;color:#9fb3d6'>Receitas</span><b style='font-size:16px;color:#7ee0a6'>{_brl(rec_b)}</b></div>"
-        f"<div style='display:flex;justify-content:space-between;margin-top:4px'><span style='font-size:12px;color:#9fb3d6'>Despesas</span><b style='font-size:16px;color:#ff9a9a'>{_brl(desp_b)}</b></div>"
-        f"<div style='display:flex;justify-content:space-between;margin-top:4px;border-top:1px solid #163062;padding-top:6px'><span style='font-size:12px;color:#9fb3d6'>Líquido <span style='color:#FAC318'>(foi p/ invest.)</span></span><b style='font-size:16px;color:#fff'>{_brl(liq)}</b></div></div>"
+        "<div style='font-size:12px;letter-spacing:1.2px;color:#9fb3d6;margin-bottom:12px'>MOVIMENTAÇÃO DO MÊS</div>"
+        f"<div style='display:flex;justify-content:space-between'><span style='font-size:14px;color:#cdd9f2'>Receitas</span><b style='font-size:16px;color:#7ee0a6'>{_brl(rec_b)}</b></div>"
+        f"<div style='display:flex;justify-content:space-between;margin-top:4px'><span style='font-size:14px;color:#cdd9f2'>Despesas</span><b style='font-size:16px;color:#ff9a9a'>{_brl(desp_b)}</b></div>"
+        f"<div style='display:flex;justify-content:space-between;margin-top:4px;border-top:1px solid #163062;padding-top:6px'><span style='font-size:14px;color:#cdd9f2'>Líquido <span style='color:#FAC318'>(foi p/ invest.)</span></span><b style='font-size:16px;color:#fff'>{_brl(liq)}</b></div></div>"
         "<div style='display:grid;grid-template-columns:1fr 1fr;gap:12px'>"
-        f"<div style='background:#0b2560;border:1px solid #163062;border-top:3px solid {_dv_cor};border-radius:14px;padding:15px'><div style='font-size:10px;color:#9fb3d6'>DIVERGÊNCIAS</div><div style='font-size:20px;font-weight:800;color:{_dv_cor};margin-top:6px'>{qtd_div}</div><div style='font-size:10px;color:#6f88b8'>R$ {_brl(kpis.get('divergencia_sankhya_banco',0))}</div></div>"
-        f"<div style='background:#0b2560;border:1px solid #163062;border-top:3px solid #FAC318;border-radius:14px;padding:15px'><div style='font-size:10px;color:#9fb3d6'>INVESTIMENTOS</div><div style='font-size:20px;font-weight:800;color:#FAC318;margin-top:6px'>{_brl(inv_net)}</div><div style='font-size:10px;color:#6f88b8'>aplic × resgate</div></div>"
+        f"<div style='background:#0b2560;border:1px solid #163062;border-top:3px solid {_dv_cor};border-radius:14px;padding:15px'><div style='font-size:12px;letter-spacing:1px;color:#9fb3d6'>DIVERGÊNCIAS</div><div style='font-size:24px;font-weight:800;color:{_dv_cor};margin-top:6px'>{qtd_div}</div><div style='font-size:12px;color:#6f88b8'>R$ {_brl(kpis.get('divergencia_sankhya_banco',0))}</div></div>"
+        f"<div style='background:#0b2560;border:1px solid #163062;border-top:3px solid #FAC318;border-radius:14px;padding:15px'><div style='font-size:12px;letter-spacing:1px;color:#9fb3d6'>INVESTIMENTOS</div><div style='font-size:24px;font-weight:800;color:#FAC318;margin-top:6px'>{_brl(inv_net)}</div><div style='font-size:12px;color:#6f88b8'>aplic × resgate</div></div>"
         "</div>"
         f"{_c70_card}"
-        f"<div style='background:#0b2560;border:1px solid #163062;border-radius:14px;padding:14px 18px;display:flex;justify-content:space-between;align-items:center'><span style='font-size:11px;color:#9fb3d6'>{_trend_label}</span>{_trend_html}</div>"
+        f"<div style='background:#0b2560;border:1px solid #163062;border-radius:14px;padding:14px 18px;display:flex;justify-content:space-between;align-items:center'><span style='font-size:12px;letter-spacing:1px;color:#9fb3d6'>{_trend_label}</span>{_trend_html}</div>"
         "</div>"
         "</div></div>",
         unsafe_allow_html=True,
