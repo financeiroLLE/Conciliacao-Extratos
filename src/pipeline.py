@@ -579,11 +579,21 @@ def executar_pipeline(
     banco_mov = _eh_movimentado(banco).copy() if not banco.empty else banco
     sistema_mov = _eh_movimentado(sistema).copy() if not sistema.empty else sistema
 
-    # v5.0: detector de estornos (banco × banco) ANTES do match.
-    # Pares anulados (saldo zero) são removidos do banco antes da conciliação.
-    # Estornos parciais: par é removido e adicionada uma linha sintética com saldo restante.
+    # v5.0/v5.46: detector de estornos (banco × banco) ANTES do match, agora
+    # CONSCIENTE DO SANKHYA. Se o lançamento original (ex.: recebimento PIX) tem
+    # par exato disponível no Sankhya (mesma conta, mesmo valor, data dentro da
+    # tolerância), o par recebimento+devolução NÃO é anulado: o recebimento
+    # concilia normalmente no match (a baixa do Sankhya está certa — o dinheiro
+    # entrou) e a devolução fica visível em Pendentes como "no banco · falta
+    # lançar no Sankhya" (ação real: lançar a devolução/estornar a baixa no ERP).
+    # Com dois recebimentos iguais e só uma baixa, o app distribui: protege um
+    # (concilia) e anula o outro por estorno. Pares sem nada no Sankhya
+    # continuam anulados como sempre. Corrige a divergência falsa "baixado no
+    # Sankhya · sem par no banco" que aparecia nesses casos.
     from src.matching.estornos import detectar_estornos
-    res_estornos = detectar_estornos(banco_mov)
+    res_estornos = detectar_estornos(
+        banco_mov, sistema=sistema_mov, tolerancia_dias=tolerancia_dias
+    )
     if res_estornos.indices_anulados or res_estornos.indices_parciais_removidos:
         idx_remover = res_estornos.indices_anulados | res_estornos.indices_parciais_removidos
         banco_mov = banco_mov.reset_index(drop=True)
