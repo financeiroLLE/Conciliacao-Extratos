@@ -75,8 +75,14 @@ def _texto_cabecalho(arquivo) -> str:
 
 
 def _empresa(txt: str) -> str:
-    m = re.search(r"(?:cliente|associado)\s*[:|]?\s*([A-Za-zÀ-Ú][A-Za-zÀ-Ú .&]{3,60})", txt, re.I)
-    return re.sub(r"\s+", " ", m.group(1)).strip() if m else ""
+    m = re.search(r"(?:cliente|associado|nome)\s*[:|]?\s*([A-Za-zÀ-Ú][A-Za-zÀ-Ú .&]{3,60})", txt, re.I)
+    if not m:
+        return ""
+    emp = re.sub(r"\s+", " ", m.group(1)).strip()
+    # v5.51: em xls o cabeçalho vira uma linha só — corta o rótulo seguinte
+    # que gruda no nome ("... LTDA Agência/Conta: ...").
+    emp = re.sub(r"\s+(ag[êe]ncia|conta|data|hor[áa]rio)\b.*$", "", emp, flags=re.I).strip()
+    return emp
 
 
 def detectar_conta_extrato(arquivo) -> ContaDetectada:
@@ -97,12 +103,21 @@ def detectar_conta_extrato(arquivo) -> ContaDetectada:
         banco = "Caixa"
     elif "ITAU" in u or "ITAÚ" in u:
         banco = "Itaú"
+    elif "EXTRATO DE CONTA CORRENTE E CONTA INVESTIMENTO" in u:
+        # v5.51: export diário do Itaú (bankline) NÃO escreve "Itaú" em lugar
+        # nenhum — a assinatura é o título acima + rótulo "Agência/Conta:".
+        banco = "Itaú"
     else:
         banco = ""
 
     ag = conta = ""
 
-    if banco == "Bradesco":
+    # v5.51: rótulo "Agência/Conta: 0023/ 64321-6" (Itaú diário) — específico,
+    # testa ANTES dos padrões por banco (o genérico pegava a agência como conta).
+    m_agconta = re.search(r"AG[ÊE]NCIA\s*/\s*CONTA\s*[:\-]?\s*(\d+)\s*/\s*([\d.\-]+)", u)
+    if m_agconta:
+        ag, conta = m_agconta.group(1), m_agconta.group(2)
+    elif banco == "Bradesco":
         m = re.search(r"AG[ÊE]NCIA\s*[:\-]?\s*(\d+)\s*CONTA\s*[:\-]?\s*([\d.\-]+)", u)
         if m:
             ag, conta = m.group(1), m.group(2)
