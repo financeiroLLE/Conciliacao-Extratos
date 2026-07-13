@@ -3338,13 +3338,31 @@ def tela_upload():
                 idx_match = _melhor_match_conta(nome_default, contas_sankhya)
                 # v5.9: se lemos o número da conta no extrato, ele é o critério
                 # mais forte — casa com a conta do Sankhya que contém esse número.
+                _casou_por_digitos = False
                 if conta_det is not None and getattr(conta_det, "conta_digitos", ""):
                     import re as _re_conta
                     alvo = conta_det.conta_digitos
                     for _j, _opt in enumerate(contas_sankhya):
                         if alvo and alvo in _re_conta.sub(r"\D", "", str(_opt)):
                             idx_match = _j
+                            _casou_por_digitos = True
                             break
+                # v5.51: conta do Sankhya SEM número (ex.: "ITAU E.E. APOIO")
+                # — casa pela EMPRESA do cabeçalho do extrato. Só seleciona se
+                # exatamente UMA conta bater; ambiguidade = não chuta.
+                if (not _casou_por_digitos and idx_match is None
+                        and conta_det is not None and getattr(conta_det, "empresa", "")):
+                    _emp_n = _norm_conta(conta_det.empresa)
+                    _tok_banco = {"itau", "itaú", "bradesco", "sicredi",
+                                  "santander", "caixa", "banco", "ag", "cc", "c", "conta"}
+                    _cands_emp = []
+                    for _j, _opt in enumerate(contas_sankhya):
+                        _toks = [t for t in _norm_conta(_opt).split()
+                                 if t not in _tok_banco and not t.isdigit() and len(t) > 1]
+                        if _toks and all(t in _emp_n.split() for t in _toks):
+                            _cands_emp.append(_j)
+                    if len(_cands_emp) == 1:
+                        idx_match = _cands_emp[0]
                 idx_default = idx_match if idx_match is not None else len(opcoes) - 1
                 escolha = st.selectbox(
                     "Extrato Bancário (identificador da conta)",
