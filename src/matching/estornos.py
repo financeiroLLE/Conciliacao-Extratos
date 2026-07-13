@@ -94,11 +94,28 @@ def _eh_estorno_historico(historico: str) -> bool:
     return any(termo in norm for termo in TERMOS_ESTORNO)
 
 
-def detectar_estornos(banco: pd.DataFrame) -> ResultadoEstornos:
+def detectar_estornos(
+    banco: pd.DataFrame,
+    sistema: pd.DataFrame | None = None,
+    tolerancia_dias: int = 2,
+) -> ResultadoEstornos:
     """Detecta pares de estorno no extrato bancário.
+
+    v5.46 — consciência do Sankhya: quando `sistema` é informado, um par só é
+    consumido (anulado/parcial) se o lançamento ORIGINAL não tiver contrapartida
+    exata disponível no Sankhya (mesma conta, mesmo valor com sinal, data dentro
+    de `tolerancia_dias`). Se tiver, o original é PROTEGIDO: ele concilia
+    normalmente no match e o estorno (devolução) fica em pendências — a ação
+    real é lançar a devolução/estornar a baixa no ERP. Cada linha do Sankhya
+    protege no máximo UM original (distribuição: com dois recebimentos iguais e
+    uma baixa só, um é protegido e o outro é anulado por estorno).
 
     Args:
         banco: DataFrame do extrato com colunas data, valor, historico, conta.
+        sistema: (opcional) DataFrame do Sankhya (movimentado) com colunas
+            data, valor, conta — usado só para a checagem de contrapartida.
+        tolerancia_dias: janela de data para considerar a contrapartida do
+            Sankhya disponível (mesma tolerância do match exato).
 
     Returns:
         ResultadoEstornos com anulados (saldo zero) e parciais (saldo != zero).
@@ -124,6 +141,43 @@ def detectar_estornos(banco: pd.DataFrame) -> ResultadoEstornos:
 
     if estornos.empty or candidatos.empty:
         return ResultadoEstornos()
+
+    # v5.46: pool de contrapartidas disponíveis no Sankhya. Cada linha do
+    # Sankhya pode proteger no máximo UM original do banco (_usado=True depois
+    # de reservada) — é isso que faz a distribuição funcionar quando há dois
+    # recebimentos iguais e só uma baixa.
+    sis_disp = None
+    if sistema is not None and not sistema.empty and "valor" in sistema.columns:
+        cols_sis = [c for c in ("conta", "data", "valor") if c in sistema.columns]
+        if {"data", "valor"}.issubset(cols_sis):
+            sis_disp = sistema[cols_sis].copy()
+            sis_disp["data"] = pd.to_datetime(sis_disp["data"], errors="coerce")
+            sis_disp["valor"] = pd.to_numeric(sis_disp["valor"], errors="coerce").round(2)
+            sis_disp = sis_disp.dropna(subset=["data", "valor"]).reset_index(drop=True)
+            if "conta" not in sis_disp.columns:
+                sis_disp["conta"] = ""
+            sis_disp["_usado"] = False
+            if sis_disp.empty:
+                sis_disp = None
+
+    originais_protegidos: set[int] = set()
+
+    def _proteger_se_tem_par_sankhya(row) -> bool:
+        """True se o original tem contrapartida exata disponível no Sankhya.
+        Reserva a linha do Sankhya (uma linha protege um original só)."""
+        if sis_disp is None:
+            return False
+        alvo = round(float(row["valor"]), 2)
+        m = sis_disp[
+            (~sis_disp["_usado"])
+            & (sis_disp["conta"] == row["conta"])
+            & (sis_disp["valor"] == alvo)
+            & ((sis_disp["data"] - row["data"]).abs().dt.days <= tolerancia_dias)
+        ]
+        if m.empty:
+            return False
+        sis_disp.loc[m.index[0], "_usado"] = True
+        return True
 
     anulados_rows = []
     parciais_rows = []
@@ -161,9 +215,25 @@ def detectar_estornos(banco: pd.DataFrame) -> ResultadoEstornos:
         cand_exato = cand[cand["_diff_valor"] < 0.005]  # diferença < meio centavo
 
         if not cand_exato.empty:
-            # Anulação total
+            # Anulação total — v5.46: escolhe o candidato mais próximo em data
+            # que NÃO tem contrapartida no Sankhya. Candidatos COM contrapartida
+            # são protegidos (vão conciliar no match; a devolução fica pendente).
             cand_exato = cand_exato.sort_values("_dias", key=lambda x: x.abs())
-            par = cand_exato.iloc[0]
+            par = None
+            for _, c_row in cand_exato.iterrows():
+                io_ = int(c_row["_idx_orig"])
+                if io_ in originais_protegidos:
+                    continue  # já protegido por outra checagem
+                if _proteger_se_tem_par_sankhya(c_row):
+                    originais_protegidos.add(io_)
+                    continue  # tem baixa no Sankhya → concilia no match
+                par = c_row
+                break
+            if par is None:
+                # Todos os candidatos exatos têm baixa no Sankhya: nada é
+                # anulado. A devolução segue para pendências ("no banco ·
+                # falta lançar no Sankhya").
+                continue
             anulados_rows.append({
                 "data_original": par["data"],
                 "data_estorno": est["data"],
@@ -190,7 +260,21 @@ def detectar_estornos(banco: pd.DataFrame) -> ResultadoEstornos:
             if cand_maior.empty:
                 continue
             cand_maior = cand_maior.sort_values("_dias", key=lambda x: x.abs())
-            par = cand_maior.iloc[0]
+            # v5.46: mesma proteção do Sankhya no parcial — se o original tem
+            # contrapartida exata no ERP, ele não pode ser consumido pelo
+            # estorno parcial (concilia no match; o estorno fica pendente).
+            par = None
+            for _, c_row in cand_maior.iterrows():
+                io_ = int(c_row["_idx_orig"])
+                if io_ in originais_protegidos:
+                    continue
+                if _proteger_se_tem_par_sankhya(c_row):
+                    originais_protegidos.add(io_)
+                    continue
+                par = c_row
+                break
+            if par is None:
+                continue
             saldo_liq = round(float(par["valor"]) + float(est["valor"]), 2)
             parciais_rows.append({
                 "data_original": par["data"],
