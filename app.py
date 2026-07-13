@@ -3299,15 +3299,34 @@ def tela_upload():
                         if conta_det.identificador:
                             nome_default = conta_det.identificador
                     else:
-                        st.markdown(
-                            '<div style="display:flex;align-items:center;gap:12px;background:#0b2560;'
-                            'border-radius:10px;border-left:6px solid #6f88b8;padding:9px 13px;margin:2px 0 8px;">'
-                            '<span style="background:#6f88b8;color:#041747;font-size:11px;font-weight:700;'
-                            'letter-spacing:.03em;padding:3px 11px;border-radius:6px;">NÃO IDENTIFICADO</span>'
-                            '<span style="color:#9fb3d6;font-size:12.5px;">não consegui ler a conta do cabeçalho '
-                            '— confirme na lista abaixo</span></div>',
-                            unsafe_allow_html=True,
-                        )
+                        # v5.54: se agência/conta FORAM lidas (só faltou o nome do
+                        # banco — ex.: Santander diário, que não escreve o banco),
+                        # o selo diz a verdade em vez de "não consegui ler".
+                        if getattr(conta_det, "conta", "") or getattr(conta_det, "agencia", ""):
+                            _pedacos = []
+                            if conta_det.agencia:
+                                _pedacos.append(f"agência {conta_det.agencia}")
+                            if conta_det.conta:
+                                _pedacos.append(f"conta {conta_det.conta}")
+                            st.markdown(
+                                '<div style="display:flex;align-items:center;gap:12px;background:#0b2560;'
+                                'border-radius:10px;border-left:6px solid #FAC318;padding:9px 13px;margin:2px 0 8px;">'
+                                '<span style="background:#FAC318;color:#041747;font-size:11px;font-weight:700;'
+                                'letter-spacing:.03em;padding:3px 11px;border-radius:6px;">CONTA LIDA</span>'
+                                f'<span style="color:#eaf0fb;font-size:12.5px;">{" · ".join(_pedacos)} '
+                                '— o extrato não diz o banco; confirme o nome na lista abaixo</span></div>',
+                                unsafe_allow_html=True,
+                            )
+                        else:
+                            st.markdown(
+                                '<div style="display:flex;align-items:center;gap:12px;background:#0b2560;'
+                                'border-radius:10px;border-left:6px solid #6f88b8;padding:9px 13px;margin:2px 0 8px;">'
+                                '<span style="background:#6f88b8;color:#041747;font-size:11px;font-weight:700;'
+                                'letter-spacing:.03em;padding:3px 11px;border-radius:6px;">NÃO IDENTIFICADO</span>'
+                                '<span style="color:#9fb3d6;font-size:12.5px;">não consegui ler a conta do cabeçalho '
+                                '— confirme na lista abaixo</span></div>',
+                                unsafe_allow_html=True,
+                            )
                 except Exception:
                     conta_det = None
 
