@@ -3207,11 +3207,47 @@ def tela_upload():
         section_title("EXTRATO BANCÁRIO")
         st.caption("Formato padronizado: Data, Histórico, Documento, Valor (R$). Aceita XLS, XLSX ou PDF do extrato bancário (Itaú, Sicredi, Bradesco, Caixa, Santander).")
         if modo == "1 conta por vez":
-            arquivo_banco = st.file_uploader(
-                "Arraste o extrato",
+            # v5.48: aceita VÁRIOS arquivos da MESMA conta (ex.: Itaú PISA salvo
+            # por dia — 01, 02, 03...). Todos entram com o mesmo identificador e
+            # o app junta tudo antes de conciliar. Proteções:
+            #   - arquivo idêntico subido 2x é ignorado (hash), senão as linhas
+            #     contariam em dobro;
+            #   - se algum arquivo parecer ser de OUTRA conta (agência/conta do
+            #     cabeçalho diferentes), avisa antes de executar.
+            _arqs_single = st.file_uploader(
+                "Arraste o(s) extrato(s) — pode subir vários da MESMA conta (ex.: um por dia)",
                 type=["xlsx", "xls", "pdf"],
                 key="banco_single",
+                accept_multiple_files=True,
+                help="Todos os arquivos aqui devem ser da MESMA conta. O app "
+                "junta tudo (ex.: extratos diários) e concilia como um período só. "
+                "Para contas diferentes, use o modo 'Várias contas de uma vez'.",
             )
+            if _arqs_single and not isinstance(_arqs_single, list):
+                _arqs_single = [_arqs_single]
+            _arqs_single = _arqs_single or []
+            # dedup por conteúdo (mesmo arquivo subido em duplicata)
+            if _arqs_single:
+                import hashlib as _hl_single
+                _vistos_single, _unicos, _dups = set(), [], []
+                for _f in _arqs_single:
+                    try:
+                        _h = _hl_single.md5(_f.getvalue()).hexdigest()
+                    except Exception:
+                        _unicos.append(_f)
+                        continue
+                    if _h in _vistos_single:
+                        _dups.append(_f.name)
+                    else:
+                        _vistos_single.add(_h)
+                        _unicos.append(_f)
+                if _dups:
+                    st.info(
+                        "ℹ️ Arquivo(s) idêntico(s) ignorado(s) para não contar em "
+                        "dobro: " + ", ".join(sorted(set(_dups)))
+                    )
+                _arqs_single = _unicos
+            arquivo_banco = _arqs_single[0] if _arqs_single else None
             # v5.8: auto-preenche o nome da conta a partir do nome do arquivo.
             # v5.9: e, quando dá, LÊ a conta do cabeçalho do próprio extrato
             # (banco + agência + conta), pra não depender do nome do arquivo.
@@ -3232,13 +3268,15 @@ def tela_upload():
                     if conta_det.confianca == "alta":
                         _cor = _cores_banco.get(conta_det.banco, "#6f88b8")
                         _emp = f" · {conta_det.empresa}" if conta_det.empresa else ""
+                        _qtd_arqs = (f' · {len(_arqs_single)} arquivos'
+                                     if len(_arqs_single) > 1 else '')
                         st.markdown(
                             f'<div style="display:flex;align-items:center;gap:12px;background:#0b2560;'
                             f'border-radius:10px;border-left:6px solid {_cor};padding:9px 13px;margin:2px 0 8px;">'
                             f'<span style="background:{_cor};color:#fff;font-size:11px;font-weight:700;'
                             f'letter-spacing:.03em;padding:3px 11px;border-radius:6px;">{conta_det.banco.upper()}</span>'
                             f'<span style="color:#eaf0fb;font-size:12.5px;">agência {conta_det.agencia} · '
-                            f'conta {conta_det.conta}{_emp}</span></div>',
+                            f'conta {conta_det.conta}{_emp}{_qtd_arqs}</span></div>',
                             unsafe_allow_html=True,
                         )
                         if conta_det.identificador:
@@ -3255,6 +3293,37 @@ def tela_upload():
                         )
                 except Exception:
                     conta_det = None
+
+            # v5.48: com vários arquivos, confere se TODOS parecem ser da mesma
+            # conta (agência+conta do cabeçalho). Divergência = aviso, não trava
+            # — o cabeçalho pode falhar num arquivo e estar certo nos outros.
+            if len(_arqs_single) > 1 and conta_det is not None and getattr(conta_det, "confianca", "") == "alta":
+                try:
+                    import io as _io_chk
+                    from src.parsers.deteccao_conta import detectar_conta_extrato as _det_chk
+                    _divergentes = []
+                    for _f in _arqs_single[1:]:
+                        try:
+                            _bc = _io_chk.BytesIO(_f.getvalue())
+                            _bc.name = _f.name
+                            _d2 = _det_chk(_bc)
+                            if (getattr(_d2, "confianca", "") == "alta"
+                                    and getattr(_d2, "conta_digitos", "")
+                                    and getattr(conta_det, "conta_digitos", "")
+                                    and _d2.conta_digitos != conta_det.conta_digitos):
+                                _divergentes.append(f"{_f.name} (conta {_d2.conta})")
+                        except Exception:
+                            continue
+                    if _divergentes:
+                        st.warning(
+                            "⚠️ Estes arquivos parecem ser de OUTRA conta e vão ser "
+                            "somados como se fossem da mesma: "
+                            + "; ".join(_divergentes)
+                            + ". Se são contas diferentes, use o modo "
+                            "'Várias contas de uma vez'."
+                        )
+                except Exception:
+                    pass
 
             # v5.35: se o Sankhya já foi enviado, oferece os nomes de conta dele
             # numa lista (string idêntica à que o matcher usa), em vez de um campo
@@ -3301,9 +3370,11 @@ def tela_upload():
                     key="conta_single",
                     help="Rótulo único da conta. Mínimo 3 caracteres.",
                 ).strip()
+            # v5.48: TODOS os arquivos entram com o MESMO identificador — o
+            # pipeline concatena os extratos (ex.: diários) antes de conciliar.
             arquivos_banco = (
-                [(nome_conta, arquivo_banco)]
-                if arquivo_banco and nome_conta
+                [(nome_conta, _f) for _f in _arqs_single]
+                if _arqs_single and nome_conta
                 else []
             )
         else:
@@ -3407,11 +3478,13 @@ def tela_upload():
     # num clique, em vez de separar calado em duas contas.
     if contas_sankhya and arquivos_banco:
         norm_sankhya = {_norm_conta(c): c for c in contas_sankhya}
+        _nomes_avisados: set[str] = set()  # v5.48: vários arquivos = mesma conta → 1 aviso só
         for _nome, _f in arquivos_banco:
-            if _nome in contas_sankhya:
+            if _nome in contas_sankhya or _nome in _nomes_avisados:
                 continue
             _alvo = norm_sankhya.get(_norm_conta(_nome))
             if _alvo and _alvo != _nome:
+                _nomes_avisados.add(_nome)
                 _c1, _c2 = st.columns([4, 1])
                 with _c1:
                     st.warning(
