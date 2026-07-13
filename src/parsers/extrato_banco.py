@@ -307,6 +307,13 @@ def carregar_extrato_banco(
             deb = deb.fillna(0.0) if hasattr(deb, "fillna") else deb
             out["valor"] = cred - deb
         out["conta"] = conta
+        # v5.47: guarda o SALDO CRU da linha (quando a coluna existe) só para o
+        # dedup abaixo. Duas transações reais idênticas têm saldos correntes
+        # DIFERENTES; o recap do Bradesco repete a linha com o MESMO saldo.
+        if "saldo" in mapa:
+            out["_saldo_dedup"] = df_aba[mapa["saldo"]].apply(_parse_valor_brl)
+        else:
+            out["_saldo_dedup"] = pd.NA
 
         # descarta linhas que NÃO são transação: totalizadores ("Total") e
         # cabeçalhos repetidos no meio do extrato ("Data"/"Lançamento").
@@ -315,9 +322,20 @@ def carregar_extrato_banco(
         out = out[~_lixo].reset_index(drop=True)
 
         # alguns extratos (ex.: Bradesco) trazem um recap "Últimos Lançamentos"
-        # que REPETE linhas do corpo principal. Remove duplicatas exatas
-        # (mesma data + histórico + valor) para não contar em dobro.
-        out = out.drop_duplicates(subset=["data", "historico", "valor"]).reset_index(drop=True)
+        # que REPETE linhas do corpo principal. Remove duplicatas exatas —
+        # v5.47: agora INCLUINDO O SALDO na chave quando o extrato tem a coluna.
+        # Motivo: duas transações reais idênticas (ex.: cliente paga 2× o mesmo
+        # PIX no mesmo dia) têm saldos correntes DIFERENTES e são dinheiro de
+        # verdade — o dedup antigo (data+histórico+valor) descartava a segunda
+        # e o extrato "perdia" a linha. O recap repete a linha com o MESMO
+        # saldo, então continua sendo removido normalmente.
+        if out["_saldo_dedup"].notna().any():
+            out = out.drop_duplicates(
+                subset=["data", "historico", "valor", "_saldo_dedup"]
+            ).reset_index(drop=True)
+        else:
+            out = out.drop_duplicates(subset=["data", "historico", "valor"]).reset_index(drop=True)
+        out = out.drop(columns=["_saldo_dedup"], errors="ignore")
 
         # saldo do extrato (coluna "Saldo (R$)"): emite saldo inicial e final,
         # para o fechamento (saldo inicial + receitas − despesas = saldo final).
