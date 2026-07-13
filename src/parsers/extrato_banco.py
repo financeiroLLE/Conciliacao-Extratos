@@ -337,31 +337,71 @@ def carregar_extrato_banco(
             out = out.drop_duplicates(subset=["data", "historico", "valor"]).reset_index(drop=True)
         out = out.drop(columns=["_saldo_dedup"], errors="ignore")
 
-        # saldo do extrato (coluna "Saldo (R$)"): emite saldo inicial e final,
-        # para o fechamento (saldo inicial + receitas − despesas = saldo final).
-        if "saldo" in mapa:
-            _saldo_col = df_aba[mapa["saldo"]].apply(_parse_valor_brl)
-            _hist_raw = (df_aba[mapa["historico"]].fillna("").astype(str) if "historico" in mapa else pd.Series([""] * len(df_aba)))
-            _dt = _parse_data_robusto(df_aba[mapa["data"]], ano_referencia=ano_referencia)
-            _val = pd.DataFrame({"data": _dt.values, "saldo": _saldo_col.values, "hist": _hist_raw.str.upper().values})
-            _val = _val.dropna(subset=["data"])
-            _val = _val[_val["saldo"].notna()]
-            # tira totalizador da busca do saldo final
-            _val = _val[~_val["hist"].str.strip().isin(["TOTAL", "TOTAIS"])]
-            if not _val.empty:
-                _val = _val.sort_values("data")
-                _ant = _val[_val["hist"].str.contains("SALDO ANTERIOR", na=False)]
-                _lin_ini = _ant.iloc[0] if not _ant.empty else _val.iloc[0]
-                _lin_fim = _val.iloc[-1]
-                _saldos = pd.DataFrame([
-                    {"data": _lin_ini["data"], "historico": "SALDO ANTERIOR", "documento": "", "valor": float(_lin_ini["saldo"]), "conta": conta},
-                    {"data": _lin_fim["data"], "historico": "SALDO FINAL", "documento": "", "valor": float(_lin_fim["saldo"]), "conta": conta},
-                ])
-                out = pd.concat([out, _saldos], ignore_index=True)
-
-        # remove linhas sem data ou valor zero/sem valor
+        # remove linhas sem data ou valor zero/sem valor — v5.47: ANTES de emitir
+        # as linhas de saldo, senão um SALDO FINAL de R$ 0,00 legítimo (conta
+        # zerada) era apagado pelo filtro de valor.
         out = out.dropna(subset=["data"])
         out = out[out["valor"] != 0].reset_index(drop=True)
+
+        # saldo do extrato (coluna "Saldo (R$)"): emite saldo inicial e final,
+        # para o fechamento (saldo inicial + receitas − despesas = saldo final).
+        # v5.47 — três correções, validadas com extrato Sicredi real:
+        #   1. A linha "Saldo Anterior" costuma vir SEM DATA (é o saldo antes da
+        #      1ª transação). Antes era descartada e o "inicial" virava o saldo
+        #      DEPOIS da 1ª transação (errado). Agora ela é aceita sem data.
+        #   2. O saldo FINAL agora vem da última linha COM TRANSAÇÃO REAL
+        #      (célula de valor preenchida). Antes pegava rodapés de
+        #      "lançamentos futuros/agendados" (ex.: CESTA EMPRESARIAL com data
+        #      além do período e saldo vazio → virava 0,00).
+        #   3. Sem linha "Saldo Anterior", o inicial é DERIVADO com aritmética
+        #      exata: saldo da 1ª transação − valor da 1ª transação.
+        if "saldo" in mapa:
+            _saldo_raw = df_aba[mapa["saldo"]]
+            _tem_saldo_cel = _saldo_raw.notna() & (_saldo_raw.astype(str).str.strip() != "")
+            _saldo_col = _saldo_raw.apply(_parse_valor_brl)
+            _hist_raw = (df_aba[mapa["historico"]].fillna("").astype(str) if "historico" in mapa else pd.Series([""] * len(df_aba)))
+            _dt = _parse_data_robusto(df_aba[mapa["data"]], ano_referencia=ano_referencia)
+            if "valor" in mapa:
+                _vtx_raw = df_aba[mapa["valor"]]
+                _tem_vtx = _vtx_raw.notna() & (_vtx_raw.astype(str).str.strip() != "")
+                _vtx = _vtx_raw.apply(_parse_valor_brl)
+            else:
+                _tem_vtx = pd.Series([False] * len(df_aba))
+                _vtx = pd.Series([0.0] * len(df_aba))
+            _val = pd.DataFrame({
+                "data": _dt.values,
+                "saldo": _saldo_col.values,
+                "hist": _hist_raw.str.upper().values,
+                "vtx": _vtx.values,
+                "tem_vtx": _tem_vtx.values,
+            })
+            _val = _val[_tem_saldo_cel.values]
+            _val = _val[~_val["hist"].str.strip().isin(["TOTAL", "TOTAIS"])]
+            if not _val.empty:
+                # 1) linha "SALDO ANTERIOR" — aceita SEM data
+                _ant = _val[_val["hist"].str.contains("SALDO ANTERIOR", na=False)]
+                # 2) saldo final — última linha COM transação real (data + valor)
+                _pool_fim = _val.dropna(subset=["data"])
+                _pool_fim = _pool_fim[_pool_fim["tem_vtx"]]
+                if _pool_fim.empty:
+                    _pool_fim = _val.dropna(subset=["data"])
+                if not _pool_fim.empty:
+                    _pool_fim = _pool_fim.sort_values("data")
+                    _lin_fim = _pool_fim.iloc[-1]
+                    _data_min = _pool_fim["data"].min()
+                    if not _ant.empty:
+                        _lin_ini_saldo = float(_ant.iloc[0]["saldo"])
+                        _data_ini = _ant.iloc[0]["data"] if pd.notna(_ant.iloc[0]["data"]) else _data_min
+                    else:
+                        # 3) deriva o inicial: saldo da 1ª transação − valor dela
+                        _prim = _pool_fim.iloc[0]
+                        _lin_ini_saldo = round(float(_prim["saldo"]) - float(_prim["vtx"]), 2)
+                        _data_ini = _data_min
+                    _saldos = pd.DataFrame([
+                        {"data": _data_ini, "historico": "SALDO ANTERIOR", "documento": "", "valor": _lin_ini_saldo, "conta": conta},
+                        {"data": _lin_fim["data"], "historico": "SALDO FINAL", "documento": "", "valor": float(_lin_fim["saldo"]), "conta": conta},
+                    ])
+                    out = pd.concat([out, _saldos], ignore_index=True)
 
         frames.append(out)
 
