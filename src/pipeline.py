@@ -344,11 +344,26 @@ def _calcular_kpis(
     if conciliados.empty:
         total_conciliado = 0.0
         receitas_conciliadas = despesas_conciliadas = 0.0
+        total_conciliado_mov = 0.0
+        total_conciliado_invest = 0.0
     else:
         c = conciliados
         total_conciliado = float(c["banco_valor"].abs().sum())
         receitas_conciliadas = float(c[c["banco_valor"] > 0]["banco_valor"].sum())
         despesas_conciliadas = float(c[c["banco_valor"] < 0]["banco_valor"].abs().sum())
+        # v5.49: separa os pares de MOVIMENTAÇÃO dos pares de investimento
+        # (aplicação/resgate/rendimento). O % conciliado usava total_conciliado
+        # (com investimentos) sobre total_banco (SEM investimentos) — base
+        # mista que estourava acima de 100% (ex.: 165,5%) em conta com muita
+        # aplicação automática e pouca movimentação.
+        try:
+            from src.classificacao.movimento import classificar_movimentacao as _cls_mov
+            _cat_par = c["banco_historico"].fillna("").astype(str).apply(_cls_mov)
+            _mask_mov_par = (_cat_par == "movimentacao").values
+            total_conciliado_mov = float(c.loc[_mask_mov_par, "banco_valor"].abs().sum())
+        except Exception:
+            total_conciliado_mov = total_conciliado
+        total_conciliado_invest = round(total_conciliado - total_conciliado_mov, 2)
 
     # Falta Conciliar (pendentes do banco, só movimentação)
     pb_mov = _eh_movimentado(pendentes_banco)
@@ -442,7 +457,8 @@ def _calcular_kpis(
         if not divergencias.empty and "valor_banco" in divergencias.columns
         else 0.0
     )
-    percentual = 100.0 * total_conciliado / total_banco if total_banco > 0 else 0.0
+    # v5.49: percentual com base CONSISTENTE — só movimentação nos dois lados.
+    percentual = 100.0 * total_conciliado_mov / total_banco if total_banco > 0 else 0.0
 
     return {
         # v3: renomeado de "Total Extrato Bancário" → "Total Movimentado no Banco".
@@ -451,6 +467,8 @@ def _calcular_kpis(
         "total_extrato_bancario": total_banco,
         "total_extrato_sistema": total_sistema,
         "total_conciliado": total_conciliado,
+        "total_conciliado_movimentacao": total_conciliado_mov,
+        "total_conciliado_investimentos": total_conciliado_invest,
         "falta_conciliar": falta_conciliar,
         "falta_conciliar_receitas": falta_conciliar_receitas,
         "falta_conciliar_despesas": falta_conciliar_despesas,
