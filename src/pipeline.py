@@ -203,10 +203,17 @@ class ResultadoConciliacao:
             return _filtrar_conta(self.falta_lancar_sankhya, conta)
         return _filtrar_conta(self.pendentes_sistema, conta)
 
-    def saldo_final_da_conta(self, conta: str) -> dict[str, Any] | None:
-        """Retorna info de saldo final se a conta estiver 100% conciliada."""
+    def saldo_final_da_conta(self, conta: str, exigir_conciliado: bool = True) -> dict[str, Any] | None:
+        """Retorna info de saldo final da conta.
+
+        Por padrão só devolve quando a conta está 100% conciliada (card verde
+        do detalhamento). v5.47: com `exigir_conciliado=False`, devolve sempre
+        que o extrato tiver saldo — usado pelo Dashboard para mostrar o
+        FECHAMENTO DO EXTRATO (saldo inicial + movimentos = saldo final), que é
+        um teste de leitura do extrato e não depende da conciliação.
+        """
         kpis = self.kpis_da_conta(conta)
-        if kpis["percentual_conciliado"] < 99.99:
+        if exigir_conciliado and kpis["percentual_conciliado"] < 99.99:
             return None
 
         banco = _filtrar_conta(self.banco_completo, conta)
