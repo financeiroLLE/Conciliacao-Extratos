@@ -3088,8 +3088,11 @@ def render_resumo_termometros(resultado: ResultadoConciliacao, kpis: dict):
         _regras_nomes.append("boleto")
     if int(kpis.get("qtd_top1722_grupos", 0)) > 0:
         _regras_nomes.append("cartão")
+    # v5.49: estornos anulados também explicam volume do banco sem ser "pares"
+    if int(kpis.get("qtd_estornos_anulados", 0)) > 0:
+        _regras_nomes.append("estornos anulados")
     if regra > 0.05:
-        _rot = ("por agrupamento de " + " e ".join(_regras_nomes)) if _regras_nomes else "por agrupamento"
+        _rot = ("por " + " e ".join(_regras_nomes)) if _regras_nomes else "por agrupamento"
         sub_banco = fmt_pct(pares) + " em pares diretos &middot; " + fmt_pct(regra) + " " + _rot
     else:
         sub_banco = fmt_pct(pares) + " em pares diretos"
@@ -3991,9 +3994,26 @@ def _explicar_diferenca_por_dia(resultado, conta):
     banco    -> lançamento no banco sem baixa no Sankhya (ex.: despesa não lançada)
     sankhya  -> baixado no Sankhya, sem par no banco
     divergentes -> mesmo lançamento com valor diferente nos dois lados
+    v5.49: dias com PENDÊNCIA entram mesmo quando a diferença líquida do dia é
+    zero (lados que se compensam) — antes esses dias sumiam do detalhe.
     """
-    dias = _diferenca_bxs_por_dia(resultado, conta)
-    if not dias:
+    dias_dif = dict(_diferenca_bxs_por_dia(resultado, conta))
+    # dias com pendências (banco/sankhya), ainda que a dif líquida seja 0
+    _excl = ("saldo", "aplicacao", "resgate", "rendimento")
+    dias_pend: set = set()
+    for _df in (getattr(resultado, "pendentes_banco", None),
+                getattr(resultado, "pendentes_sistema", None)):
+        if _df is None or getattr(_df, "empty", True) or "data" not in _df.columns:
+            continue
+        d = _df
+        if "conta" in d.columns:
+            d = d[d["conta"] == conta]
+        if "categoria_mov" in d.columns:
+            d = d[~d["categoria_mov"].isin(_excl)]
+        if not d.empty:
+            dias_pend.update(pd.to_datetime(d["data"], errors="coerce").dropna().dt.normalize().unique())
+    todos_dias = set(dias_dif) | {pd.Timestamp(x) for x in dias_pend}
+    if not todos_dias:
         return []
     dv = getattr(resultado, "divergencias", None)
     cols_dv = list(getattr(dv, "columns", [])) if dv is not None else []
@@ -4001,34 +4021,57 @@ def _explicar_diferenca_por_dia(resultado, conta):
     if tem_dv and "conta" in cols_dv:
         dv = dv[dv["conta"] == conta]
     out = []
-    for dia, dif in dias:
+    for dia in sorted(todos_dias):
+        dif = float(dias_dif.get(dia, 0.0))
         divergentes = []
         if tem_dv and "data" in cols_dv:
             dd = pd.to_datetime(dv["data"], errors="coerce").dt.normalize()
             for _, row in dv[dd == pd.Timestamp(dia)].iterrows():
                 h = row.get("historico_banco") or row.get("historico_sistema") or ""
                 divergentes.append((str(h), row.get("valor_banco"), row.get("valor_sistema")))
-        out.append({
+        item = {
             "data": dia,
             "dif": dif,
             "banco": _linhas_pendentes_do_dia(resultado, conta, dia, "banco"),
             "sankhya": _linhas_pendentes_do_dia(resultado, conta, dia, "sankhya"),
             "divergentes": divergentes,
-        })
+        }
+        if item["banco"] or item["sankhya"] or item["divergentes"] or abs(dif) >= 0.01:
+            out.append(item)
+    # ordena pelo "tamanho" do dia: maior entre |dif| e a soma das linhas listadas
+    def _peso(i):
+        soma = (sum(abs(v) for _, v in i["banco"])
+                + sum(abs(v) for _, v in i["sankhya"]))
+        return max(abs(i["dif"]), soma)
+    out.sort(key=_peso, reverse=True)
     return out
 
 
-def _render_alerta_diferenca_por_dia(dif_bs, explicacao, nota_extra: str = ""):
+def _render_alerta_diferenca_por_dia(dif_bs, explicacao, nota_extra: str = "",
+                                     falta: float = 0.0, diverg: float = 0.0):
     """Banner enxuto + seta (expander) que explica a diferença por dia e por
     origem. NUNCA rotula como cartão — só descreve o que não casou em cada dia.
     v5.47: `dif_bs` já vem LÍQUIDO de estornos anulados; `nota_extra` (HTML)
-    informa quanto foi anulado, pra conta fechar com os cards acima."""
-    _val = fmt_brl(abs(dif_bs))
+    informa quanto foi anulado, pra conta fechar com os cards acima.
+    v5.49: quando a diferença líquida é ~zero mas há lançamentos sem par dos
+    dois lados (mesmo dinheiro aberto de formas diferentes), o cabeçalho
+    mostra os dois lados em vez de um falso 'R$ 0,00'."""
+    if abs(dif_bs) >= 0.01:
+        _cabeca = ('&#9888;&#65039; <b>Diferença Banco &times; Sankhya: '
+                   + fmt_brl(abs(dif_bs)) + '</b> &middot; <b>a analisar por dia</b>')
+    else:
+        _lados = []
+        if abs(falta) >= 0.005:
+            _lados.append(fmt_brl(abs(falta)) + ' no banco sem par')
+        if abs(diverg) >= 0.005:
+            _lados.append(fmt_brl(abs(diverg)) + ' no Sankhya sem par')
+        _cabeca = ('&#9888;&#65039; <b>Lançamentos sem par: ' + ' &middot; '.join(_lados)
+                   + '</b> &middot; os totais se compensam (diferença líquida R$ 0,00), '
+                   'mas cada lançamento precisa do seu par &middot; <b>a analisar por dia</b>')
     st.html(
         '<div style="background:#2a1d10;border-left:4px solid #FAC318;border-radius:8px;'
         'padding:10px 14px;margin:10px 0 2px 0;color:#e9eef7;font-size:14px;line-height:1.5;">'
-        '&#9888;&#65039; <b>Diferença Banco &times; Sankhya: ' + _val + '</b> &middot; '
-        '<b>a analisar por dia</b> &middot; abra o detalhe abaixo para ver o que aconteceu em cada dia.'
+        + _cabeca + ' &middot; abra o detalhe abaixo para ver o que aconteceu em cada dia.'
         + (nota_extra or '') + '</div>'
     )
     with st.expander("Ver o que aconteceu em cada dia", expanded=False):
@@ -4248,11 +4291,18 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
         '<div class="lle-kpi-suffix">lançamentos do ERP que o banco não confirmou</div>',
         classe=cor_div)
 
+    # v5.49: o card decompõe movimentação × investimentos — antes mostrava a
+    # soma total dos pares (com aplicações/resgates) ao lado de um "movimentado"
+    # que exclui investimentos, e parecia que conferiu mais do que movimentou.
+    _conf_mov = float(k.get("total_conciliado_movimentacao", k["total_conciliado"]))
+    _conf_inv = float(k.get("total_conciliado_investimentos", 0.0))
+    _suf_conf = ("movimentação em pares" if _conf_inv < 0.01 else
+                 "movimentação em pares · + " + fmt_brl(_conf_inv) + " de investimentos casados")
     cards2 = [
         card_banco_sem_exp,
         card_sankhya_sem_conf,
-        card_kpi("Valor conferido", fmt_brl(k["total_conciliado"]),
-                 "soma dos lançamentos que casaram em pares", classe="destaque-verde"),
+        card_kpi("Valor conferido", fmt_brl(_conf_mov),
+                 _suf_conf, classe="destaque-verde"),
     ]
     render_cards(cards2)
 
@@ -4266,7 +4316,13 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
     dif_bruta = round(float(k["total_movimentado_banco"]) - float(k["total_extrato_sistema"]), 2)
     _vol_anulados = round(sum(_volume_estornos_anulados_por_dia(resultado, conta).values()), 2)
     dif_bs = round(dif_bruta - _vol_anulados, 2)
-    if abs(dif_bs) >= 0.01:
+    # v5.49: o alerta também dispara quando a diferença LÍQUIDA é zero mas há
+    # lançamentos sem par dos dois lados (ex.: 1 PIX de R$ 306 no banco aberto
+    # em 4 notas no Sankhya — os totais se compensam e o banner ficava mudo).
+    _falta_al = float(k.get("falta_conciliar", 0.0))
+    _diverg_al = float(k.get("divergencia_sankhya_banco", 0.0))
+    _tem_pend_al = round(abs(_falta_al) + abs(_diverg_al), 2) >= 0.01
+    if abs(dif_bs) >= 0.01 or _tem_pend_al:
         _adq_alert = st.session_state.get("adquirente_df")
         _partes, _todos = _explicar_diferenca_cartao(resultado, conta, _adq_alert)
         _val = fmt_brl(abs(dif_bs))
@@ -4277,7 +4333,7 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
             if _vol_anulados >= 0.01 else ''
         )
 
-        if _tem_adq and _partes and _todos:
+        if abs(dif_bs) >= 0.01 and _tem_adq and _partes and _todos:
             # Só quando HÁ adquirente E ela explica 100% da diferença (taxa comprovada).
             st.html(
                 '<div style="background:#0c2b1a;border-left:4px solid #0F8C3B;border-radius:8px;'
@@ -4291,7 +4347,10 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
             # Caso geral (com ou sem cartão): explica por dia, pela origem real.
             # NUNCA rotula como cartão por padrão.
             _explic = _explicar_diferenca_por_dia(resultado, conta)
-            _render_alerta_diferenca_por_dia(dif_bs, _explic, nota_extra=_nota_anulados)
+            _render_alerta_diferenca_por_dia(
+                dif_bs, _explic, nota_extra=_nota_anulados,
+                falta=_falta_al, diverg=_diverg_al,
+            )
     elif abs(dif_bruta) >= 0.01 and _vol_anulados >= 0.01:
         # v5.47: a diferença entre os cards existe, mas é 100% de pares anulados
         # por estorno — nada a analisar. Banner verde explicando por que os
@@ -4322,6 +4381,9 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
         _nomes.append("boleto (TOP 1702)")
     if _tem_cartao:
         _nomes.append("cartão (TOP 1722)")
+    # v5.49: estornos anulados (PIX recebido e devolvido) também explicam volume
+    if int(k.get("qtd_estornos_anulados", 0)) > 0:
+        _nomes.append("estornos anulados (recebido e devolvido)")
     _rotulo = " e ".join(_nomes) if _nomes else "agrupamento por soma"
     with st.expander("Entenda os cards acima"):
         if _regra > 0.01:
