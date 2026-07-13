@@ -3769,6 +3769,146 @@ def _explicar_diferenca_cartao(resultado, conta: str, adq: pd.DataFrame):
     return partes, todos
 
 
+def _esc(s) -> str:
+    """Escapa texto para inserção segura em HTML (histórico do lançamento)."""
+    import html as _html
+    return _html.escape(str(s if s is not None else ""))
+
+
+def _linhas_pendentes_do_dia(resultado, conta, dia, lado):
+    """[(historico, valor), ...] das linhas que NÃO casaram naquele dia.
+    lado='banco' -> pendentes_banco (estão no banco, faltam no Sankhya);
+    lado='sankhya' -> pendentes_sistema (baixados no Sankhya, sem par no banco).
+    Exclui saldo/aplicação/resgate/rendimento (mesmo filtro do KPI de movimentado).
+    """
+    _excl = ("saldo", "aplicacao", "resgate", "rendimento")
+    df = resultado.pendentes_banco if lado == "banco" else resultado.pendentes_sistema
+    if df is None or getattr(df, "empty", True):
+        return []
+    d = df
+    if "conta" in d.columns:
+        d = d[d["conta"] == conta]
+    if "categoria_mov" in d.columns:
+        d = d[~d["categoria_mov"].isin(_excl)]
+    if d.empty or "data" not in d.columns:
+        return []
+    dd = pd.to_datetime(d["data"], errors="coerce").dt.normalize()
+    d = d[dd == pd.Timestamp(dia)]
+    if d.empty:
+        return []
+    return [(str(h), float(v)) for h, v in zip(d["historico"], d["valor"])]
+
+
+def _explicar_diferenca_por_dia(resultado, conta):
+    """Explica a diferença Banco×Sankhya de cada dia pela ORIGEM real das linhas
+    que não casaram — SEM supor cartão. Retorna lista de dicts ordenada por |dif|:
+      {data, dif, banco:[(h,v)], sankhya:[(h,v)], divergentes:[(h,vb,vs)]}
+    banco    -> lançamento no banco sem baixa no Sankhya (ex.: despesa não lançada)
+    sankhya  -> baixado no Sankhya, sem par no banco
+    divergentes -> mesmo lançamento com valor diferente nos dois lados
+    """
+    dias = _diferenca_bxs_por_dia(resultado, conta)
+    if not dias:
+        return []
+    dv = getattr(resultado, "divergencias", None)
+    cols_dv = list(getattr(dv, "columns", [])) if dv is not None else []
+    tem_dv = dv is not None and not getattr(dv, "empty", True) and "valor_sistema" in cols_dv
+    if tem_dv and "conta" in cols_dv:
+        dv = dv[dv["conta"] == conta]
+    out = []
+    for dia, dif in dias:
+        divergentes = []
+        if tem_dv and "data" in cols_dv:
+            dd = pd.to_datetime(dv["data"], errors="coerce").dt.normalize()
+            for _, row in dv[dd == pd.Timestamp(dia)].iterrows():
+                h = row.get("historico_banco") or row.get("historico_sistema") or ""
+                divergentes.append((str(h), row.get("valor_banco"), row.get("valor_sistema")))
+        out.append({
+            "data": dia,
+            "dif": dif,
+            "banco": _linhas_pendentes_do_dia(resultado, conta, dia, "banco"),
+            "sankhya": _linhas_pendentes_do_dia(resultado, conta, dia, "sankhya"),
+            "divergentes": divergentes,
+        })
+    return out
+
+
+def _render_alerta_diferenca_por_dia(dif_bs, explicacao):
+    """Banner enxuto + seta (expander) que explica a diferença por dia e por
+    origem. NUNCA rotula como cartão — só descreve o que não casou em cada dia."""
+    _val = fmt_brl(abs(dif_bs))
+    st.html(
+        '<div style="background:#2a1d10;border-left:4px solid #FAC318;border-radius:8px;'
+        'padding:10px 14px;margin:10px 0 2px 0;color:#e9eef7;font-size:14px;line-height:1.5;">'
+        '&#9888;&#65039; <b>Diferença Banco &times; Sankhya: ' + _val + '</b> &middot; '
+        '<b>a analisar por dia</b> &middot; abra o detalhe abaixo para ver o que aconteceu em cada dia.</div>'
+    )
+    with st.expander("Ver o que aconteceu em cada dia", expanded=False):
+        if not explicacao:
+            st.caption(
+                "A diferença não pôde ser detalhada por dia com os lançamentos atuais. "
+                "Confira as abas “Sem baixa no Sankhya” e “Divergências (Sankhya × Banco)”."
+            )
+            return
+
+        def _tabela(linhas, cor_valor):
+            html = ""
+            for h, v in linhas:
+                cor = "#ff9a9a" if float(v) < 0 else "#7ee0a6"
+                sinal = "" if float(v) < 0 else "+"
+                html += (
+                    '<div style="display:grid;grid-template-columns:2.2fr 1fr;font-size:12px;'
+                    'color:#cdd9f2;padding:6px 0;border-bottom:1px solid #10254e;">'
+                    '<span>' + _esc(h) + '</span>'
+                    '<span style="text-align:right;color:' + cor + ';">'
+                    + sinal + fmt_brl(abs(float(v))) + '</span></div>'
+                )
+            return html
+
+        for item in explicacao:
+            d = item["data"].strftime("%d/%m/%Y")
+            blocos = ""
+            if item["banco"]:
+                blocos += (
+                    '<div style="padding:8px 16px 2px 16px;"><span style="background:#123f2e;'
+                    'color:#a8f0c8;font-size:10px;padding:3px 9px;border-radius:20px;">'
+                    'no banco &middot; falta lançar no Sankhya</span></div>'
+                    '<div style="padding:2px 16px 8px 16px;">' + _tabela(item["banco"], "#ff9a9a") + '</div>'
+                )
+            if item["sankhya"]:
+                blocos += (
+                    '<div style="padding:8px 16px 2px 16px;"><span style="background:#3a2436;'
+                    'color:#f2b6d8;font-size:10px;padding:3px 9px;border-radius:20px;">'
+                    'baixado no Sankhya &middot; sem par no banco</span></div>'
+                    '<div style="padding:2px 16px 8px 16px;">' + _tabela(item["sankhya"], "#7ee0a6") + '</div>'
+                )
+            for h, vb, vs in item["divergentes"]:
+                _vb = fmt_brl(abs(float(vb))) if vb is not None and pd.notna(vb) else "—"
+                _vs = fmt_brl(abs(float(vs))) if vs is not None and pd.notna(vs) else "—"
+                blocos += (
+                    '<div style="padding:8px 16px 2px 16px;"><span style="background:#3a2e0b;'
+                    'color:#FAC318;font-size:10px;padding:3px 9px;border-radius:20px;">'
+                    'mesmo lançamento &middot; valor divergente</span></div>'
+                    '<div style="padding:2px 16px 8px 16px;font-size:12px;color:#cdd9f2;">'
+                    + _esc(h) + ' &nbsp; <span style="color:#9fb3d6;">banco</span> ' + _vb
+                    + ' &nbsp; <span style="color:#9fb3d6;">Sankhya</span> ' + _vs + '</div>'
+                )
+            if not blocos:
+                blocos = (
+                    '<div style="padding:8px 16px 12px 16px;font-size:12px;color:#9fb3d6;">'
+                    'Diferença de volume neste dia sem linha isolada — confira as abas de pendências.</div>'
+                )
+            st.html(
+                '<div style="background:#0b2560;border:1px solid #163062;border-radius:10px;'
+                'margin:0 0 10px 0;overflow:hidden;">'
+                '<div style="display:flex;justify-content:space-between;align-items:center;'
+                'background:#071f52;padding:10px 16px;">'
+                '<span style="font-size:13px;font-weight:700;color:#fff;">' + d + '</span>'
+                '<span style="font-size:13px;font-weight:800;color:#FAC318;">'
+                + fmt_brl(abs(item["dif"])) + '</span></div>' + blocos + '</div>'
+            )
+
+
 _ROTULOS_CARTAO = {
     "estorno": "Estorno / Cancelamento",
     "aluguel": "Aluguel de maquininha",
@@ -3933,42 +4073,25 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
     # existir, apontando pra onde investigar.
     dif_bs = round(float(k["total_movimentado_banco"]) - float(k["total_extrato_sistema"]), 2)
     if abs(dif_bs) >= 0.01:
-        _lado = "banco" if dif_bs > 0 else "Sankhya"
         _adq_alert = st.session_state.get("adquirente_df")
         _partes, _todos = _explicar_diferenca_cartao(resultado, conta, _adq_alert)
-        _dias_conferir = [d.strftime("%d/%m") for d, v, e in _partes if e is None]
         _val = fmt_brl(abs(dif_bs))
+        _tem_adq = _adq_alert is not None and not getattr(_adq_alert, "empty", True)
 
-        def _banner(cor, borda, icone, status, texto):
+        if _tem_adq and _partes and _todos:
+            # Só quando HÁ adquirente E ela explica 100% da diferença (taxa comprovada).
             st.html(
-                '<div style="background:' + cor + '; border-left:4px solid ' + borda + '; '
-                'border-radius:8px; padding:10px 14px; margin:10px 0 2px 0; color:#e9eef7; '
-                'font-size:14px; line-height:1.5;">' + icone
-                + ' <b>Diferença Banco &times; Sankhya: ' + _val + '</b> &middot; <b>' + status
-                + '</b> &middot; ' + texto + '</div>'
-            )
-
-        if _partes and _todos:
-            # OK — a adquirente identifica 100% da diferença.
-            _banner(
-                "#0c2b1a", "#0F8C3B", "&#9989;", "identificada 100% pela adquirente",
-                'taxa descontada no repasse (não é erro de conciliação). Detalhe na aba '
-                '&ldquo;Diferença de Cartão&rdquo;.',
-            )
-        elif _partes and _dias_conferir:
-            # Parte identificada, parte a conferir.
-            _banner(
-                "#2a1d10", "#FAC318", "&#9888;&#65039;", "parte a conferir",
-                'a conferir em: ' + "; ".join(_dias_conferir[:6])
-                + '. Veja a aba &ldquo;Diferença de Cartão&rdquo;.',
+                '<div style="background:#0c2b1a;border-left:4px solid #0F8C3B;border-radius:8px;'
+                'padding:10px 14px;margin:10px 0 2px 0;color:#e9eef7;font-size:14px;line-height:1.5;">'
+                '&#9989; <b>Diferença Banco &times; Sankhya: ' + _val + '</b> &middot; '
+                '<b>identificada 100% pela adquirente</b> &middot; taxa descontada no repasse '
+                '(não é erro de conciliação). Detalhe na aba &ldquo;Diferença de Cartão&rdquo;.</div>'
             )
         else:
-            # Precisa de análise (sem adquirente ou sem detalhe por dia).
-            _banner(
-                "#2a1d10", "#FAC318", "&#9888;&#65039;", "precisa da sua análise",
-                'suba o extrato da adquirente pra identificar, ou veja as abas '
-                '&ldquo;Diferença de Cartão&rdquo; e &ldquo;Sem baixa no Sankhya&rdquo;.',
-            )
+            # Caso geral (com ou sem cartão): explica por dia, pela origem real.
+            # NUNCA rotula como cartão por padrão.
+            _explic = _explicar_diferenca_por_dia(resultado, conta)
+            _render_alerta_diferenca_por_dia(dif_bs, _explic)
     info_saldo = resultado.saldo_final_da_conta(conta)
     if info_saldo is not None:
         render_card_saldo_final(info_saldo)
