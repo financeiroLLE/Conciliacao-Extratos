@@ -2761,39 +2761,52 @@ def pagina_dashboard():
 
     _dv_cor = "#7ee0a6" if qtd_div == 0 else "#ff9a9a"
 
-    st.markdown(
-        "<div>"
-        "<div style='display:grid;grid-template-columns:1.15fr 1fr;gap:16px'>"
-        # ---- coluna esquerda: provas ----
-        "<div style='display:flex;flex-direction:column;gap:16px'>"
-        f"<div style='background:{_hero_grad};border-radius:16px;padding:24px;flex:1'>"
+    # v5.52: o grid inteiro era UM st.markdown com CSS grid/flex — o Streamlit
+    # mede a altura antes da fonte carregar e, com a tipografia maior (v5.50),
+    # o conteúdo real ficava mais alto que a medição e VAZAVA por cima do
+    # expander "Tendência". Agora cada card é um st.markdown dentro de
+    # st.columns nativas: o Streamlit mede card a card e nada sobrepõe.
+    # Visual idêntico ao mockup aprovado (mesmos cards, cores e tipografia).
+    _card_hero = (
+        f"<div style='background:{_hero_grad};border-radius:16px;padding:24px'>"
         "<div style='font-size:12px;letter-spacing:1.2px;color:#6ee3a0;margin-bottom:8px'>FECHAMENTO DO MÊS</div>"
         f"<div style='font-size:30px;font-weight:800;color:{_hero_fg};line-height:1.15'>{_hero_txt}</div>"
         f"<div style='font-size:14px;color:{_hero_fg};margin:8px 0 20px'>{_hero_sub}</div>"
         "<div style='display:flex;justify-content:space-between;align-items:center;border-top:1px solid #ffffff22;padding-top:12px'>"
         "<span style='font-size:13px;color:#cdd9f2'>Contas conciliadas</span>"
         f"<span style='font-size:22px;font-weight:800;color:{_cob_cor}'>{n_contas} <span style='font-size:14px'>de {TOTAL_CONTAS_GRUPO}</span> <span style='font-size:12px'>{_cob_sub}</span></span></div></div>"
+    )
+    _card_saldo = (
         "<div style='background:#0b2560;border:1px solid #1b3a6e;border-radius:16px;padding:22px'>"
         "<div style='font-size:12px;letter-spacing:1.2px;color:#9fb3d6;margin-bottom:12px'>SALDO DA CONTA RODADA</div>"
         f"{_saldo_inner}</div>"
-        "</div>"
-        # ---- coluna direita: o resto ----
-        "<div style='display:flex;flex-direction:column;gap:12px'>"
+    )
+    _card_mov = (
         "<div style='background:#0b2560;border:1px solid #163062;border-radius:14px;padding:16px 18px'>"
         "<div style='font-size:12px;letter-spacing:1.2px;color:#9fb3d6;margin-bottom:12px'>MOVIMENTAÇÃO DO MÊS</div>"
         f"<div style='display:flex;justify-content:space-between'><span style='font-size:14px;color:#cdd9f2'>Receitas</span><b style='font-size:16px;color:#7ee0a6'>{_brl(rec_b)}</b></div>"
         f"<div style='display:flex;justify-content:space-between;margin-top:4px'><span style='font-size:14px;color:#cdd9f2'>Despesas</span><b style='font-size:16px;color:#ff9a9a'>{_brl(desp_b)}</b></div>"
         f"<div style='display:flex;justify-content:space-between;margin-top:4px;border-top:1px solid #163062;padding-top:6px'><span style='font-size:14px;color:#cdd9f2'>Líquido <span style='color:#FAC318'>(foi p/ invest.)</span></span><b style='font-size:16px;color:#fff'>{_brl(liq)}</b></div></div>"
+    )
+    _card_minis = (
         "<div style='display:grid;grid-template-columns:1fr 1fr;gap:12px'>"
         f"<div style='background:#0b2560;border:1px solid #163062;border-top:3px solid {_dv_cor};border-radius:14px;padding:15px'><div style='font-size:12px;letter-spacing:1px;color:#9fb3d6'>DIVERGÊNCIAS</div><div style='font-size:24px;font-weight:800;color:{_dv_cor};margin-top:6px'>{qtd_div}</div><div style='font-size:12px;color:#6f88b8'>R$ {_brl(kpis.get('divergencia_sankhya_banco',0))}</div></div>"
         f"<div style='background:#0b2560;border:1px solid #163062;border-top:3px solid #FAC318;border-radius:14px;padding:15px'><div style='font-size:12px;letter-spacing:1px;color:#9fb3d6'>INVESTIMENTOS</div><div style='font-size:24px;font-weight:800;color:#FAC318;margin-top:6px'>{_brl(inv_net)}</div><div style='font-size:12px;color:#6f88b8'>aplic × resgate</div></div>"
         "</div>"
-        f"{_c70_card}"
-        f"<div style='background:#0b2560;border:1px solid #163062;border-radius:14px;padding:14px 18px;display:flex;justify-content:space-between;align-items:center'><span style='font-size:12px;letter-spacing:1px;color:#9fb3d6'>{_trend_label}</span>{_trend_html}</div>"
-        "</div>"
-        "</div></div>",
-        unsafe_allow_html=True,
     )
+    _card_trend = (
+        f"<div style='background:#0b2560;border:1px solid #163062;border-radius:14px;padding:14px 18px;display:flex;justify-content:space-between;align-items:center'><span style='font-size:12px;letter-spacing:1px;color:#9fb3d6'>{_trend_label}</span>{_trend_html}</div>"
+    )
+    _col_esq, _col_dir = st.columns([1.15, 1], gap="medium")
+    with _col_esq:
+        st.markdown(_card_hero, unsafe_allow_html=True)
+        st.markdown(_card_saldo, unsafe_allow_html=True)
+    with _col_dir:
+        st.markdown(_card_mov, unsafe_allow_html=True)
+        st.markdown(_card_minis, unsafe_allow_html=True)
+        if _c70_card:
+            st.markdown(_c70_card, unsafe_allow_html=True)
+        st.markdown(_card_trend, unsafe_allow_html=True)
 
     # ---- histórico de fechamentos (para a tendência) ----
     with st.expander("Tendência — histórico de fechamentos", expanded=False):
