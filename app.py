@@ -3376,6 +3376,13 @@ def tela_upload():
                             _cands_emp.append(_j)
                     if len(_cands_emp) == 1:
                         idx_match = _cands_emp[0]
+                # v5.53: caso ITAU KING — a conta 74839-5 pertence juridicamente
+                # à LLE FERRAGENS, e o Sankhya a chama "ITAU KING": nem dígitos
+                # nem empresa casam. No modo 1 conta, se o Sankhya enviado tem
+                # EXATAMENTE UMA conta, ela é a conta desta conciliação —
+                # pré-seleciona (a lista continua na tela para trocar).
+                if idx_match is None and len(contas_sankhya) == 1:
+                    idx_match = 0
                 idx_default = idx_match if idx_match is not None else len(opcoes) - 1
                 escolha = st.selectbox(
                     "Extrato Bancário (identificador da conta)",
@@ -3479,12 +3486,13 @@ def tela_upload():
         "Pode subir vários. Conta sem cartão não precisa subir nada — tudo funciona igual."
     )
     arquivos_adquirente = st.file_uploader(
-        "Arraste o extrato da adquirente (GetNet / PagBank)",
+        "Arraste o extrato da adquirente (Cielo / GetNet / PagBank)",
         type=["xlsx", "xls", "csv"],
         key="adquirente",
         accept_multiple_files=True,
         help="Usado pra dar NOME à diferença de cartão (aluguel, tarifa, estorno) na conciliação "
-        "e pra alimentar a Auditoria de Cartões (taxa cobrada × taxa de contrato).",
+        "e pra alimentar a Auditoria de Cartões (taxa cobrada × taxa de contrato). "
+        "Cielo: relatório 'Recebíveis Detalhado' (o líquido por dia bate com os depósitos do banco).",
     )
 
     st.divider()
