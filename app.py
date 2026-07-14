@@ -2797,41 +2797,23 @@ def pagina_dashboard():
     _card_trend = (
         f"<div style='background:#0b2560;border:1px solid #163062;border-radius:14px;padding:14px 18px;display:flex;justify-content:space-between;align-items:center'><span style='font-size:12px;letter-spacing:1px;color:#9fb3d6'>{_trend_label}</span>{_trend_html}</div>"
     )
-    # v5.56: alinhamento — cada coluna vira UM bloco flex (gap uniforme de
-    # 14px); o hero estica (flex:1) para a base do Saldo fechar a coluna, e a
-    # Tendência ancora no fundo da direita (margin-top:auto). O CSS abaixo
-    # estica as duas colunas na mesma altura, então as bases ficam alinhadas.
-    st.markdown(
-        """<style>
-        div[data-testid=\"stHorizontalBlock\"]:has(.lle-dash-col){align-items:stretch;}
-        div[data-testid=\"stColumn\"]:has(.lle-dash-col) > div{height:100%;}
-        div[data-testid=\"stColumn\"]:has(.lle-dash-col) [data-testid=\"stVerticalBlock\"]{height:100%;}
-        div[data-testid=\"stColumn\"]:has(.lle-dash-col) .stMarkdown,
-        div[data-testid=\"stColumn\"]:has(.lle-dash-col) .stMarkdown > div,
-        div[data-testid=\"stColumn\"]:has(.lle-dash-col) [data-testid=\"stMarkdownContainer\"],
-        div[data-testid=\"stColumn\"]:has(.lle-dash-col) .element-container{height:100%;}
-        </style>""",
-        unsafe_allow_html=True,
-    )
+    # v5.60: REVERTIDO para um st.markdown POR CARD. A tentativa v5.56 de juntar
+    # os cards em um bloco por coluna (para alinhar as bases) reativou a
+    # sobreposição — o Streamlit mede a altura do bloco antes da fonte carregar
+    # e o conteúdo vaza sobre o elemento seguinte. Com um markdown por card
+    # (formato da v5.52, validado em produção) a medição é por card e NÃO HÁ
+    # como sobrepor. Custo aceito e combinado: as colunas são top-alinhadas e
+    # podem terminar em alturas diferentes.
     _col_esq, _col_dir = st.columns([1.15, 1], gap="medium")
     with _col_esq:
-        st.markdown(
-            "<div class='lle-dash-col' style='height:100%;display:flex;flex-direction:column;gap:14px'>"
-            + _card_hero.replace("border-radius:16px;padding:24px'", "border-radius:16px;padding:24px;flex:1;display:flex;flex-direction:column;justify-content:space-between'", 1)
-            + _card_saldo
-            + "</div>",
-            unsafe_allow_html=True,
-        )
+        st.markdown(_card_hero, unsafe_allow_html=True)
+        st.markdown(_card_saldo, unsafe_allow_html=True)
     with _col_dir:
-        st.markdown(
-            "<div class='lle-dash-col' style='height:100%;display:flex;flex-direction:column;gap:14px'>"
-            + _card_mov
-            + _card_minis
-            + (_c70_card or "")
-            + _card_trend.replace("padding:14px 18px;display:flex", "padding:14px 18px;margin-top:auto;display:flex", 1)
-            + "</div>",
-            unsafe_allow_html=True,
-        )
+        st.markdown(_card_mov, unsafe_allow_html=True)
+        st.markdown(_card_minis, unsafe_allow_html=True)
+        if _c70_card:
+            st.markdown(_c70_card, unsafe_allow_html=True)
+        st.markdown(_card_trend, unsafe_allow_html=True)
 
     # ---- histórico de fechamentos (para a tendência) ----
     with st.expander("Tendência — histórico de fechamentos", expanded=False):
