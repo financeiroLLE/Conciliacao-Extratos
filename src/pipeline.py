@@ -90,6 +90,11 @@ class ResultadoConciliacao:
                  getattr(self, "top1702_diferencas", pd.DataFrame())],
                 ignore_index=True,
             ),
+            pd.concat(
+                [getattr(self, "top1722_linhas", pd.DataFrame()),
+                 getattr(self, "top1702_linhas", pd.DataFrame())],
+                ignore_index=True,
+            ),
         )
 
     def kpis_por_banco(self) -> dict[str, dict[str, Any]]:
@@ -118,6 +123,10 @@ class ResultadoConciliacao:
             _filtra("top1722_grupos"),
             pd.concat(
                 [_filtra("top1702_grupos"), _filtra("top1702_diferencas")],
+                ignore_index=True,
+            ),
+            pd.concat(
+                [_filtra("top1722_linhas"), _filtra("top1702_linhas")],
                 ignore_index=True,
             ),
         )
@@ -302,6 +311,7 @@ def _calcular_kpis(
     estornos_parciais: pd.DataFrame | None = None,
     top1722_grupos: pd.DataFrame | None = None,
     top1702_grupos: pd.DataFrame | None = None,
+    linhas_casadas_grupos_sis: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
     banco_mov = _eh_movimentado(banco_completo)
     sistema_mov = _eh_movimentado(sistema_completo)
@@ -393,6 +403,18 @@ def _calcular_kpis(
             if d_v is not None and v_v is not None:
                 chaves_casadas_sis.add(
                     (str(d_v), round(float(v_v), 2), str(c_v), str(h_v))
+                )
+
+    # v5.59: linhas do Sankhya casadas por AGRUPAMENTO (cartão 1722 / boleto
+    # 1702 / tarifa comprovada pela adquirente) também contam como casadas —
+    # sem isso, uma linha consumida pelo grupo mas com flag "não conciliada"
+    # no ERP continuava inflando o KPI de divergência (caso real: tarifa −0,45).
+    if linhas_casadas_grupos_sis is not None and not getattr(linhas_casadas_grupos_sis, "empty", True):
+        for _, row in linhas_casadas_grupos_sis.iterrows():
+            d_v, v_v = row.get("data"), row.get("valor")
+            if d_v is not None and v_v is not None:
+                chaves_casadas_sis.add(
+                    (str(d_v), round(float(v_v), 2), str(row.get("conta", "")), str(row.get("historico", "")))
                 )
 
     def _remover_casadas(df_sis: pd.DataFrame) -> pd.DataFrame:
@@ -590,6 +612,7 @@ def executar_pipeline(
     data_referencia: datetime | None = None,
     tolerancia_dias: int = 2,
     rodar_fuzzy: bool = True,
+    tarifas_adquirente: pd.DataFrame | None = None,
 ) -> ResultadoConciliacao:
     if data_referencia is None:
         data_referencia = datetime.now()
@@ -639,7 +662,13 @@ def executar_pipeline(
     # v5.0: conciliação por agrupamento TOP 1722 (cartão de crédito).
     # Roda APÓS o match 1-pra-1, sobre as pendências que sobraram.
     from src.matching.cartao_top1722 import detectar_top_1722
-    res_top1722 = detectar_top_1722(pend_banco, pend_sistema, janela_dias=tolerancia_dias)
+    # v5.59: com o extrato da adquirente presente, o dia pode fechar líquido
+    # de tarifa (depósitos = vendas 1722 + despesa de tarifa lançada, com a
+    # adquirente comprovando o valor ao centavo).
+    res_top1722 = detectar_top_1722(
+        pend_banco, pend_sistema, janela_dias=tolerancia_dias,
+        tarifas_adquirente=tarifas_adquirente,
+    )
     if res_top1722.indices_banco_casados or res_top1722.indices_sankhya_casados:
         # Remove das pendências o que foi consumido pelo agrupamento
         pend_banco = pend_banco.reset_index(drop=True)
