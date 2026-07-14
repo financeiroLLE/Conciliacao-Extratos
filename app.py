@@ -4148,17 +4148,40 @@ def _explicar_diferenca_por_dia(resultado, conta):
             "sankhya": _linhas_pendentes_do_dia(resultado, conta, dia, "sankhya"),
             "divergentes": divergentes,
         }
+        # v5.58: quando os DOIS lados do dia têm cartão, junta num bloco único —
+        # o que importa é o RESÍDUO (ex.: 0,45), não as somas cheias, que davam
+        # a impressão de o cartão inteiro estar pendente.
+        try:
+            import re as _re_c
+            def _pega_cartao(lista):
+                for idx, (h, v) in enumerate(lista):
+                    if str(h).startswith("—") and "CARTÃO" in str(h):
+                        m = _re_c.search(r"(\d+)", str(h))
+                        return idx, int(m.group(1)) if m else 0, float(v)
+                return None, 0, 0.0
+            _ib, _qb, _vb = _pega_cartao(item["banco"])
+            _is, _qs, _vs = _pega_cartao(item["sankhya"])
+            if _ib is not None and _is is not None:
+                item["banco"] = [x for j, x in enumerate(item["banco"]) if j != _ib]
+                item["sankhya"] = [x for j, x in enumerate(item["sankhya"]) if j != _is]
+                item["cartao"] = {
+                    "qtd_banco": _qb, "soma_banco": round(_vb, 2),
+                    "qtd_sankhya": _qs, "soma_sankhya": round(_vs, 2),
+                    "residuo": round(_vs - _vb, 2),  # >0 = Sankhya baixou a mais
+                }
+        except Exception:
+            pass
         # v5.57: se a adquirente (GetNet/Cielo) foi enviada, confere se
         # aluguel/tarifa DELA naquele dia explica EXATAMENTE o resíduo de
         # cartão do dia (Sankhya baixou as vendas cheias, a adquirente
         # descontou a tarifa do repasse). Só anota com prova ao centavo.
         try:
             _adq = st.session_state.get("adquirente_df")
-            if _adq is not None and not getattr(_adq, "empty", True) and "categoria" in _adq.columns:
-                _sb_c = sum(v for h, v in item["banco"] if str(h).startswith("—") and "CARTÃO" in str(h))
-                _ss_c = sum(v for h, v in item["sankhya"] if str(h).startswith("—") and "CARTÃO" in str(h))
-                _residuo_c = round(_ss_c - _sb_c, 2)  # >0 = Sankhya baixou a mais
-                if _residuo_c > 0.004 and (_sb_c or _ss_c):
+            _cart = item.get("cartao")
+            if (_adq is not None and not getattr(_adq, "empty", True)
+                    and "categoria" in _adq.columns and _cart):
+                _residuo_c = float(_cart["residuo"])  # >0 = Sankhya baixou a mais
+                if _residuo_c > 0.004:
                     _da = pd.to_datetime(_adq["data"], errors="coerce").dt.normalize()
                     _t = _adq[(_da == pd.Timestamp(dia)) & (_adq["categoria"].isin(["aluguel", "tarifa"]))]
                     _soma_t = round(float(pd.to_numeric(_t["valor"], errors="coerce").abs().sum()), 2)
@@ -4237,6 +4260,28 @@ def _render_alerta_diferenca_por_dia(dif_bs, explicacao, nota_extra: str = "",
         for item in explicacao:
             d = item["data"].strftime("%d/%m/%Y")
             blocos = ""
+            # v5.58: bloco único de CARTÃO do dia — só o resíduo em destaque
+            _cart = item.get("cartao")
+            if _cart:
+                _res = float(_cart["residuo"])
+                if _res > 0.004:
+                    _res_txt = ("<span style='color:#ffc94d;font-weight:800;'>resta " + fmt_brl(_res)
+                                + "</span> <span style='color:#9fb3d6;font-size:10px;'>Sankhya baixou a mais que entrou</span>")
+                elif _res < -0.004:
+                    _res_txt = ("<span style='color:#ffc94d;font-weight:800;'>resta " + fmt_brl(abs(_res))
+                                + "</span> <span style='color:#9fb3d6;font-size:10px;'>entrou no banco a mais que as baixas</span>")
+                else:
+                    _res_txt = "<span style='color:#7ee0a6;font-weight:800;'>fecha ao centavo</span>"
+                blocos += (
+                    '<div style="padding:8px 16px 2px 16px;"><span style="background:#3a2e0b;'
+                    'color:#FAC318;font-size:10px;padding:3px 9px;border-radius:20px;">'
+                    'cartão do dia &middot; TOP 1722 &times; depósitos da adquirente</span></div>'
+                    '<div style="display:flex;justify-content:space-between;align-items:baseline;'
+                    'padding:6px 16px 10px 16px;font-size:12px;color:#cdd9f2;gap:12px;">'
+                    '<span>' + str(_cart["qtd_banco"]) + ' depósitos no banco (' + fmt_brl(_cart["soma_banco"]) + ') '
+                    '&times; ' + str(_cart["qtd_sankhya"]) + ' notas baixadas (' + fmt_brl(_cart["soma_sankhya"]) + ')</span>'
+                    '<span style="text-align:right;white-space:nowrap;">' + _res_txt + '</span></div>'
+                )
             if item["banco"]:
                 blocos += (
                     '<div style="padding:8px 16px 2px 16px;"><span style="background:#123f2e;'
