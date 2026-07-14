@@ -3610,26 +3610,53 @@ def tela_upload():
         with st.spinner("Processando... isso pode levar alguns segundos."):
             try:
                 dfs_banco = []
+                _previas_removidas = 0
                 for nome_conta, arq in arquivos_banco:
                     df = carregar_extrato_banco(
                         arq, conta=nome_conta, ano_referencia=data_ref.year
                     )
+                    # v5.62: extrato consolidado NÃO contém futuro. Arquivos
+                    # diários nomeados DD_MM_AAAA (Bradesco/Itaú) podem trazer
+                    # PRÉVIA do próximo dia útil (Bradesco: lançamentos futuros
+                    # com dcto 2374xx) — o consolidado vem no arquivo do próprio
+                    # dia, com outro histórico/ordem/saldo, duplicando tudo.
+                    # Descarta lançamentos com data POSTERIOR à data do arquivo
+                    # (sanidade: só se o nome condiz com o período do conteúdo).
+                    _m_dt = re.search(r"(\d{2})[_\-.](\d{2})[_\-.](\d{4})", str(getattr(arq, "name", "")))
+                    if _m_dt is not None and "data" in df.columns:
+                        try:
+                            _dt_arq = pd.Timestamp(int(_m_dt.group(3)), int(_m_dt.group(2)), int(_m_dt.group(1)))
+                            _dts = pd.to_datetime(df["data"], errors="coerce")
+                            if _dts.notna().any() and _dts.min() <= _dt_arq:
+                                _fut = _dts > _dt_arq
+                                if bool(_fut.any()):
+                                    _previas_removidas += int(_fut.sum())
+                                    df = df[~_fut].reset_index(drop=True)
+                        except (ValueError, TypeError):
+                            pass
                     # v5.61: guarda a origem pra detectar sobreposição de períodos
                     df["_arq_origem"] = getattr(arq, "name", "")
                     dfs_banco.append(df)
                 banco = pd.concat(dfs_banco, ignore_index=True) if dfs_banco else pd.DataFrame()
+                if _previas_removidas:
+                    st.info(
+                        f"ℹ️ {_previas_removidas} lançamento(s) de PRÉVIA descartado(s) — "
+                        "data posterior à do arquivo (ex.: Bradesco mostra o próximo dia "
+                        "útil como prévia; o consolidado entra no arquivo do próprio dia)."
+                    )
 
-                # v5.61: DEDUP ENTRE ARQUIVOS, com prova. Dois extratos da mesma
-                # conta com períodos sobrepostos duplicam as linhas (caso real
-                # Bradesco: cada depósito CIELO entrou 2× e o dia dobrou). Prova:
-                # mesma conta+data+histórico+valor+SALDO CORRENTE = mesma
-                # transação → remove a cópia. Linha SEM saldo nunca é removida
-                # (sem prova, não apaga) — nesse caso, apenas AVISA.
+                # v5.61/v5.62: DEDUP ENTRE ARQUIVOS, com prova de POSIÇÃO NA
+                # CADEIA: mesma conta+data+valor+SALDO CORRENTE = a mesma
+                # transação, mesmo que o histórico mude entre arquivos (a cauda
+                # do Bradesco reescreve 'APLIC.AUTOM.INVESTFACIL*' como
+                # 'APLIC.INVEST FACIL'). Duas transações reais de mesmo valor no
+                # mesmo dia têm saldos correntes DIFERENTES — chave é segura.
+                # Linha SEM saldo nunca é removida (sem prova, não apaga).
                 if not banco.empty and "_saldo_linha" in banco.columns:
                     _antes_x = len(banco)
                     _tem_sx = banco["_saldo_linha"].notna()
                     _dup_x = banco.duplicated(
-                        subset=["conta", "data", "historico", "valor", "_saldo_linha"],
+                        subset=["conta", "data", "valor", "_saldo_linha"],
                         keep="first",
                     ) & _tem_sx
                     if bool(_dup_x.any()):
