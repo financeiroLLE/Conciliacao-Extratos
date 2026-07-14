@@ -84,6 +84,7 @@ def detectar_top_1722(
     pendentes_banco: pd.DataFrame,
     pendentes_sistema: pd.DataFrame,
     janela_dias: int = 2,
+    tarifas_adquirente: pd.DataFrame | None = None,
 ) -> ResultadoTop1722:
     """Detecta agrupamento TOP 1722 por conta usando lógica de SOMA TOTAL.
 
@@ -91,6 +92,10 @@ def detectar_top_1722(
         pendentes_banco: linhas do banco que NÃO casaram no match 1-pra-1.
         pendentes_sistema: linhas do Sankhya que não casaram. Precisa ter coluna 'top_baixa'.
         janela_dias: mantido por compatibilidade (não usado nesta regra v5.2).
+        tarifas_adquirente: v5.59 — linhas de aluguel/tarifa do extrato da
+            ADQUIRENTE (colunas data e valor). Permite fechar o dia LÍQUIDO de
+            tarifa: depósitos = vendas 1722 + despesa de tarifa lançada no
+            Sankhya, com a adquirente comprovando cada valor ao centavo.
 
     Returns:
         ResultadoTop1722.
@@ -122,6 +127,19 @@ def detectar_top_1722(
     ].copy()
     if top1722.empty:
         return ResultadoTop1722()
+
+    # v5.59: tarifas comprovadas pela adquirente, por dia (valores absolutos)
+    _tarifas_dia: dict = {}
+    if tarifas_adquirente is not None and not getattr(tarifas_adquirente, "empty", True):
+        try:
+            _ta = tarifas_adquirente.copy()
+            _ta["data"] = pd.to_datetime(_ta["data"], errors="coerce").dt.normalize()
+            _ta["valor"] = pd.to_numeric(_ta["valor"], errors="coerce").abs().round(2)
+            _ta = _ta[_ta["data"].notna() & (_ta["valor"] > 0)]
+            for _d_t, _g_t in _ta.groupby("data"):
+                _tarifas_dia[_d_t] = sorted(_g_t["valor"].tolist())
+        except Exception:
+            _tarifas_dia = {}
 
     grupos = []
     com_diff = []
@@ -192,23 +210,71 @@ def detectar_top_1722(
                 _s_dia = _dias_s[_dias_s["_dia"] == _dia]
                 _sb = round(float(_b_dia["valor"].sum()), 2)
                 _ss = round(float(_s_dia["valor"].sum()), 2)
-                if abs(_sb - _ss) < 0.005:
+                _fecha_dia = abs(_sb - _ss) < 0.005
+                _linhas_tarifa_dia = pd.DataFrame()
+                _t_total = 0.0
+                # v5.59: dia não fecha na soma simples? Tenta LÍQUIDO DE TARIFA:
+                # depósitos = vendas 1722 + despesa(s) de tarifa lançada(s) no
+                # Sankhya — cada despesa com valor EXATO ao de uma tarifa do
+                # extrato da adquirente no MESMO dia (aluguel, excedentes etc.).
+                # Caso real PISA: 03/07 vendas 21.168,43 + tarifa −309,40
+                # (Aluguel Junho, comprovada na GetNet) = depósitos 20.859,03.
+                if not _fecha_dia and _tarifas_dia.get(_dia):
+                    _cand = sis[
+                        (pd.to_datetime(sis["data"], errors="coerce").dt.normalize() == _dia)
+                        & (sis["conta"].astype(str) == conta)
+                        & (sis["valor"] < 0)
+                        & (~sis["_idx_sis"].isin(indices_sankhya_casados))
+                    ].copy()
+                    _usadas = []
+                    _cand["_abs"] = _cand["valor"].abs().round(2)
+                    _disp = _cand.copy()
+                    for _tv in _tarifas_dia[_dia]:
+                        _hit = _disp[_disp["_abs"] == round(_tv, 2)]
+                        if _hit.empty:
+                            continue
+                        _usadas.append(_hit.iloc[0])
+                        _disp = _disp.drop(index=_hit.index[0])
+                    if _usadas:
+                        _linhas_tarifa_dia = pd.DataFrame(_usadas)
+                        _t_total = round(float(_linhas_tarifa_dia["valor"].sum()), 2)  # negativo
+                        _fecha_dia = abs((_ss + _t_total) - _sb) < 0.005
+                        if not _fecha_dia:
+                            _linhas_tarifa_dia = pd.DataFrame()
+                            _t_total = 0.0
+                if _fecha_dia:
                     _idg = f"G{proximo_id_grupo:04d}"
                     proximo_id_grupo += 1
                     _dias_fechados += 1
+                    _tem_tarifa = not _linhas_tarifa_dia.empty
+                    _status_dia = (
+                        f"Conciliado por Agrupamento — Cartão TOP 1722 (dia {_dia.strftime('%d/%m')}"
+                        + (f" · líquido de tarifa R$ {abs(_t_total):.2f} comprovada pela adquirente" if _tem_tarifa else "")
+                        + ")"
+                    )
                     grupos.append({
                         "id_grupo": _idg,
                         "conta": conta,
                         "qtd_creditos_banco": len(_b_dia),
                         "valor_banco_total": _sb,
-                        "qtd_linhas_sankhya": len(_s_dia),
-                        "valor_sankhya_total": _ss,
+                        "qtd_linhas_sankhya": len(_s_dia) + len(_linhas_tarifa_dia),
+                        "valor_sankhya_total": round(_ss + _t_total, 2),
                         "diferenca": 0.0,
                         "percentual_diferenca": 0.0,
-                        "status": f"Conciliado por Agrupamento — Cartão TOP 1722 (dia {_dia.strftime('%d/%m')})",
+                        "status": _status_dia,
                     })
                     indices_banco_casados.update(int(i) for i in _b_dia["_idx_banco"].tolist())
                     indices_sankhya_casados.update(int(i) for i in _s_dia["_idx_sis"].tolist())
+                    if _tem_tarifa:
+                        indices_sankhya_casados.update(int(i) for i in _linhas_tarifa_dia["_idx_sis"].tolist())
+                        for _, row in _linhas_tarifa_dia.iterrows():
+                            linhas_sankhya_casadas.append({
+                                "id_grupo": _idg, "data": row["data"], "conta": conta,
+                                "historico": row.get("historico", ""),
+                                "documento": row.get("documento", ""),
+                                "valor": float(row["valor"]),
+                                "top_baixa": row.get("top_baixa", ""),
+                            })
                     for _, row in _b_dia.iterrows():
                         linhas_banco_casadas.append({
                             "id_grupo": _idg, "data": row["data"], "conta": conta,
