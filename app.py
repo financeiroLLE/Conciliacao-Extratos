@@ -3614,8 +3614,49 @@ def tela_upload():
                     df = carregar_extrato_banco(
                         arq, conta=nome_conta, ano_referencia=data_ref.year
                     )
+                    # v5.61: guarda a origem pra detectar sobreposição de períodos
+                    df["_arq_origem"] = getattr(arq, "name", "")
                     dfs_banco.append(df)
                 banco = pd.concat(dfs_banco, ignore_index=True) if dfs_banco else pd.DataFrame()
+
+                # v5.61: DEDUP ENTRE ARQUIVOS, com prova. Dois extratos da mesma
+                # conta com períodos sobrepostos duplicam as linhas (caso real
+                # Bradesco: cada depósito CIELO entrou 2× e o dia dobrou). Prova:
+                # mesma conta+data+histórico+valor+SALDO CORRENTE = mesma
+                # transação → remove a cópia. Linha SEM saldo nunca é removida
+                # (sem prova, não apaga) — nesse caso, apenas AVISA.
+                if not banco.empty and "_saldo_linha" in banco.columns:
+                    _antes_x = len(banco)
+                    _tem_sx = banco["_saldo_linha"].notna()
+                    _dup_x = banco.duplicated(
+                        subset=["conta", "data", "historico", "valor", "_saldo_linha"],
+                        keep="first",
+                    ) & _tem_sx
+                    if bool(_dup_x.any()):
+                        banco = banco[~_dup_x].reset_index(drop=True)
+                        st.info(
+                            f"ℹ️ {_antes_x - len(banco)} lançamento(s) removido(s) por estarem "
+                            "repetidos em mais de um arquivo (períodos sobrepostos) — "
+                            "mesma transação comprovada pelo saldo corrente."
+                        )
+                    # sem saldo na linha não há prova — só avisa a possível duplicidade
+                    try:
+                        _sem_s = banco[banco["_saldo_linha"].isna()
+                                       & ~banco["historico"].astype(str).str.contains("SALDO", na=False)]
+                        if not _sem_s.empty and "_arq_origem" in _sem_s.columns:
+                            _gx = _sem_s.groupby(["conta", "data", "historico", "valor"])["_arq_origem"].nunique()
+                            _susp = _gx[_gx > 1]
+                            if len(_susp):
+                                st.warning(
+                                    f"⚠️ {int(len(_susp))} lançamento(s) aparecem em MAIS DE UM arquivo "
+                                    "da mesma conta e podem estar duplicados (esse extrato não traz "
+                                    "saldo por linha, então não removi nada). Confira se os arquivos "
+                                    "enviados cobrem períodos sobrepostos."
+                                )
+                    except Exception:
+                        pass
+                if not banco.empty:
+                    banco = banco.drop(columns=["_saldo_linha", "_arq_origem"], errors="ignore")
 
                 # v3.6: força tipos consistentes após concat de múltiplos extratos.
                 # Sem isso, se um extrato vier com 'data' como string e outro como datetime,
