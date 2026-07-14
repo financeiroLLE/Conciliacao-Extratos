@@ -4068,7 +4068,35 @@ def _linhas_pendentes_do_dia(resultado, conta, dia, lado):
     d = d[dd == pd.Timestamp(dia)]
     if d.empty:
         return []
-    return [(str(h), float(v)) for h, v in zip(d["historico"], d["valor"])]
+    linhas = [(str(h), float(v)) for h, v in zip(d["historico"], d["valor"])]
+
+    # v5.56: COMPACTA o cartão — em dia de cartão que não fechou, listar 113
+    # notas uma a uma inunda o alerta e esconde o resto. Cartão vira UMA linha
+    # de resumo por lado (contagem + soma); o que não é cartão continua linha a
+    # linha. Nada é omitido: a soma exibida é a soma real das linhas.
+    try:
+        if lado == "banco":
+            from src.matching.cartao_top1722 import _eh_cartao_no_banco as _ehc
+            _m = [(_ehc(h) and v > 0) for h, v in linhas]
+        else:
+            if "top_baixa" in d.columns:
+                _m = (d["top_baixa"].astype(str).str.strip() == "1722").tolist()
+            else:
+                _m = [False] * len(linhas)
+        _n_cart = sum(_m)
+        if _n_cart > 3:
+            _soma_cart = round(sum(v for (_, v), f in zip(linhas, _m) if f), 2)
+            _resto = [lv for lv, f in zip(linhas, _m) if not f]
+            if lado == "banco":
+                _rotulo = (f"— {_n_cart} depósitos de CARTÃO (adquirente) somando · "
+                           f"suba o extrato da adquirente na conciliação p/ detalhar")
+            else:
+                _rotulo = (f"— {_n_cart} notas de CARTÃO baixadas (TOP 1722) somando · "
+                           f"suba o extrato da adquirente na conciliação p/ detalhar")
+            linhas = [(_rotulo, _soma_cart)] + _resto
+    except Exception:
+        pass
+    return linhas
 
 
 def _explicar_diferenca_por_dia(resultado, conta):
