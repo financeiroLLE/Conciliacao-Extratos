@@ -3747,11 +3747,26 @@ def tela_upload():
                     versao = 2  # versionamento simples
                     id_origem = exec_anterior
 
+                # v5.59: tarifas comprovadas pela adquirente permitem fechar o
+                # dia de cartão líquido de tarifa (regra da Débora, 14/07).
+                _tarifas_adq_exec = None
+                try:
+                    _adq_exec = _adquirentes_da_sessao()
+                    if (_adq_exec is not None and not getattr(_adq_exec, "empty", True)
+                            and "categoria" in _adq_exec.columns):
+                        _tarifas_adq_exec = _adq_exec[
+                            _adq_exec["categoria"].isin(["aluguel", "tarifa"])
+                        ][["data", "valor"]].copy()
+                        if _tarifas_adq_exec.empty:
+                            _tarifas_adq_exec = None
+                except Exception:
+                    _tarifas_adq_exec = None
                 resultado = executar_pipeline(
                     banco, sistema,
                     data_referencia=datetime.combine(data_ref, datetime.min.time()),
                     tolerancia_dias=tolerancia,
                     rodar_fuzzy=rodar_fuzzy,
+                    tarifas_adquirente=_tarifas_adq_exec,
                 )
 
                 # Fase 1: rede de segurança — avisa se banco e Sankhya cobrem períodos
