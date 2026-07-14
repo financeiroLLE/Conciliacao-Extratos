@@ -362,7 +362,11 @@ def carregar_extrato_banco(
             subset=["data", "historico", "valor", "_saldo_dedup"], keep="first"
         ) & _tem_saldo_linha
         out = out[~_dup_provada].reset_index(drop=True)
-        out = out.drop(columns=["_saldo_dedup"], errors="ignore")
+        # v5.61: NÃO descarta a coluna — renomeia para _saldo_linha. Ela é a
+        # PROVA usada no dedup ENTRE ARQUIVOS (dois extratos com períodos
+        # sobrepostos duplicam as linhas; mesma data+histórico+valor+saldo
+        # corrente = mesma transação). O app remove a coluna antes do pipeline.
+        out = out.rename(columns={"_saldo_dedup": "_saldo_linha"})
 
         # remove linhas sem data ou valor zero/sem valor — v5.47: ANTES de emitir
         # as linhas de saldo, senão um SALDO FINAL de R$ 0,00 legítimo (conta
