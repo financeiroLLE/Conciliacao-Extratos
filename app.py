@@ -4148,6 +4148,32 @@ def _explicar_diferenca_por_dia(resultado, conta):
             "sankhya": _linhas_pendentes_do_dia(resultado, conta, dia, "sankhya"),
             "divergentes": divergentes,
         }
+        # v5.57: se a adquirente (GetNet/Cielo) foi enviada, confere se
+        # aluguel/tarifa DELA naquele dia explica EXATAMENTE o resíduo de
+        # cartão do dia (Sankhya baixou as vendas cheias, a adquirente
+        # descontou a tarifa do repasse). Só anota com prova ao centavo.
+        try:
+            _adq = st.session_state.get("adquirente_df")
+            if _adq is not None and not getattr(_adq, "empty", True) and "categoria" in _adq.columns:
+                _sb_c = sum(v for h, v in item["banco"] if str(h).startswith("—") and "CARTÃO" in str(h))
+                _ss_c = sum(v for h, v in item["sankhya"] if str(h).startswith("—") and "CARTÃO" in str(h))
+                _residuo_c = round(_ss_c - _sb_c, 2)  # >0 = Sankhya baixou a mais
+                if _residuo_c > 0.004 and (_sb_c or _ss_c):
+                    _da = pd.to_datetime(_adq["data"], errors="coerce").dt.normalize()
+                    _t = _adq[(_da == pd.Timestamp(dia)) & (_adq["categoria"].isin(["aluguel", "tarifa"]))]
+                    _soma_t = round(float(pd.to_numeric(_t["valor"], errors="coerce").abs().sum()), 2)
+                    if _soma_t > 0 and abs(_soma_t - _residuo_c) < 0.005:
+                        _nomes_t = " + ".join(
+                            str(x)[:40] for x in _t.get("descricao", _t.get("tipo", pd.Series(dtype=str))).fillna("").tolist() if str(x).strip()
+                        ) or "aluguel/tarifa"
+                        item["nota_cartao"] = (
+                            "A adquirente descontou <b>" + fmt_brl(_soma_t)
+                            + "</b> do repasse deste dia (" + _esc(_nomes_t) + ") — comprovado no "
+                            "extrato da adquirente. As baixas de venda estão corretas; "
+                            "falta lançar essa <b>despesa de tarifa</b> no Sankhya."
+                        )
+        except Exception:
+            pass
         if item["banco"] or item["sankhya"] or item["divergentes"] or abs(dif) >= 0.01:
             out.append(item)
     # ordena pelo "tamanho" do dia: maior entre |dif| e a soma das linhas listadas
@@ -4241,6 +4267,22 @@ def _render_alerta_diferenca_por_dia(dif_bs, explicacao, nota_extra: str = "",
                     '<div style="padding:8px 16px 12px 16px;font-size:12px;color:#9fb3d6;">'
                     'Diferença de volume neste dia sem linha isolada — confira as abas de pendências.</div>'
                 )
+            # v5.57: tarifa da adquirente COMPROVADA para o resíduo do dia
+            if item.get("nota_cartao"):
+                blocos += (
+                    '<div style="margin:0 16px 12px 16px;background:#0c2b1a;border-left:3px solid #0F8C3B;'
+                    'border-radius:6px;padding:8px 12px;font-size:12px;color:#c9efd9;">'
+                    '&#9989; ' + item["nota_cartao"] + '</div>'
+                )
+            # v5.57: cabeçalho do dia com DIREÇÃO e SINAL — antes mostrava só o
+            # valor absoluto e não dava pra somar os dias e chegar no alerta.
+            _dif_d = float(item["dif"])
+            if abs(_dif_d) < 0.005:
+                _cab_val = "R$ 0,00 &middot; lados se compensam"
+            elif _dif_d > 0:
+                _cab_val = "+" + fmt_brl(_dif_d) + ' <span style="font-size:10px;color:#9fb3d6;">banco a mais</span>'
+            else:
+                _cab_val = "&minus;" + fmt_brl(abs(_dif_d)) + ' <span style="font-size:10px;color:#9fb3d6;">Sankhya a mais</span>'
             st.html(
                 '<div style="background:#0b2560;border:1px solid #163062;border-radius:10px;'
                 'margin:0 0 10px 0;overflow:hidden;">'
@@ -4248,8 +4290,21 @@ def _render_alerta_diferenca_por_dia(dif_bs, explicacao, nota_extra: str = "",
                 'background:#071f52;padding:10px 16px;">'
                 '<span style="font-size:13px;font-weight:700;color:#fff;">' + d + '</span>'
                 '<span style="font-size:13px;font-weight:800;color:#FAC318;">'
-                + fmt_brl(abs(item["dif"])) + '</span></div>' + blocos + '</div>'
+                + _cab_val + '</span></div>' + blocos + '</div>'
             )
+        # v5.57: rodapé de CONFERÊNCIA — a soma algébrica dos dias tem que bater
+        # com o valor do alerta. Se não bater, o próprio app avisa.
+        _soma_dias = round(sum(float(i["dif"]) for i in explicacao), 2)
+        _bate_soma = abs(_soma_dias - round(float(dif_bs), 2)) < 0.01
+        st.html(
+            '<div style="display:flex;justify-content:space-between;font-size:12px;'
+            'padding:8px 16px;border-top:1px dashed #1d3a72;color:#9fb3d6;">'
+            '<span>Soma dos dias (com sinal: + banco a mais, &minus; Sankhya a mais)</span>'
+            '<span style="font-weight:700;color:' + ("#7ee0a6" if _bate_soma else "#ffc94d") + ';">'
+            + ("+" if _soma_dias >= 0 else "&minus;") + fmt_brl(abs(_soma_dias))
+            + (" = valor do alerta &#10003;" if _bate_soma else " &ne; valor do alerta &#9888; (parte da diferença não tem dia identificável)")
+            + '</span></div>'
+        )
 
 
 _ROTULOS_CARTAO = {
