@@ -84,14 +84,37 @@ def carregar_relatorio_sistema(
     """
     if hasattr(arquivo, "read"):
         nome = getattr(arquivo, "name", "")
-        engine = "xlrd" if nome.lower().endswith(".xls") else "openpyxl"
         try:
             arquivo.seek(0)
         except Exception:
             pass
+        # v5.54: engine pela ASSINATURA do conteúdo, não pela extensão — o
+        # Sankhya às vezes exporta xlsx RENOMEADO de .xls (assinatura PK/zip),
+        # e xlrd explodia com "Excel xlsx file; not supported".
+        _cab = arquivo.read(4)
+        try:
+            arquivo.seek(0)
+        except Exception:
+            pass
+        if _cab[:4] == b"PK\x03\x04":
+            engine = "openpyxl"
+        elif _cab[:4] == b"\xd0\xcf\x11\xe0":
+            engine = "xlrd"
+        else:
+            engine = "xlrd" if nome.lower().endswith(".xls") else "openpyxl"
         raw = pd.read_excel(arquivo, sheet_name=0, engine=engine, header=None, dtype=str)
     else:
-        engine = "xlrd" if str(arquivo).lower().endswith(".xls") else "openpyxl"
+        try:
+            with open(arquivo, "rb") as _fh:
+                _cab = _fh.read(4)
+        except Exception:
+            _cab = b""
+        if _cab[:4] == b"PK\x03\x04":
+            engine = "openpyxl"
+        elif _cab[:4] == b"\xd0\xcf\x11\xe0":
+            engine = "xlrd"
+        else:
+            engine = "xlrd" if str(arquivo).lower().endswith(".xls") else "openpyxl"
         raw = pd.read_excel(arquivo, sheet_name=0, engine=engine, header=None, dtype=str)
 
     if raw.empty:
