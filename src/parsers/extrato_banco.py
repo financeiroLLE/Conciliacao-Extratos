@@ -333,7 +333,12 @@ def carregar_extrato_banco(
         # dedup abaixo. Duas transações reais idênticas têm saldos correntes
         # DIFERENTES; o recap do Bradesco repete a linha com o MESMO saldo.
         if "saldo" in mapa:
-            out["_saldo_dedup"] = df_aba[mapa["saldo"]].apply(_parse_valor_brl)
+            _sraw = df_aba[mapa["saldo"]]
+            _stem = _sraw.notna() & (_sraw.astype(str).str.strip() != "")
+            out["_saldo_dedup"] = [
+                _parse_valor_brl(x) if t else pd.NA
+                for x, t in zip(_sraw.tolist(), _stem.tolist())
+            ]
         else:
             out["_saldo_dedup"] = pd.NA
 
@@ -344,19 +349,19 @@ def carregar_extrato_banco(
         out = out[~_lixo].reset_index(drop=True)
 
         # alguns extratos (ex.: Bradesco) trazem um recap "Últimos Lançamentos"
-        # que REPETE linhas do corpo principal. Remove duplicatas exatas —
-        # v5.47: agora INCLUINDO O SALDO na chave quando o extrato tem a coluna.
-        # Motivo: duas transações reais idênticas (ex.: cliente paga 2× o mesmo
-        # PIX no mesmo dia) têm saldos correntes DIFERENTES e são dinheiro de
-        # verdade — o dedup antigo (data+histórico+valor) descartava a segunda
-        # e o extrato "perdia" a linha. O recap repete a linha com o MESMO
-        # saldo, então continua sendo removido normalmente.
-        if out["_saldo_dedup"].notna().any():
-            out = out.drop_duplicates(
-                subset=["data", "historico", "valor", "_saldo_dedup"]
-            ).reset_index(drop=True)
-        else:
-            out = out.drop_duplicates(subset=["data", "historico", "valor"]).reset_index(drop=True)
+        # que REPETE linhas do corpo principal. v5.55: dedup SÓ COM PROVA —
+        # remove apenas linha cuja (data, histórico, valor, SALDO PREENCHIDO)
+        # repete: o recap repete a linha com o MESMO saldo corrente. Linha SEM
+        # saldo NUNCA é removida: no Itaú diário as transações não têm saldo e
+        # 11 tarifas TAR C/C SISPAG de R$ 0,32 no mesmo dia são 11 cobranças
+        # REAIS — o dedup antigo colapsava em 1 e o extrato "perdia" R$ 6,08
+        # (caso real ITAU KING, 19 tarifas engolidas). Célula vazia agora vira
+        # NA (não 0,0), então não forma chave repetida.
+        _tem_saldo_linha = out["_saldo_dedup"].notna()
+        _dup_provada = out.duplicated(
+            subset=["data", "historico", "valor", "_saldo_dedup"], keep="first"
+        ) & _tem_saldo_linha
+        out = out[~_dup_provada].reset_index(drop=True)
         out = out.drop(columns=["_saldo_dedup"], errors="ignore")
 
         # remove linhas sem data ou valor zero/sem valor — v5.47: ANTES de emitir
