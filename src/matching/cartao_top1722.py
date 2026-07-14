@@ -177,28 +177,81 @@ def detectar_top_1722(
             indices_banco_casados.update(int(i) for i in creditos_cartao["_idx_banco"].tolist())
             indices_sankhya_casados.update(int(i) for i in sis_conta["_idx_sis"].tolist())
         else:
-            # QUALQUER diferença (pequena ou grande) — NÃO agrupa e NÃO consome.
-            # Regra da usuária: só sai de Pendentes quando bate EXATO. Nunca supõe
-            # taxa de cartão nem esconde o valor; fica como alerta "a analisar" e as
-            # linhas continuam visíveis em Pendentes/Divergência.
-            com_diff.append({
-                "id_grupo": id_grupo,
-                "conta": conta,
-                "qtd_creditos_banco": len(creditos_cartao),
-                "valor_banco_total": soma_banco,
-                "qtd_linhas_sankhya": len(sis_conta),
-                "valor_sankhya_total": soma_sankhya,
-                "diferenca": diferenca,
-                "percentual_diferenca": round(pct_diff * 100, 3),
-                "status": "TOP 1722 com Diferença — a analisar",
-                "motivo": (
-                    f"Sankhya R$ {soma_sankhya:.2f} × Banco R$ {soma_banco:.2f}. "
-                    f"Diferença R$ {abs(diferenca):.2f} ({pct_diff*100:.2f}%). "
-                    f"Não confirmado como taxa — valor em aberto, a analisar. "
-                    f"As linhas continuam em Pendentes."
-                ),
-            })
-            # NÃO consome — linhas seguem visíveis
+            # v5.53: a soma TOTAL não bateu — tenta POR DIA antes de desistir.
+            # Caso real (Bradesco × Cielo): a baixa do Sankhya é pelo LÍQUIDO e a
+            # soma diária fecha ao centavo com os depósitos do dia (2–3 bandeiras);
+            # um único depósito fora do período (ex.: 10/07 sem Sankhya) poisonava
+            # a conta inteira e jogava 60+ linhas em Pendentes. Dia que fecha
+            # EXATO concilia; dia que não fecha continua visível. Zero suposição.
+            _dias_b = creditos_cartao.assign(_dia=creditos_cartao["data"].dt.normalize())
+            _dias_s = sis_conta.assign(_dia=sis_conta["data"].dt.normalize())
+            _dias_comuns = sorted(set(_dias_b["_dia"]) & set(_dias_s["_dia"]))
+            _dias_fechados = 0
+            for _dia in _dias_comuns:
+                _b_dia = _dias_b[_dias_b["_dia"] == _dia]
+                _s_dia = _dias_s[_dias_s["_dia"] == _dia]
+                _sb = round(float(_b_dia["valor"].sum()), 2)
+                _ss = round(float(_s_dia["valor"].sum()), 2)
+                if abs(_sb - _ss) < 0.005:
+                    _idg = f"G{proximo_id_grupo:04d}"
+                    proximo_id_grupo += 1
+                    _dias_fechados += 1
+                    grupos.append({
+                        "id_grupo": _idg,
+                        "conta": conta,
+                        "qtd_creditos_banco": len(_b_dia),
+                        "valor_banco_total": _sb,
+                        "qtd_linhas_sankhya": len(_s_dia),
+                        "valor_sankhya_total": _ss,
+                        "diferenca": 0.0,
+                        "percentual_diferenca": 0.0,
+                        "status": f"Conciliado por Agrupamento — Cartão TOP 1722 (dia {_dia.strftime('%d/%m')})",
+                    })
+                    indices_banco_casados.update(int(i) for i in _b_dia["_idx_banco"].tolist())
+                    indices_sankhya_casados.update(int(i) for i in _s_dia["_idx_sis"].tolist())
+                    for _, row in _b_dia.iterrows():
+                        linhas_banco_casadas.append({
+                            "id_grupo": _idg, "data": row["data"], "conta": conta,
+                            "historico": row.get("historico", ""),
+                            "documento": row.get("documento", ""),
+                            "valor": float(row["valor"]),
+                        })
+                    for _, row in _s_dia.iterrows():
+                        linhas_sankhya_casadas.append({
+                            "id_grupo": _idg, "data": row["data"], "conta": conta,
+                            "historico": row.get("historico", ""),
+                            "documento": row.get("documento", ""),
+                            "valor": float(row["valor"]),
+                            "top_baixa": row.get("top_baixa", ""),
+                        })
+            # o que sobrou (dias sem par exato) fica em "com diferença — a analisar"
+            _rest_b = _dias_b[~_dias_b["_idx_banco"].isin(indices_banco_casados)]
+            _rest_s = _dias_s[~_dias_s["_idx_sis"].isin(indices_sankhya_casados)]
+            if not _rest_b.empty or not _rest_s.empty:
+                _sb_r = round(float(_rest_b["valor"].sum()), 2)
+                _ss_r = round(float(_rest_s["valor"].sum()), 2)
+                _dif_r = round(_sb_r - _ss_r, 2)
+                _pct_r = abs(_dif_r) / _ss_r if _ss_r > 0 else 0.0
+                com_diff.append({
+                    "id_grupo": id_grupo,
+                    "conta": conta,
+                    "qtd_creditos_banco": len(_rest_b),
+                    "valor_banco_total": _sb_r,
+                    "qtd_linhas_sankhya": len(_rest_s),
+                    "valor_sankhya_total": _ss_r,
+                    "diferenca": _dif_r,
+                    "percentual_diferenca": round(_pct_r * 100, 3),
+                    "status": "TOP 1722 com Diferença — a analisar",
+                    "motivo": (
+                        f"{_dias_fechados} dia(s) fecharam ao centavo e foram conciliados. "
+                        f"Restou: Sankhya R$ {_ss_r:.2f} × Banco R$ {_sb_r:.2f}. "
+                        f"Diferença R$ {abs(_dif_r):.2f}. "
+                        f"Não confirmado como taxa — valor em aberto, a analisar. "
+                        f"As linhas restantes continuam em Pendentes."
+                    ),
+                })
+            # este ramo já registrou as próprias linhas — NUNCA cai no bloco de
+            # registro do caso "total exato" abaixo.
             continue
 
         # Registra linhas individuais consumidas (banco)
