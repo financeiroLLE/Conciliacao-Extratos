@@ -187,6 +187,21 @@ def _ler_contas_sankhya_da_sessao() -> list[str]:
 
 
 @st.cache_data(show_spinner=False)
+def _detecta_conta_bytes(nome: str, conteudo: bytes):
+    """v5.64: lê o cabeçalho do extrato (banco/agência/conta/empresa) a partir
+    dos bytes. Cacheado — no modo 'Várias contas de uma vez' cada rerun da tela
+    repassaria todos os arquivos; com cache, cada arquivo é lido uma vez só."""
+    import io as _io
+    from src.parsers.deteccao_conta import detectar_conta_extrato
+    try:
+        b = _io.BytesIO(conteudo)
+        b.name = nome
+        return detectar_conta_extrato(b)
+    except Exception:
+        return None
+
+
+@st.cache_data(show_spinner=False)
 def _parse_adquirentes(payload: tuple) -> pd.DataFrame:
     """Lê todos os arquivos de adquirente (GetNet/PagBank) e junta num só df,
     no esquema comum de src.parsers.adquirente. payload = ((nome, bytes), ...)."""
@@ -1633,7 +1648,7 @@ def _card_investimentos_de_df(df: pd.DataFrame) -> str:
     DEDUP banco × sankhya: prefere Sankhya quando ambos existem.
     """
     if df.empty:
-        return card_kpi("Investimentos", "—", "sem aplicações/resgates")
+        return card_kpi("Posição de Investimentos", "—", "sem aplicações/resgates")
 
     df = df.copy()
 
@@ -1643,7 +1658,7 @@ def _card_investimentos_de_df(df: pd.DataFrame) -> str:
         df = df[~mask_saldo]
 
     if df.empty:
-        return card_kpi("Investimentos", "—", "sem aplicações/resgates")
+        return card_kpi("Posição de Investimentos", "—", "sem aplicações/resgates")
 
     # DEDUP banco × sankhya: preferir Sankhya quando ambos existem
     cols_chave = [c for c in ["data", "valor", "conta", "tipo_aplicacao"] if c in df.columns]
@@ -1682,7 +1697,7 @@ def _card_investimentos_de_df(df: pd.DataFrame) -> str:
         <div class="lle-kpi-sub-label" style="margin-top:2px; opacity:.65;">ℹ️ O que significa? veja em “Entenda seus cards”.</div>
     </div>
     """
-    return card_kpi_html("Investimentos", fmt_brl(saldo_liquido), sub, classe="destaque-amarelo")
+    return card_kpi_html("Posição de Investimentos", fmt_brl(saldo_liquido), sub, classe="destaque-amarelo")
 
 
 def render_cards(cards: list[str]):
@@ -2788,11 +2803,15 @@ def pagina_dashboard():
         f"<div style='display:flex;justify-content:space-between;margin-top:4px'><span style='font-size:14px;color:#cdd9f2'>Despesas</span><b style='font-size:16px;color:#ff9a9a'>{_brl(desp_b)}</b></div>"
         f"<div style='display:flex;justify-content:space-between;margin-top:4px;border-top:1px solid #163062;padding-top:6px'><span style='font-size:14px;color:#cdd9f2'>Líquido <span style='color:#FAC318'>(foi p/ invest.)</span></span><b style='font-size:16px;color:#fff'>{_brl(liq)}</b></div></div>"
     )
-    _card_minis = (
-        "<div style='display:grid;grid-template-columns:1fr 1fr;gap:12px'>"
+    # v5.63: mini-cards SEPARADOS (um markdown por card). O bloco único com
+    # grid de 2 cards era exatamente o padrão que causa sobreposição (v5.56/
+    # v5.60): o Streamlit mede a altura antes da fonte carregar e o conteúdo
+    # vaza sobre os cards vizinhos. Agora cada mini vai em sua própria coluna.
+    _card_mini_div = (
         f"<div style='background:#0b2560;border:1px solid #163062;border-top:3px solid {_dv_cor};border-radius:14px;padding:15px'><div style='font-size:12px;letter-spacing:1px;color:#9fb3d6'>DIVERGÊNCIAS</div><div style='font-size:24px;font-weight:800;color:{_dv_cor};margin-top:6px'>{qtd_div}</div><div style='font-size:12px;color:#6f88b8'>R$ {_brl(kpis.get('divergencia_sankhya_banco',0))}</div></div>"
+    )
+    _card_mini_inv = (
         f"<div style='background:#0b2560;border:1px solid #163062;border-top:3px solid #FAC318;border-radius:14px;padding:15px'><div style='font-size:12px;letter-spacing:1px;color:#9fb3d6'>INVESTIMENTOS</div><div style='font-size:24px;font-weight:800;color:#FAC318;margin-top:6px'>{_brl(inv_net)}</div><div style='font-size:12px;color:#6f88b8'>aplic × resgate</div></div>"
-        "</div>"
     )
     _card_trend = (
         f"<div style='background:#0b2560;border:1px solid #163062;border-radius:14px;padding:14px 18px;display:flex;justify-content:space-between;align-items:center'><span style='font-size:12px;letter-spacing:1px;color:#9fb3d6'>{_trend_label}</span>{_trend_html}</div>"
@@ -2810,7 +2829,11 @@ def pagina_dashboard():
         st.markdown(_card_saldo, unsafe_allow_html=True)
     with _col_dir:
         st.markdown(_card_mov, unsafe_allow_html=True)
-        st.markdown(_card_minis, unsafe_allow_html=True)
+        _mc1, _mc2 = st.columns(2, gap="small")
+        with _mc1:
+            st.markdown(_card_mini_div, unsafe_allow_html=True)
+        with _mc2:
+            st.markdown(_card_mini_inv, unsafe_allow_html=True)
         if _c70_card:
             st.markdown(_c70_card, unsafe_allow_html=True)
         st.markdown(_card_trend, unsafe_allow_html=True)
@@ -3458,27 +3481,120 @@ def tela_upload():
                     "Suba os extratos e o Sankhya — depois escolha a conta de "
                     "cada arquivo numa lista."
                 )
+            # v5.64: DEDUP por CONTEÚDO. Contas diferentes geram extratos com o
+            # MESMO nome de arquivo (ex.: '01.07.2026.xls'), então o nome não
+            # serve nem de chave nem de critério de duplicata — só descartamos
+            # quando os BYTES são idênticos (o mesmo arquivo subido duas vezes).
+            import hashlib as _hl_multi
+            _unicos_m: list = []
+            _dups_m: list = []
+            _vistos_m: set = set()
+            for _f in (arquivos_multi or []):
+                try:
+                    _h = _hl_multi.md5(_f.getvalue()).hexdigest()
+                except Exception:
+                    _h = None
+                if _h is not None and _h in _vistos_m:
+                    _dups_m.append(_f.name)
+                    continue
+                if _h is not None:
+                    _vistos_m.add(_h)
+                _unicos_m.append((_f, _h))
+            if _dups_m:
+                st.info(
+                    "ℹ️ Arquivo(s) de conteúdo idêntico ignorado(s) para não "
+                    "contar em dobro: " + ", ".join(sorted(set(_dups_m)))
+                )
+            # v5.64: detecção de cabeçalho POR ARQUIVO. Com nomes que são só
+            # datas, o cabeçalho (agência/conta/empresa) é a única pista
+            # confiável para pré-selecionar a conta certa do Sankhya.
+            _det_por_arquivo: dict = {}
+            _digitos_vistos: dict = {}
+            for _f, _h in _unicos_m:
+                try:
+                    _det = _detecta_conta_bytes(_f.name, _f.getvalue())
+                except Exception:
+                    _det = None
+                _det_por_arquivo[id(_f)] = _det
+                _dig = getattr(_det, "conta_digitos", "") if _det is not None else ""
+                if _dig:
+                    _digitos_vistos.setdefault(_dig, []).append(_f.name)
+            _repetidos = {d: ns for d, ns in _digitos_vistos.items() if len(ns) > 1}
+            if _repetidos:
+                _txt_rep = " · ".join(
+                    "conta " + d + ": " + ", ".join(ns) for d, ns in _repetidos.items()
+                )
+                st.warning(
+                    "⚠️ Arquivos que parecem ser da MESMA conta (mesmo número no "
+                    "cabeçalho): " + _txt_rep + ". Se receberem o mesmo nome abaixo, "
+                    "o app soma tudo como uma conta só (ex.: extratos diários). "
+                    "Se não era a intenção, confira os arquivos."
+                )
             arquivos_banco = []
-            for f in (arquivos_multi or []):
+            _widget_key_multi: dict = {}
+            for _i_m, (f, _h) in enumerate(_unicos_m):
+                # v5.64: chave do widget = impressão digital do CONTEÚDO — dois
+                # arquivos com o mesmo nome (contas diferentes) não derrubam
+                # mais a tela com StreamlitDuplicateElementKey.
+                hkey = _h[:10] if _h else f"pos{_i_m}"
+                _widget_key_multi[id(f)] = hkey
                 base = f.name.rsplit(".", 1)[0].strip()
+                _det = _det_por_arquivo.get(id(f))
                 if contas_sankhya:
                     opcoes = contas_sankhya + [_OPCAO_DIGITAR]
                     idx_match = _melhor_match_conta(base, contas_sankhya)
+                    # v5.64: pré-seleção pelo CABEÇALHO — mesma régua do modo
+                    # '1 conta por vez': 1º número da conta (v5.9); 2º empresa
+                    # com match ÚNICO (v5.51); 3º Sankhya com UMA conta só
+                    # (v5.53). Ambiguidade = não chuta, cai em 'Digitar…'.
+                    if idx_match is None and _det is not None and getattr(_det, "conta_digitos", ""):
+                        import re as _re_m
+                        _alvo_dig = _det.conta_digitos
+                        for _j, _opt in enumerate(contas_sankhya):
+                            if _alvo_dig and _alvo_dig in _re_m.sub(r"\D", "", str(_opt)):
+                                idx_match = _j
+                                break
+                    if idx_match is None and _det is not None and getattr(_det, "empresa", ""):
+                        _emp_n = _norm_conta(_det.empresa)
+                        _tok_banco = {"itau", "itaú", "bradesco", "sicredi",
+                                      "santander", "caixa", "banco", "ag", "cc", "c", "conta"}
+                        _cands_emp = []
+                        for _j, _opt in enumerate(contas_sankhya):
+                            _toks = [t for t in _norm_conta(_opt).split()
+                                     if t not in _tok_banco and not t.isdigit() and len(t) > 1]
+                            if _toks and all(t in _emp_n.split() for t in _toks):
+                                _cands_emp.append(_j)
+                        if len(_cands_emp) == 1:
+                            idx_match = _cands_emp[0]
+                    if idx_match is None and len(contas_sankhya) == 1:
+                        idx_match = 0
                     idx_default = (
                         idx_match if idx_match is not None else len(opcoes) - 1
                     )
+                    # v5.64: transparência — mostra o que foi lido do cabeçalho
+                    if _det is not None and (getattr(_det, "conta", "") or getattr(_det, "agencia", "")):
+                        _ped = []
+                        if getattr(_det, "banco", ""):
+                            _ped.append(str(_det.banco))
+                        if getattr(_det, "agencia", ""):
+                            _ped.append("ag " + str(_det.agencia))
+                        if getattr(_det, "conta", ""):
+                            _ped.append("cc " + str(_det.conta))
+                        if getattr(_det, "empresa", ""):
+                            _ped.append(str(_det.empresa))
+                        st.caption("“" + f.name + "” — cabeçalho: " + " · ".join(_ped))
                     escolha = st.selectbox(
                         f"Conta de “{f.name}”",
                         opcoes,
                         index=idx_default,
-                        key=f"conta_multi_sel_{f.name}",
+                        key=f"conta_multi_sel_{hkey}",
                         help="Nome da conta como aparece no Sankhya.",
                     )
                     if escolha == _OPCAO_DIGITAR:
                         nome_arq = st.text_input(
                             f"Nome da conta (nova) para “{f.name}”",
                             value=base,
-                            key=f"conta_multi_novo_{f.name}",
+                            key=f"conta_multi_novo_{hkey}",
                         ).strip()
                     else:
                         nome_arq = escolha
@@ -3563,9 +3679,20 @@ def tela_upload():
                         f"e não conciliam."
                     )
                 with _c2:
-                    if st.button(f"Usar “{_alvo}”", key=f"fix_conta_{_f.name}"):
+                    # v5.64: no modo múltiplo a chave do widget é por hash do
+                    # conteúdo (nomes de arquivo se repetem entre contas).
+                    _hk_fix = None
+                    if modo != "1 conta por vez":
+                        try:
+                            _hk_fix = _widget_key_multi.get(id(_f))
+                        except NameError:
+                            _hk_fix = None
+                    if st.button(f"Usar “{_alvo}”",
+                                 key=f"fix_conta_{_hk_fix or _f.name}"):
                         if modo == "1 conta por vez":
                             st.session_state["conta_single_sel"] = _alvo
+                        elif _hk_fix:
+                            st.session_state[f"conta_multi_sel_{_hk_fix}"] = _alvo
                         else:
                             st.session_state[f"conta_multi_sel_{_f.name}"] = _alvo
                         st.rerun()
@@ -4514,6 +4641,71 @@ def render_tab_diferenca_cartao(adq: pd.DataFrame, resultado, conta: str):
         st.dataframe(det, hide_index=True, use_container_width=True)
 
 
+def _render_regua_conferencia_sankhya(resultado: ResultadoConciliacao, conta: str, k: dict):
+    """v5.63: régua de conferência com o rodapé do Sankhya (opção B aprovada).
+
+    Reproduz a conta feita na calculadora contra o rodapé da tela de
+    Conciliação Bancária do Sankhya: Crédito = receitas + resgates e
+    Débito = despesas + aplicações (o rodapé soma investimentos nos totais;
+    o app os separa nos cards). Mostra a decomposição do LADO SANKHYA e só
+    exibe ✓ quando banco e Sankhya fecham ao centavo — sem prova, mostra a
+    diferença como 'a conferir' (zero falso positivo).
+    """
+    rec_b = float(k.get("receitas_banco", 0.0)); desp_b = float(k.get("despesas_banco", 0.0))
+    rec_s = float(k.get("receitas_sistema", 0.0)); desp_s = float(k.get("despesas_sistema", 0.0))
+
+    # aplicações/resgates POR ORIGEM (sem dedup — o rodapé do Sankhya soma as
+    # linhas do próprio Sankhya; o extrato, as do banco). Exclui SALDO.
+    inv = resultado.aplicacoes_resgates_da_conta(conta)
+    ap_b = rg_b = ap_s = rg_s = 0.0
+    if inv is not None and not inv.empty and "tipo_aplicacao" in inv.columns:
+        inv = inv.copy()
+        if "historico" in inv.columns:
+            inv = inv[~inv["historico"].astype(str).str.upper().str.contains("SALDO", na=False)]
+        _orig = inv["origem"].astype(str) if "origem" in inv.columns else pd.Series("", index=inv.index)
+        _eh_sk = _orig.str.contains("Sankhya", case=False, na=False)
+        _val = pd.to_numeric(inv["valor"], errors="coerce").abs().fillna(0.0)
+        _ap = inv["tipo_aplicacao"] == "Aplicação"
+        _rg = inv["tipo_aplicacao"] == "Resgate"
+        ap_s = float(_val[_ap & _eh_sk].sum()); rg_s = float(_val[_rg & _eh_sk].sum())
+        ap_b = float(_val[_ap & ~_eh_sk].sum()); rg_b = float(_val[_rg & ~_eh_sk].sum())
+
+    cred_b = round(rec_b + rg_b, 2); cred_s = round(rec_s + rg_s, 2)
+    deb_b = round(desp_b + ap_b, 2); deb_s = round(desp_s + ap_s, 2)
+    tot_b = round(cred_b + deb_b, 2); tot_s = round(cred_s + deb_s, 2)
+
+    def _selo(vb, vs):
+        if abs(vb - vs) < 0.005:
+            return '<span style="color:#7ee0a6;font-weight:600;">= banco &#10003;</span>'
+        return ('<span style="color:#ffc94d;font-weight:600;">banco ' + fmt_brl(vb)
+                + ' &middot; dif ' + fmt_brl(round(vb - vs, 2)) + ' a conferir &#9888;</span>')
+
+    def _col(titulo, parcelas_html, total, selo_html):
+        return ('<div style="font-size:12px;color:#cdd9f2;line-height:1.7;">'
+                '<span style="color:#9fb3d6;">' + titulo + '</span><br>'
+                + parcelas_html + '<br>'
+                '<span style="color:#fff;font-weight:600;">= ' + fmt_brl(total) + '</span> '
+                + selo_html + '</div>')
+
+    col_cred = _col("Crédito (rodapé do Sankhya)",
+                    "Receitas " + fmt_brl(rec_s) + " + Resgates " + fmt_brl(rg_s),
+                    cred_s, _selo(cred_b, cred_s))
+    col_deb = _col("Débito (rodapé do Sankhya)",
+                   "Despesas " + fmt_brl(desp_s) + " + Aplicações " + fmt_brl(ap_s),
+                   deb_s, _selo(deb_b, deb_s))
+    col_tot = _col("Movimentação total (Crédito + Débito)",
+                   "Operacional " + fmt_brl(round(rec_s + desp_s, 2))
+                   + " + Investimentos " + fmt_brl(round(ap_s + rg_s, 2)),
+                   tot_s, _selo(tot_b, tot_s))
+    _borda = "#7ee0a6" if (abs(cred_b - cred_s) < 0.005 and abs(deb_b - deb_s) < 0.005) else "#FAC318"
+    st.html('<div style="background:#0b2560;border:1px solid #163062;border-left:4px solid ' + _borda + ';'
+            'border-radius:0 12px 12px 0;padding:14px 18px;margin:2px 0 10px 0;">'
+            '<div style="font-size:11px;letter-spacing:1px;color:#9fb3d6;margin-bottom:10px;">'
+            'CONFERÊNCIA COM O RODAPÉ DO SANKHYA</div>'
+            '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;">'
+            + col_cred + col_deb + col_tot + '</div></div>')
+
+
 def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
     col_back, _ = st.columns([1, 5])
     with col_back:
@@ -4527,14 +4719,17 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
     sub_banco_c = _card_total_com_rec_desp(k["receitas_banco"], k["despesas_banco"])
     sub_sankhya_c = _card_total_com_rec_desp(k["receitas_sistema"], k["despesas_sistema"])
     cards = [
-        card_kpi_html("Total movimentado · banco", fmt_brl(k["total_movimentado_banco"]),
+        card_kpi_html("Movimentação Operacional · Banco", fmt_brl(k["total_movimentado_banco"]),
                       sub_banco_c),
-        card_kpi_html("Total lançado no Sankhya", fmt_brl(k["total_extrato_sistema"]),
+        card_kpi_html("Movimentação Operacional · Sankhya", fmt_brl(k["total_extrato_sistema"]),
                       sub_sankhya_c),
         _card_investimentos_da_conta(resultado, conta),
-        card_kpi("% conferido em pares", fmt_pct(k["percentual_conciliado"]), classe="destaque-amarelo"),
+        card_kpi("Índice de Conciliação", fmt_pct(k["percentual_conciliado"]),
+                 "conferido em pares", classe="destaque-amarelo"),
     ]
     render_cards(cards)
+    # v5.63: régua de conferência com o rodapé do Sankhya (opção B aprovada)
+    _render_regua_conferencia_sankhya(resultado, conta, k)
 
     # Card Falta Conciliar vertical + Falta Lançar + Divergência + Investimentos da conta
     sub_fc = _card_falta_conciliar_vertical(
