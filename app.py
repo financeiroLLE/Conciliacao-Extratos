@@ -4642,14 +4642,15 @@ def render_tab_diferenca_cartao(adq: pd.DataFrame, resultado, conta: str):
 
 
 def _render_regua_conferencia_sankhya(resultado: ResultadoConciliacao, conta: str, k: dict):
-    """v5.63: régua de conferência com o rodapé do Sankhya (opção B aprovada).
+    """v5.65: conferência com o rodapé do Sankhya — tabela espelho em expander.
 
-    Reproduz a conta feita na calculadora contra o rodapé da tela de
-    Conciliação Bancária do Sankhya: Crédito = receitas + resgates e
-    Débito = despesas + aplicações (o rodapé soma investimentos nos totais;
-    o app os separa nos cards). Mostra a decomposição do LADO SANKHYA e só
-    exibe ✓ quando banco e Sankhya fecham ao centavo — sem prova, mostra a
-    diferença como 'a conferir' (zero falso positivo).
+    Layout aprovado (15/07): fica no TOPO do detalhamento; o título do expander
+    já traz o veredito (fecha / valor a conferir) e ele vem ABERTO só quando há
+    diferença. Dentro, uma tabela espelho do rodapé do Sankhya, coluna a coluna:
+    Crédito = receitas + resgates · Débito = despesas + aplicações (o rodapé
+    soma investimentos nos totais; o app os separa nos cards). O selo verde só
+    aparece quando banco e Sankhya fecham ao centavo — sem prova, a diferença
+    fica como 'a conferir' (zero falso positivo).
     """
     rec_b = float(k.get("receitas_banco", 0.0)); desp_b = float(k.get("despesas_banco", 0.0))
     rec_s = float(k.get("receitas_sistema", 0.0)); desp_s = float(k.get("despesas_sistema", 0.0))
@@ -4673,37 +4674,59 @@ def _render_regua_conferencia_sankhya(resultado: ResultadoConciliacao, conta: st
     cred_b = round(rec_b + rg_b, 2); cred_s = round(rec_s + rg_s, 2)
     deb_b = round(desp_b + ap_b, 2); deb_s = round(desp_s + ap_s, 2)
     tot_b = round(cred_b + deb_b, 2); tot_s = round(cred_s + deb_s, 2)
+    dif_c = round(cred_b - cred_s, 2); dif_d = round(deb_b - deb_s, 2)
+    dif_t = round(tot_b - tot_s, 2)
+    fecha = abs(dif_c) < 0.005 and abs(dif_d) < 0.005
 
-    def _selo(vb, vs):
-        if abs(vb - vs) < 0.005:
-            return '<span style="color:#7ee0a6;font-weight:600;">= banco &#10003;</span>'
-        return ('<span style="color:#ffc94d;font-weight:600;">banco ' + fmt_brl(vb)
-                + ' &middot; dif ' + fmt_brl(round(vb - vs, 2)) + ' a conferir &#9888;</span>')
+    if fecha:
+        titulo = ("✅ Conferência com o rodapé do Sankhya — "
+                  "Crédito, Débito e Total fecham com o banco ao centavo")
+    elif abs(dif_t) >= 0.005:
+        titulo = ("⚠️ Conferência com o rodapé do Sankhya — "
+                  + fmt_brl(abs(dif_t)) + " a conferir")
+    else:
+        # lados divergem mas se compensam no total — não exibir um falso R$ 0,00
+        titulo = ("⚠️ Conferência com o rodapé do Sankhya — Crédito e Débito "
+                  "com diferenças que se compensam · a conferir")
 
-    def _col(titulo, parcelas_html, total, selo_html):
-        return ('<div style="font-size:12px;color:#cdd9f2;line-height:1.7;">'
-                '<span style="color:#9fb3d6;">' + titulo + '</span><br>'
-                + parcelas_html + '<br>'
-                '<span style="color:#fff;font-weight:600;">= ' + fmt_brl(total) + '</span> '
-                + selo_html + '</div>')
+    def _selo_dif(dif):
+        if abs(dif) < 0.005:
+            return '<span style="color:#7ee0a6;font-weight:600;">&#10003; fecha ao centavo</span>'
+        _sinal = "&minus;" if dif < 0 else "+"
+        return ('<span style="color:#ffc94d;font-weight:600;">' + _sinal
+                + fmt_brl(abs(dif)) + ' a conferir</span>')
 
-    col_cred = _col("Crédito (rodapé do Sankhya)",
-                    "Receitas " + fmt_brl(rec_s) + " + Resgates " + fmt_brl(rg_s),
-                    cred_s, _selo(cred_b, cred_s))
-    col_deb = _col("Débito (rodapé do Sankhya)",
-                   "Despesas " + fmt_brl(desp_s) + " + Aplicações " + fmt_brl(ap_s),
-                   deb_s, _selo(deb_b, deb_s))
-    col_tot = _col("Movimentação total (Crédito + Débito)",
-                   "Operacional " + fmt_brl(round(rec_s + desp_s, 2))
-                   + " + Investimentos " + fmt_brl(round(ap_s + rg_s, 2)),
-                   tot_s, _selo(tot_b, tot_s))
-    _borda = "#7ee0a6" if (abs(cred_b - cred_s) < 0.005 and abs(deb_b - deb_s) < 0.005) else "#FAC318"
-    st.html('<div style="background:#0b2560;border:1px solid #163062;border-left:4px solid ' + _borda + ';'
-            'border-radius:0 12px 12px 0;padding:14px 18px;margin:2px 0 10px 0;">'
-            '<div style="font-size:11px;letter-spacing:1px;color:#9fb3d6;margin-bottom:10px;">'
-            'CONFERÊNCIA COM O RODAPÉ DO SANKHYA</div>'
-            '<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;">'
-            + col_cred + col_deb + col_tot + '</div></div>')
+    _td_lbl = 'style="padding:5px 8px;text-align:right;color:#9fb3d6;border-bottom:1px solid #163062;"'
+    _td_sk = 'style="padding:9px 8px 1px;text-align:right;color:#fff;font-weight:700;font-size:15px;"'
+    _td_dec = 'style="padding:0 8px 9px;text-align:right;color:#6f88b8;font-size:11px;"'
+    _td_bco = 'style="padding:7px 8px;text-align:right;color:#cdd9f2;border-top:1px solid #163062;"'
+    _td_dif = 'style="padding:7px 8px;text-align:right;border-top:1px solid #163062;"'
+
+    with st.expander(titulo, expanded=not fecha):
+        st.html(
+            '<table style="width:100%;border-collapse:collapse;font-size:12px;table-layout:fixed;">'
+            '<tr><td style="width:20%;padding:5px 8px;"></td>'
+            '<td ' + _td_lbl + '>Crédito</td>'
+            '<td ' + _td_lbl + '>Débito</td>'
+            '<td ' + _td_lbl + '>Movimentação total</td></tr>'
+            '<tr><td style="padding:9px 8px 1px;color:#FAC318;font-weight:600;">Rodapé do Sankhya</td>'
+            '<td ' + _td_sk + '>' + fmt_brl(cred_s) + '</td>'
+            '<td ' + _td_sk + '>' + fmt_brl(deb_s) + '</td>'
+            '<td ' + _td_sk + '>' + fmt_brl(tot_s) + '</td></tr>'
+            '<tr><td style="padding:0 8px 9px;color:#6f88b8;font-size:11px;">como o app chegou</td>'
+            '<td ' + _td_dec + '>Receitas ' + fmt_brl(rec_s) + ' + Resgates ' + fmt_brl(rg_s) + '</td>'
+            '<td ' + _td_dec + '>Despesas ' + fmt_brl(desp_s) + ' + Aplicações ' + fmt_brl(ap_s) + '</td>'
+            '<td ' + _td_dec + '>Operacional ' + fmt_brl(round(rec_s + desp_s, 2)) + ' + Invest. ' + fmt_brl(round(ap_s + rg_s, 2)) + '</td></tr>'
+            '<tr><td style="padding:7px 8px;color:#cdd9f2;border-top:1px solid #163062;">Extrato do banco</td>'
+            '<td ' + _td_bco + '>' + fmt_brl(cred_b) + '</td>'
+            '<td ' + _td_bco + '>' + fmt_brl(deb_b) + '</td>'
+            '<td ' + _td_bco + '>' + fmt_brl(tot_b) + '</td></tr>'
+            '<tr><td style="padding:7px 8px;color:#9fb3d6;border-top:1px solid #163062;">Diferença (banco − Sankhya)</td>'
+            '<td ' + _td_dif + '>' + _selo_dif(dif_c) + '</td>'
+            '<td ' + _td_dif + '>' + _selo_dif(dif_d) + '</td>'
+            '<td ' + _td_dif + '>' + _selo_dif(dif_t) + '</td></tr>'
+            '</table>'
+        )
 
 
 def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
@@ -4716,6 +4739,9 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
     section_title(f"DETALHAMENTO · {conta}")
 
     k = resultado.kpis_da_conta(conta)
+    # v5.65: conferência com o rodapé do Sankhya no TOPO do detalhamento —
+    # expander com veredito no título; abre sozinho só quando há diferença.
+    _render_regua_conferencia_sankhya(resultado, conta, k)
     sub_banco_c = _card_total_com_rec_desp(k["receitas_banco"], k["despesas_banco"])
     sub_sankhya_c = _card_total_com_rec_desp(k["receitas_sistema"], k["despesas_sistema"])
     cards = [
@@ -4728,8 +4754,6 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
                  "conferido em pares", classe="destaque-amarelo"),
     ]
     render_cards(cards)
-    # v5.63: régua de conferência com o rodapé do Sankhya (opção B aprovada)
-    _render_regua_conferencia_sankhya(resultado, conta, k)
 
     # Card Falta Conciliar vertical + Falta Lançar + Divergência + Investimentos da conta
     sub_fc = _card_falta_conciliar_vertical(
