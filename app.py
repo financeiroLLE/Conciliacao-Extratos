@@ -4714,9 +4714,9 @@ def _render_regua_conferencia_sankhya(resultado: ResultadoConciliacao, conta: st
             '<td ' + _td_sk + '>' + fmt_brl(deb_s) + '</td>'
             '<td ' + _td_sk + '>' + fmt_brl(tot_s) + '</td></tr>'
             '<tr><td style="padding:0 8px 9px;color:#6f88b8;font-size:11px;">como o app chegou</td>'
-            '<td ' + _td_dec + '>Receitas ' + fmt_brl(rec_s) + ' + Resgates ' + fmt_brl(rg_s) + '</td>'
+            '<td ' + _td_dec + '>Receitas ' + fmt_brl(rec_s) + ' + Resgates ' + fmt_brl(rg_s) + (' + Rendimentos ' + fmt_brl(rend_s) if rend_s >= 0.005 else '') + '</td>'
             '<td ' + _td_dec + '>Despesas ' + fmt_brl(desp_s) + ' + Aplicações ' + fmt_brl(ap_s) + '</td>'
-            '<td ' + _td_dec + '>Operacional ' + fmt_brl(round(rec_s + desp_s, 2)) + ' + Invest. ' + fmt_brl(round(ap_s + rg_s, 2)) + '</td></tr>'
+            '<td ' + _td_dec + '>Operacional ' + fmt_brl(round(rec_s + desp_s, 2)) + ' + Invest. ' + fmt_brl(round(ap_s + rg_s + rend_s, 2)) + '</td></tr>'
             '<tr><td style="padding:7px 8px;color:#cdd9f2;border-top:1px solid #163062;">Extrato do banco</td>'
             '<td ' + _td_bco + '>' + fmt_brl(cred_b) + '</td>'
             '<td ' + _td_bco + '>' + fmt_brl(deb_b) + '</td>'
@@ -4770,11 +4770,11 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
     # Banco sem explicação (verde quando zero, vermelho quando há)
     if falta_c == 0:
         card_banco_sem_exp = card_kpi(
-            "Banco sem explicação", "R$ 0,00",
-            "movimento do banco que o ERP não justifica", classe="destaque-verde")
+            "Pendente no Extrato Bancário", "R$ 0,00",
+            "movimento do banco sem baixa no Sankhya", classe="destaque-verde")
     else:
         card_banco_sem_exp = card_kpi_html(
-            "Banco sem explicação", fmt_brl(falta_c), sub_fc, classe="destaque-vermelho")
+            "Pendente no Extrato Bancário", fmt_brl(falta_c), sub_fc, classe="destaque-vermelho")
 
     # Sankhya sem confirmação: junta valor + contagem num card só
     cor_div = "destaque-verde" if (div_c == 0 and qtd_div_c == 0) else "destaque-vermelho"
@@ -4783,7 +4783,7 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
                       + ' <span style="font-size:14px; color:#8BA3C7; font-weight:400;">&middot; '
                       + qtd_txt + '</span>')
     card_sankhya_sem_conf = card_kpi_html(
-        "Sankhya sem confirmação", valor_div_html,
+        "Pendente no Sankhya", valor_div_html,
         '<div class="lle-kpi-suffix">lançamentos do ERP que o banco não confirmou</div>',
         classe=cor_div)
 
@@ -4797,7 +4797,7 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
     cards2 = [
         card_banco_sem_exp,
         card_sankhya_sem_conf,
-        card_kpi("Valor conferido", fmt_brl(_conf_mov),
+        card_kpi("Total Conciliado", fmt_brl(_conf_mov),
                  _suf_conf, classe="destaque-verde"),
     ]
     render_cards(cards2)
