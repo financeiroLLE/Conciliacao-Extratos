@@ -4659,6 +4659,10 @@ def _render_regua_conferencia_sankhya(resultado: ResultadoConciliacao, conta: st
     # linhas do próprio Sankhya; o extrato, as do banco). Exclui SALDO.
     inv = resultado.aplicacoes_resgates_da_conta(conta)
     ap_b = rg_b = ap_s = rg_s = 0.0
+    # v5.66: rendimentos entram como CRÉDITO na régua — o rodapé do Sankhya
+    # soma pelo campo Receita/Despesa; o app tratava rendimento como
+    # "investimento" e tirava do crédito, gerando um falso R$ 0,86 na APOIO.
+    rend_b = rend_s = 0.0
     if inv is not None and not inv.empty and "tipo_aplicacao" in inv.columns:
         inv = inv.copy()
         if "historico" in inv.columns:
@@ -4670,8 +4674,15 @@ def _render_regua_conferencia_sankhya(resultado: ResultadoConciliacao, conta: st
         _rg = inv["tipo_aplicacao"] == "Resgate"
         ap_s = float(_val[_ap & _eh_sk].sum()); rg_s = float(_val[_rg & _eh_sk].sum())
         ap_b = float(_val[_ap & ~_eh_sk].sum()); rg_b = float(_val[_rg & ~_eh_sk].sum())
+        # rendimentos: nem aplicação nem resgate (podem estar como
+        # "Rendimento" em tipo_aplicacao OU marcados em categoria_mov).
+        _rend = ~(_ap | _rg)
+        if "categoria_mov" in inv.columns:
+            _rend = _rend | (inv["categoria_mov"] == "rendimento")
+        rend_s = float(_val[_rend & _eh_sk].sum())
+        rend_b = float(_val[_rend & ~_eh_sk].sum())
 
-    cred_b = round(rec_b + rg_b, 2); cred_s = round(rec_s + rg_s, 2)
+    cred_b = round(rec_b + rg_b + rend_b, 2); cred_s = round(rec_s + rg_s + rend_s, 2)
     deb_b = round(desp_b + ap_b, 2); deb_s = round(desp_s + ap_s, 2)
     tot_b = round(cred_b + deb_b, 2); tot_s = round(cred_s + deb_s, 2)
     dif_c = round(cred_b - cred_s, 2); dif_d = round(deb_b - deb_s, 2)
