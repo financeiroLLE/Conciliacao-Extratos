@@ -408,6 +408,21 @@ def carregar_extrato_banco(
             })
             _val = _val[_tem_saldo_cel.values]
             _val = _val[~_val["hist"].str.strip().isin(["TOTAL", "TOTAIS"])]
+            # v5.69: no Itaú corrente, o fim do dia tem um bloco de linhas de
+            # LIMITE de cheque especial (não é saldo real da conta):
+            #   S A L D O                → saldo REAL da conta (ex.: R$ 1,00)
+            #   (-) SALDO A LIBERAR      → parcela do limite ainda a ser liberada
+            #   SALDO FINAL DEVEDOR      → saldo REAL menos o limite (limite
+            #                              usado se saldo real fosse zero — não
+            #                              é o saldo bancário da conta corrente)
+            # Sem filtrar, o parser pegava "SALDO FINAL DEVEDOR" como saldo do
+            # dia (ex.: −R$ 94.999,00 no PISA 14/07). O saldo real do dia é a
+            # linha "S A L D O". Aqui excluímos as duas linhas de limite.
+            _lixo_limite = (
+                _val["hist"].str.strip().str.contains("SALDO A LIBERAR", na=False)
+                | _val["hist"].str.strip().str.contains("SALDO FINAL DEVEDOR", na=False)
+            )
+            _val = _val[~_lixo_limite]
             if not _val.empty:
                 # 1) linha "SALDO ANTERIOR" — aceita SEM data
                 _ant = _val[_val["hist"].str.contains("SALDO ANTERIOR", na=False)]
