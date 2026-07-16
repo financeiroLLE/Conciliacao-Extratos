@@ -2711,7 +2711,8 @@ def pagina_dashboard():
     except Exception:
         _fechadas_rodadas = n_contas if bate else 0
     _cob_cor = "#7ee0a6" if _fechadas_rodadas == n_contas else "#FAC318"
-    _rodadas_txt = "rodada" if n_contas == 1 else "rodadas"
+    # v5.68: rótulo sempre no plural — "Contas rodadas" lê melhor mesmo com 1
+    _rodadas_txt = "rodadas"
     _cob_sub = (f"· todas fecharam" if _fechadas_rodadas == n_contas
                 else f"· {n_contas - _fechadas_rodadas} a resolver")
 
