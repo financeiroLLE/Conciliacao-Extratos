@@ -2594,11 +2594,12 @@ def pagina_dashboard():
     n_contas = len(resultado.contas_processadas)
 
     # saldo inicial/final (do extrato do banco), agregando as contas que têm saldo.
-    # v5.47: exigir_conciliado=False — o fechamento do extrato (saldo inicial +
-    # movimentos = saldo final) é teste de LEITURA do extrato e não depende de
-    # a conta estar 100% conciliada. Antes o card ficava vazio à toa.
+    # v5.67: coleta por CONTA (sem somar entre contas diferentes — saldo bancário
+    # não é dado somável entre CNPJs). As variáveis saldo_ini/saldo_fim ficam para
+    # o caso N=1 (retrocompat com o card antigo); para N>1 usamos `_saldos_por_conta`.
     saldo_ini = saldo_fim = 0.0
     tem_saldo = False
+    _saldos_por_conta: list = []  # v5.67: [{"conta": str, "info": dict}, ...]
     for _c in resultado.contas_processadas:
         try:
             _info = resultado.saldo_final_da_conta(_c, exigir_conciliado=False)
@@ -2616,6 +2617,8 @@ def pagina_dashboard():
             if _info.get("saldo_final") is not None:
                 saldo_fim += float(_info["saldo_final"])
             tem_saldo = True
+        # v5.67: guarda por conta para o card "Saldos por conta" quando N>1
+        _saldos_por_conta.append({"conta": _c, "info": _info or {}})
 
     # investimentos (líquido)
     inv_df = getattr(resultado, "aplicacoes_resgates", None)
@@ -2641,7 +2644,6 @@ def pagina_dashboard():
     )
 
     # ---- Conta 70 (do session_state) + histórico p/ tendência ----
-    TOTAL_CONTAS_GRUPO = 9
     c70 = st.session_state.get("c70_dashboard")
     qtd_div = int(kpis.get("qtd_divergencia_sankhya_banco", 0))
 
@@ -2694,8 +2696,24 @@ def pagina_dashboard():
         if abs(div) >= 0.005:
             _partes_hero.append(f"R$ {_brl(abs(div))} do Sankhya sem confirmação")
         _hero_grad, _hero_fg, _hero_txt, _hero_sub = "linear-gradient(135deg,#4a1a1a,#3a1414)", "#ffc2c2", "✗ Não bate com o banco", " · ".join(_partes_hero) if _partes_hero else f"diferença Sankhya × Banco · R$ {_brl(div)}"
-    _cob_cor = "#7ee0a6" if n_contas >= TOTAL_CONTAS_GRUPO else "#FAC318"
-    _cob_sub = "· todas conciliadas" if n_contas >= TOTAL_CONTAS_GRUPO else f"· faltam {TOTAL_CONTAS_GRUPO - n_contas}"
+    # v5.67: quantas das contas rodadas FECHARAM (por conta, não sobre "9 do grupo").
+    # Antes: '1 de 9 · faltam 8' — confundia com total do grupo, mas o app só valida
+    # o que foi rodado. Agora: 'N de N rodadas fecharam'.
+    _fechadas_rodadas = 0
+    try:
+        _kpbn = resultado.kpis_por_banco()
+        for _c in resultado.contas_processadas:
+            _kc = _kpbn.get(_c, {})
+            _fc = abs(float(_kc.get("falta_conciliar", 0.0)))
+            _dc = abs(float(_kc.get("divergencia_sankhya_banco", 0.0)))
+            if round(_fc + _dc, 2) < 0.005:
+                _fechadas_rodadas += 1
+    except Exception:
+        _fechadas_rodadas = n_contas if bate else 0
+    _cob_cor = "#7ee0a6" if _fechadas_rodadas == n_contas else "#FAC318"
+    _rodadas_txt = "rodada" if n_contas == 1 else "rodadas"
+    _cob_sub = (f"· todas fecharam" if _fechadas_rodadas == n_contas
+                else f"· {n_contas - _fechadas_rodadas} a resolver")
 
     # saldo (da conta rodada) — v5.47: a conta do card agora FECHA de verdade.
     # Antes faltava a linha de investimentos (o líquido que foi p/ aplicação sai
@@ -2788,17 +2806,110 @@ def pagina_dashboard():
         f"<div style='font-size:30px;font-weight:800;color:{_hero_fg};line-height:1.15'>{_hero_txt}</div>"
         f"<div style='font-size:14px;color:{_hero_fg};margin:8px 0 20px'>{_hero_sub}</div>"
         "<div style='display:flex;justify-content:space-between;align-items:center;border-top:1px solid #ffffff22;padding-top:12px'>"
-        "<span style='font-size:13px;color:#cdd9f2'>Contas conciliadas</span>"
-        f"<span style='font-size:22px;font-weight:800;color:{_cob_cor}'>{n_contas} <span style='font-size:14px'>de {TOTAL_CONTAS_GRUPO}</span> <span style='font-size:12px'>{_cob_sub}</span></span></div></div>"
+        f"<span style='font-size:13px;color:#cdd9f2'>Contas {_rodadas_txt}</span>"
+        f"<span style='font-size:22px;font-weight:800;color:{_cob_cor}'>{_fechadas_rodadas} <span style='font-size:14px'>de {n_contas} fecharam</span> <span style='font-size:12px'>{_cob_sub}</span></span></div></div>"
     )
-    _card_saldo = (
-        "<div style='background:#0b2560;border:1px solid #1b3a6e;border-radius:16px;padding:22px'>"
-        "<div style='font-size:12px;letter-spacing:1.2px;color:#9fb3d6;margin-bottom:12px'>SALDO DA CONTA RODADA</div>"
-        f"{_saldo_inner}</div>"
-    )
+    # v5.67: quando são VÁRIAS contas, o card vira "Saldos por conta" com uma
+    # linha por conta (nome + saldo final + selo/dif). Somar saldo bancário entre
+    # contas diferentes não faz sentido contábil — antes um saldo Frankenstein
+    # (INOV movimentos + APOIO saldo inicial) inflava o "calculado" e enganava.
+    if n_contas <= 1:
+        _card_saldo = (
+            "<div style='background:#0b2560;border:1px solid #1b3a6e;border-radius:16px;padding:22px'>"
+            "<div style='font-size:12px;letter-spacing:1.2px;color:#9fb3d6;margin-bottom:12px'>SALDO DA CONTA RODADA</div>"
+            f"{_saldo_inner}</div>"
+        )
+    else:
+        # monta uma linha por conta a partir de _saldos_por_conta
+        _linhas_sc = []
+        _n_com_saldo = _n_fecha = 0
+        _total_final = 0.0
+        for _sc in _saldos_por_conta:
+            _conta_sc = _sc["conta"]
+            _info_sc = _sc["info"]
+            if not _info_sc or not _info_sc.get("tem_saldo_no_extrato"):
+                _linhas_sc.append(
+                    "<div style='padding:10px 0;border-top:1px solid #10254e'>"
+                    "<div style='display:flex;justify-content:space-between;align-items:baseline'>"
+                    f"<span style='font-size:13px;color:#7dd0ff;font-weight:600'>{_conta_sc}</span>"
+                    "<span style='font-size:12px;color:#6f88b8'>sem saldo no extrato</span></div></div>"
+                )
+                continue
+            _n_com_saldo += 1
+            _si = float(_info_sc.get("saldo_inicial") or 0.0)
+            _sf = float(_info_sc.get("saldo_final") or 0.0)
+            _total_final += _sf
+            # movimentos e investimentos LÍQUIDOS DA CONTA (do banco)
+            try:
+                _bcc = resultado.banco_completo
+                _bcc = _bcc[_bcc["conta"] == _conta_sc] if (_bcc is not None and not _bcc.empty and "conta" in _bcc.columns) else None
+                if _bcc is not None and not _bcc.empty:
+                    _mask_mov = ~_bcc["categoria_mov"].isin(
+                        ["saldo", "aplicacao", "resgate", "rendimento", "investimento_outro"]
+                    ) if "categoria_mov" in _bcc.columns else pd.Series([True] * len(_bcc), index=_bcc.index)
+                    _rec_sc = float(_bcc[_mask_mov & (_bcc["valor"] > 0)]["valor"].sum())
+                    _desp_sc = float(-_bcc[_mask_mov & (_bcc["valor"] < 0)]["valor"].sum())
+                    _inv_sc = 0.0
+                    if "categoria_mov" in _bcc.columns:
+                        _inv_sc = float(_bcc[_bcc["categoria_mov"].isin(
+                            ["aplicacao", "resgate", "rendimento", "investimento_outro"]
+                        )]["valor"].sum())
+                else:
+                    _rec_sc = _desp_sc = _inv_sc = 0.0
+            except Exception:
+                _rec_sc = _desp_sc = _inv_sc = 0.0
+            _calc = round(_si + _rec_sc - _desp_sc + _inv_sc, 2)
+            _fecha_sc = abs(_calc - _sf) < 0.01
+            if _fecha_sc:
+                _n_fecha += 1
+                _selo_sc = "<span style='font-size:11px;color:#7ee0a6;font-weight:600;margin-left:6px'>= extrato ✓</span>"
+            else:
+                _selo_sc = f"<span style='font-size:11px;color:#ffc94d;font-weight:600;margin-left:6px'>calc. {_brl(_calc)} · dif {_brl(round(_calc - _sf, 2))} ⚠</span>"
+            _inv_txt = ""
+            if abs(_inv_sc) >= 0.005:
+                _inv_txt = f" · investimento (líq.) {_brl(_inv_sc)}"
+            _linhas_sc.append(
+                "<div style='padding:12px 0;border-top:1px solid #10254e'>"
+                "<div style='display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px'>"
+                f"<span style='font-size:13px;color:#7dd0ff;font-weight:600'>{_conta_sc}</span>"
+                f"<span style='font-size:18px;font-weight:800;color:#fff'>{_brl(_sf)}{_selo_sc}</span></div>"
+                f"<div style='font-size:11px;color:#6f88b8'>inicial {_brl(_si)} · +receitas {_brl(_rec_sc)} · −despesas {_brl(_desp_sc)}{_inv_txt}</div></div>"
+            )
+        _cab_txt = f"{n_contas} contas rodadas"
+        if _n_com_saldo > 0:
+            _cab_cor = "#9fb3d6" if _n_fecha == _n_com_saldo else "#ffc94d"
+            _cab_extra = (f" · todas fecham com o extrato ✓" if _n_fecha == _n_com_saldo
+                          else f" · {_n_fecha} de {_n_com_saldo} fecham · {_n_com_saldo - _n_fecha} a conferir ⚠")
+        else:
+            _cab_cor = "#6f88b8"
+            _cab_extra = " · nenhum extrato traz saldo"
+        _rodape_total = ""
+        if _n_com_saldo > 1:
+            _rodape_total = (
+                "<div style='border-top:1px solid #24427e;margin-top:6px;padding-top:12px;"
+                "display:flex;justify-content:space-between;align-items:baseline'>"
+                "<span style='font-size:12px;color:#9fb3d6'>Total consolidado das contas rodadas</span>"
+                f"<span style='font-size:16px;font-weight:700;color:#FAC318'>{_brl(_total_final)}</span></div>"
+                "<div style='font-size:10px;color:#6f88b8;text-align:right;margin-top:2px'>"
+                "soma dos saldos finais · use como referência, não como saldo bancário unificado</div>"
+            )
+        _card_saldo = (
+            "<div style='background:#0b2560;border:1px solid #1b3a6e;border-radius:16px;padding:20px 22px'>"
+            "<div style='display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px'>"
+            "<span style='font-size:12px;letter-spacing:1.2px;color:#9fb3d6'>SALDOS POR CONTA</span>"
+            f"<span style='font-size:11px;color:{_cab_cor}'>{_cab_txt}{_cab_extra}</span></div>"
+            + "".join(_linhas_sc)
+            + _rodape_total
+            + "</div>"
+        )
+    # v5.67: sufixo de escopo — deixa explícito que os números vêm das contas
+    # rodadas nesta sessão (não do grupo inteiro).
+    _sufixo_escopo = ("1 conta rodada" if n_contas == 1 else f"{n_contas} contas rodadas")
     _card_mov = (
         "<div style='background:#0b2560;border:1px solid #163062;border-radius:14px;padding:16px 18px'>"
-        "<div style='font-size:12px;letter-spacing:1.2px;color:#9fb3d6;margin-bottom:12px'>MOVIMENTAÇÃO DO MÊS</div>"
+        "<div style='display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px'>"
+        "<span style='font-size:12px;letter-spacing:1.2px;color:#9fb3d6'>MOVIMENTAÇÃO DO MÊS</span>"
+        f"<span style='font-size:10px;color:#6f88b8'>{_sufixo_escopo}</span></div>"
         f"<div style='display:flex;justify-content:space-between'><span style='font-size:14px;color:#cdd9f2'>Receitas</span><b style='font-size:16px;color:#7ee0a6'>{_brl(rec_b)}</b></div>"
         f"<div style='display:flex;justify-content:space-between;margin-top:4px'><span style='font-size:14px;color:#cdd9f2'>Despesas</span><b style='font-size:16px;color:#ff9a9a'>{_brl(desp_b)}</b></div>"
         f"<div style='display:flex;justify-content:space-between;margin-top:4px;border-top:1px solid #163062;padding-top:6px'><span style='font-size:14px;color:#cdd9f2'>Líquido <span style='color:#FAC318'>(foi p/ invest.)</span></span><b style='font-size:16px;color:#fff'>{_brl(liq)}</b></div></div>"
@@ -2808,10 +2919,18 @@ def pagina_dashboard():
     # v5.60): o Streamlit mede a altura antes da fonte carregar e o conteúdo
     # vaza sobre os cards vizinhos. Agora cada mini vai em sua própria coluna.
     _card_mini_div = (
-        f"<div style='background:#0b2560;border:1px solid #163062;border-top:3px solid {_dv_cor};border-radius:14px;padding:15px'><div style='font-size:12px;letter-spacing:1px;color:#9fb3d6'>DIVERGÊNCIAS</div><div style='font-size:24px;font-weight:800;color:{_dv_cor};margin-top:6px'>{qtd_div}</div><div style='font-size:12px;color:#6f88b8'>R$ {_brl(kpis.get('divergencia_sankhya_banco',0))}</div></div>"
+        f"<div style='background:#0b2560;border:1px solid #163062;border-top:3px solid {_dv_cor};border-radius:14px;padding:15px'>"
+        "<div style='font-size:12px;letter-spacing:1px;color:#9fb3d6'>DIVERGÊNCIAS</div>"
+        f"<div style='font-size:24px;font-weight:800;color:{_dv_cor};margin-top:6px'>{qtd_div}</div>"
+        f"<div style='font-size:12px;color:#6f88b8'>R$ {_brl(kpis.get('divergencia_sankhya_banco',0))}</div>"
+        f"<div style='font-size:10px;color:#6f88b8;margin-top:2px'>{_sufixo_escopo}</div></div>"
     )
     _card_mini_inv = (
-        f"<div style='background:#0b2560;border:1px solid #163062;border-top:3px solid #FAC318;border-radius:14px;padding:15px'><div style='font-size:12px;letter-spacing:1px;color:#9fb3d6'>INVESTIMENTOS</div><div style='font-size:24px;font-weight:800;color:#FAC318;margin-top:6px'>{_brl(inv_net)}</div><div style='font-size:12px;color:#6f88b8'>aplic × resgate</div></div>"
+        f"<div style='background:#0b2560;border:1px solid #163062;border-top:3px solid #FAC318;border-radius:14px;padding:15px'>"
+        "<div style='font-size:12px;letter-spacing:1px;color:#9fb3d6'>INVESTIMENTOS</div>"
+        f"<div style='font-size:24px;font-weight:800;color:#FAC318;margin-top:6px'>{_brl(inv_net)}</div>"
+        "<div style='font-size:12px;color:#6f88b8'>líq. aplic − resgates</div>"
+        f"<div style='font-size:10px;color:#6f88b8;margin-top:2px'>{_sufixo_escopo}</div></div>"
     )
     _card_trend = (
         f"<div style='background:#0b2560;border:1px solid #163062;border-radius:14px;padding:14px 18px;display:flex;justify-content:space-between;align-items:center'><span style='font-size:12px;letter-spacing:1px;color:#9fb3d6'>{_trend_label}</span>{_trend_html}</div>"
@@ -2826,16 +2945,20 @@ def pagina_dashboard():
     _col_esq, _col_dir = st.columns([1.15, 1], gap="medium")
     with _col_esq:
         st.markdown(_card_hero, unsafe_allow_html=True)
+        st.write("")  # v5.67: respiro vertical entre cards (evita "aglomeração")
         st.markdown(_card_saldo, unsafe_allow_html=True)
     with _col_dir:
         st.markdown(_card_mov, unsafe_allow_html=True)
+        st.write("")
         _mc1, _mc2 = st.columns(2, gap="small")
         with _mc1:
             st.markdown(_card_mini_div, unsafe_allow_html=True)
         with _mc2:
             st.markdown(_card_mini_inv, unsafe_allow_html=True)
+        st.write("")
         if _c70_card:
             st.markdown(_c70_card, unsafe_allow_html=True)
+            st.write("")
         st.markdown(_card_trend, unsafe_allow_html=True)
 
     # ---- histórico de fechamentos (para a tendência) ----
