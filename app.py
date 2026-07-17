@@ -4808,6 +4808,78 @@ def _render_regua_conferencia_sankhya(resultado: ResultadoConciliacao, conta: st
 
     cred_b = round(rec_b + rg_b + rend_b, 2); cred_s = round(rec_s + rg_s + rend_s, 2)
     deb_b = round(desp_b + ap_b, 2); deb_s = round(desp_s + ap_s, 2)
+
+    # v5.70: desconto par-a-par de tarifas da adquirente já lançadas no Sankhya.
+    # Antes, uma tarifa (ex.: GetNet R$ 309,85) descontada no repasse aparecia
+    # duplicada como "diferença": Sankhya tinha receita bruta a mais + despesa
+    # que o banco não tem — os dois lados iguais em valor, descrevendo o MESMO
+    # fato. A régua somava |cred| + |deb| e mostrava R$ 619,71 "a conferir".
+    # Agora, para cada tarifa da adquirente COM PAR EXATO no Sankhya (valor +
+    # data ±3 dias + histórico contendo palavra da adquirente), descontamos o
+    # valor dos dois lados — o fato já está resolvido no ERP.
+    #
+    # Regra do par (opção B aprovada): histórico do Sankhya deve conter uma
+    # dessas palavras: GETNET / CIELO / PAGBANK / PAGSEGURO / REDE, OU as
+    # expressões do lançamento manual usado hoje pela Débora (TARIFA ALUGUEL /
+    # PLAT DIGITAL / MAQUININHA / MAQUINHA / MAQUINETA). Ambiguidade (2+ pares
+    # candidatos) NÃO desconta — mantém como "a conferir" (zero falso positivo).
+    tarifas_lancadas_valor = 0.0
+    try:
+        _adq_df = st.session_state.get("adquirente_df")
+        if _adq_df is not None and not _adq_df.empty and "categoria" in _adq_df.columns:
+            _tar_adq = _adq_df[_adq_df["categoria"].isin(["aluguel", "tarifa"])].copy()
+            if not _tar_adq.empty:
+                _tar_adq["_dt"] = pd.to_datetime(_tar_adq["data"], errors="coerce").dt.normalize()
+                _tar_adq["_val"] = pd.to_numeric(_tar_adq["valor"], errors="coerce").abs().round(2)
+                # despesas do Sankhya desta conta (sem investimentos/saldo)
+                _sk_full = resultado.sistema_completo
+                if "conta" in _sk_full.columns:
+                    _sk_full = _sk_full[_sk_full["conta"] == conta]
+                _sk_desp = _sk_full[_sk_full["valor"] < 0].copy() if not _sk_full.empty else pd.DataFrame()
+                if "categoria_mov" in _sk_desp.columns:
+                    _sk_desp = _sk_desp[
+                        ~_sk_desp["categoria_mov"].isin(
+                            ["saldo", "aplicacao", "resgate", "rendimento", "investimento_outro"]
+                        )
+                    ]
+                _PALS_ADQ = (
+                    "GETNET", "GET NET", "CIELO", "PAGBANK", "PAG BANK",
+                    "PAGSEGURO", "PAG SEGURO", "REDE",
+                    "TARIFA ALUGUEL", "PLAT DIGITAL", "MAQUININHA",
+                    "MAQUINHA", "MAQUINETA",
+                )
+                if not _sk_desp.empty:
+                    _sk_desp = _sk_desp.copy()
+                    _sk_desp["_dt"] = pd.to_datetime(_sk_desp["data"], errors="coerce").dt.normalize()
+                    _sk_desp["_val"] = pd.to_numeric(_sk_desp["valor"], errors="coerce").abs().round(2)
+                    _hup = _sk_desp["historico"].astype(str).str.upper()
+                    _mask_pal = _hup.apply(lambda h: any(p in h for p in _PALS_ADQ))
+                    _sk_desp = _sk_desp[_mask_pal]
+                # match par-a-par
+                _idx_usados: set = set()
+                for _, tarifa in _tar_adq.iterrows():
+                    _v = float(tarifa["_val"])
+                    _d = tarifa["_dt"]
+                    if pd.isna(_d) or _v <= 0:
+                        continue
+                    _cand = _sk_desp[
+                        (_sk_desp["_val"] == round(_v, 2))
+                        & ((_sk_desp["_dt"] - _d).abs() <= pd.Timedelta(days=3))
+                        & (~_sk_desp.index.isin(_idx_usados))
+                    ] if not _sk_desp.empty else _sk_desp
+                    if len(_cand) == 1:
+                        tarifas_lancadas_valor += _v
+                        _idx_usados.add(_cand.index[0])
+                    # 0 candidatos (não lançada) ou >=2 (ambíguo): não desconta
+    except Exception:
+        tarifas_lancadas_valor = 0.0
+
+    # aplica o desconto — cada tarifa lançada aparecia dobrada: uma vez no
+    # crédito (Sankhya recebeu bruto a mais) e uma vez no débito (Sankhya
+    # lançou despesa que o banco não tem). Subtrair dos DOIS lados alinha.
+    if tarifas_lancadas_valor > 0.005:
+        cred_s = round(cred_s - tarifas_lancadas_valor, 2)
+        deb_s = round(deb_s - tarifas_lancadas_valor, 2)
     tot_b = round(cred_b + deb_b, 2); tot_s = round(cred_s + deb_s, 2)
     dif_c = round(cred_b - cred_s, 2); dif_d = round(deb_b - deb_s, 2)
     dif_t = round(tot_b - tot_s, 2)
