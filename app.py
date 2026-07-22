@@ -7178,13 +7178,12 @@ def _render_conta70_casamento_numeracao():
         chips = " &nbsp;·&nbsp; ".join(f"<b>{nome}:</b> {qtd}" for nome, qtd in contagem.items())
         st.markdown("**Esteira — pendências abertas.** Valor negativo = despesa (saída); positivo = receita (entrada).")
         st.markdown(f"<div style='color:#9fb3d6;font-size:13px;margin:2px 0 8px'>{chips}</div>", unsafe_allow_html=True)
-        with st.container():
-            st.markdown('<span class="c70filtmark"></span>', unsafe_allow_html=True)
-            _F = '[data-testid="stElementContainer"]:has(.c70filtmark)'
+        with st.container(key="c70filtros"):
             st.markdown(
                 "<style>"
-                f'{_F} ~ div [data-testid="stHorizontalBlock"] [data-baseweb="select"]>div{{border-left:4px solid #FAC318!important}}'
-                f'{_F} ~ div [data-testid="stHorizontalBlock"] [data-baseweb="base-input"]{{border-left:4px solid #FAC318!important}}'
+                '.st-key-c70filtros [data-baseweb="select"]>div{border-left:4px solid #FAC318!important}'
+                '.st-key-c70filtros [data-baseweb="input"]{border-left:4px solid #FAC318!important}'
+                '.st-key-c70filtros [data-baseweb="base-input"]{border-left:4px solid #FAC318!important}'
                 "</style>",
                 unsafe_allow_html=True,
             )
@@ -7462,21 +7461,25 @@ def pagina_conta70():
                          type=("primary" if _ativo == 2 else "secondary"), use_container_width=True):
                 st.session_state["c70_sub"] = "mapa"
                 st.rerun()
-    # v5.20: renderiza AS DUAS seções sempre e esconde a inativa por CSS. Assim
-    # circular entre as pílulas NÃO perde o estado (uploads/rodada) — o que
-    # acontecia com a renderização condicional (a seção some e perde os arquivos).
-    _esconder = "c70sec-mapa" if st.session_state["c70_sub"] == "atrel" else "c70sec-atrel"
+    # v5.21: renderiza AS DUAS seções sempre e esconde a inativa por CSS. Usa a
+    # CHAVE do container (st-key-*) — jeito estável — com o marcador como reforço.
+    # Assim circular entre as pílulas NÃO perde o estado (uploads/rodada).
+    if st.session_state["c70_sub"] == "atrel":
+        _hide_key, _hide_mk = "c70sec_mapa", "c70sec-mapamk"
+    else:
+        _hide_key, _hide_mk = "c70sec_atrel", "c70sec-atrelmk"
     st.markdown(
         "<style>"
-        f'[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .{_esconder}){{display:none!important}}'
+        f'.st-key-{_hide_key}{{display:none!important}}'
+        f'[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .{_hide_mk}){{display:none!important}}'
         "</style>",
         unsafe_allow_html=True,
     )
-    with st.container():
-        st.markdown('<span class="c70sec-atrel"></span>', unsafe_allow_html=True)
+    with st.container(key="c70sec_atrel"):
+        st.markdown('<span class="c70sec-atrelmk"></span>', unsafe_allow_html=True)
         _render_conta70_atrelamento_full()
-    with st.container():
-        st.markdown('<span class="c70sec-mapa"></span>', unsafe_allow_html=True)
+    with st.container(key="c70sec_mapa"):
+        st.markdown('<span class="c70sec-mapamk"></span>', unsafe_allow_html=True)
         _render_conta70_mapa_recebimentos()
 
 
