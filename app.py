@@ -7461,6 +7461,7 @@ def pagina_conta70():
                          type=("primary" if _ativo == 2 else "secondary"), use_container_width=True):
                 st.session_state["c70_sub"] = "mapa"
                 st.rerun()
+    st.caption("Conta 70 · **v5.21** — se aqui não aparecer v5.21, o deploy ainda não pegou (faça Reboot do app).")
     # v5.21: renderiza AS DUAS seções sempre e esconde a inativa por CSS. Usa a
     # CHAVE do container (st-key-*) — jeito estável — com o marcador como reforço.
     # Assim circular entre as pílulas NÃO perde o estado (uploads/rodada).
