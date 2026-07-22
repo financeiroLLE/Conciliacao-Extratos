@@ -196,12 +196,95 @@ def _casar_valor(dep_abs: float, notas: list[tuple[str, str, float]]):
     return None, [], (notas[0][1] if notas else "")
 
 
-def construir_mapa(capa: pd.DataFrame, faturamento: pd.DataFrame | None) -> tuple[pd.DataFrame, dict]:
+# ---------------------------------------------------------------------------
+# Parceiros (arquivo FIN de identificação): CPF/CNPJ -> nome do parceiro
+# ---------------------------------------------------------------------------
+def _norm_doc(d: Any) -> str:
+    """Normaliza CPF/CNPJ p/ casar Capa (dígitos do histórico) × FIN (vem como
+    float, perde zeros à esquerda). <=11 -> CPF(11); senão -> CNPJ(14)."""
+    s = re.sub(r"\D", "", str(d if d is not None else "").split(".")[0])
+    if not s:
+        return ""
+    return s.zfill(14) if len(s) > 11 else s.zfill(11)
+
+
+def arquivo_eh_parceiros(arquivo: Any) -> bool:
+    """True se a planilha tem cara de FIN de parceiros (linha de cabeçalho com
+    'Parceiro' + uma coluna de CPF/CNPJ). Serve pra rotear o upload sem depender
+    do nome do arquivo."""
+    return _header_parceiros(arquivo) is not None
+
+
+def _header_parceiros(arquivo: Any) -> int | None:
+    """Acha a linha de cabeçalho do FIN procurando 'Parceiro' + CPF/CNPJ nas
+    primeiras linhas (o FIN traz título/emissão antes do cabeçalho)."""
+    if hasattr(arquivo, "seek"):
+        try:
+            arquivo.seek(0)
+        except Exception:
+            pass
+    try:
+        raw = _ler_planilha(arquivo, header=None)
+    except Exception:
+        return None
+    for i in range(min(12, len(raw))):
+        vals = [str(v).strip().lower() for v in raw.iloc[i].tolist()]
+        tem_par = any("parceiro" in v for v in vals)
+        tem_doc = any(("cnpj" in v or "cpf" in v or "cfp" in v) for v in vals)
+        if tem_par and tem_doc:
+            return i
+    return None
+
+
+def carregar_parceiros_fin(arquivo: Any) -> dict[str, str]:
+    """Lê o FIN e devolve {doc_normalizado: nome do parceiro}. Só leitura."""
+    hdr = _header_parceiros(arquivo)
+    if hdr is None:
+        return {}
+    if hasattr(arquivo, "seek"):
+        try:
+            arquivo.seek(0)
+        except Exception:
+            pass
+    df = _ler_planilha(arquivo, header=hdr)
+    df.columns = [str(c).strip() for c in df.columns]
+
+    def col(*subs):
+        for s in subs:
+            for c in df.columns:
+                if s in c.lower():
+                    return c
+        return None
+
+    c_doc = col("cnpj", "cpf", "cfp")
+    c_par = col("parceiro")
+    if c_doc is None or c_par is None:
+        return {}
+    out: dict[str, str] = {}
+    for doc, par in zip(df[c_doc], df[c_par]):
+        nome = str(par).strip()
+        if nome and nome.lower() not in ("nan", "none"):
+            k = _norm_doc(doc)
+            if k:
+                out.setdefault(k, nome)
+    return out
+
+
+def construir_mapa(
+    capa: pd.DataFrame,
+    faturamento: pd.DataFrame | None,
+    parceiros_cnpj: dict[str, str] | None = None,
+) -> tuple[pd.DataFrame, dict]:
     """Monta o Mapa de Recebimentos e o resumo da rodada.
 
     `capa` = saída de carregar_capa_bruta. `faturamento` = saída de
     casamento.carregar_faturamento (colunas cnpj, nota, nome, valor) ou None.
     """
+    _parc = parceiros_cnpj or {}
+
+    def _nome(dig, fallback=""):
+        return _parc.get(_norm_doc(dig)) or fallback
+
     notas_por_cnpj: dict[str, list[tuple[str, str, float]]] = {}
     if faturamento is not None and not faturamento.empty:
         fat = faturamento[faturamento["cnpj"].astype(str) != ""].copy()
@@ -221,10 +304,10 @@ def construir_mapa(capa: pd.DataFrame, faturamento: pd.DataFrame | None) -> tupl
         if not aberto:
             nf.append(""); pnf.append(""); tm.append(""); rep.append("")
             if "Receita" in str(r["rd"]):
-                stt.append("Baixada no Sankhya"); stk.append("BAIXA"); pef.append(r["idfmt"])
+                stt.append("Baixada no Sankhya"); stk.append("BAIXA"); pef.append(_nome(dig, r["idfmt"]))
                 jus.append(f"Atrelada na Capa (Nº {r['num_txt']}) — baixa lançada no Sankhya")
             else:
-                stt.append("Saída da Conta 70"); stk.append("SAIDA"); pef.append(r["idfmt"])
+                stt.append("Saída da Conta 70"); stk.append("SAIDA"); pef.append(_nome(dig, r["idfmt"]))
                 jus.append(f"Saída da Conta 70 (Nº {r['num_txt']}) — contrapartida da baixa")
             continue
         notas = notas_por_cnpj.get(dig) if dig else None
@@ -245,7 +328,7 @@ def construir_mapa(capa: pd.DataFrame, faturamento: pd.DataFrame | None) -> tupl
         else:
             nf.append(""); pnf.append(""); tm.append(""); rep.append("")
             if dig:
-                pef.append(r["idfmt"]); stt.append("Pendente de baixa"); stk.append("PENDENTE")
+                pef.append(_nome(dig, r["idfmt"])); stt.append("Pendente de baixa"); stk.append("PENDENTE")
                 jus.append("CPF/CNPJ identificado, sem nota em aberto correspondente — falta baixar")
             else:
                 desc = descritor_origem(r["historico"])
