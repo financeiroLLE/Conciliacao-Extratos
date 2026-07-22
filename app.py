@@ -6913,8 +6913,9 @@ def _render_conta70_mapa_recebimentos():
     _S = '[data-testid="stElementContainer"]:has(.c70selmark)'
     st.markdown(
         "<style>"
-        f'{_S} ~ div [data-baseweb="select"]{{background-color:#FAC318!important;border-color:#d9a800!important}}'
-        f'{_S} ~ div [data-baseweb="select"]>div{{background-color:#FAC318!important}}'
+        f'{_S} ~ div [data-baseweb="select"]>div{{background-color:#FAC318!important;border-color:#d9a800!important}}'
+        f'{_S} ~ div [data-baseweb="select"]>div>div{{background:transparent!important}}'
+        f'{_S} ~ div [data-baseweb="select"] input{{background:transparent!important}}'
         f'{_S} ~ div [data-baseweb="select"] *{{color:#041747!important}}'
         f'{_S} ~ div [data-baseweb="select"] svg{{fill:#041747!important}}'
         "</style>",
@@ -7396,10 +7397,9 @@ def pagina_conta70():
     st.markdown(
         "<style>"
         f'{_M} ~ div [data-baseweb="tab-list"]{{border-bottom:none!important;gap:10px!important}}'
-        f'{_M} ~ div [data-baseweb="tab-list"] button{{border-radius:22px!important;overflow:hidden!important;padding:6px 18px!important;border:none!important}}'
-        f'{_M} ~ div [data-baseweb="tab-list"] button>*{{border-radius:22px!important}}'
-        f'{_M} ~ div [data-baseweb="tab-list"] button *{{color:#cdd9f2!important}}'
-        f'{_M} ~ div [data-baseweb="tab-list"] button[aria-selected="true"]{{background-color:#FAC318!important;border-radius:22px!important}}'
+        f'{_M} ~ div [data-baseweb="tab-list"] button{{border-radius:22px!important;overflow:hidden!important;padding:6px 18px!important;border:none!important;background:transparent!important}}'
+        f'{_M} ~ div [data-baseweb="tab-list"] button *{{background:transparent!important;color:#cdd9f2!important}}'
+        f'{_M} ~ div [data-baseweb="tab-list"] button[aria-selected="true"]{{background:#FAC318!important;border-radius:22px!important}}'
         f'{_M} ~ div [data-baseweb="tab-list"] button[aria-selected="true"] *{{color:#041747!important;font-weight:700!important}}'
         f'{_M} ~ div [data-baseweb="tab-list"] [data-baseweb="tab-highlight"]{{display:none!important}}'
         f'{_M} ~ div [data-baseweb="tab-list"] [data-baseweb="tab-border"]{{display:none!important}}'
