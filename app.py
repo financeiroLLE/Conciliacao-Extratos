@@ -6931,25 +6931,22 @@ def _render_conta70_mapa_recebimentos():
 
     # ---- tabela ----
     st.markdown("##### Mapa detalhado")
-    # v5.22: seletor "Mostrar" amarelo — via container + :has() DESCENDENTE
-    # (não depende de vizinhança/st-key, que quebraram com o aninhamento).
-    with st.container():
-        st.markdown('<span class="c70selmk"></span>', unsafe_allow_html=True)
-        _SB = '[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .c70selmk)'
-        st.markdown(
-            "<style>"
-            f'{_SB} [data-baseweb="select"]>div{{background-color:#FAC318!important;border-color:#d9a800!important}}'
-            f'{_SB} [data-baseweb="select"]>div>div{{background:transparent!important}}'
-            f'{_SB} [data-baseweb="select"] input{{background:transparent!important}}'
-            f'{_SB} [data-baseweb="select"] *{{color:#041747!important}}'
-            f'{_SB} [data-baseweb="select"] svg{{fill:#041747!important}}'
-            "</style>",
-            unsafe_allow_html=True,
-        )
-        filtro = st.selectbox(
-            "Mostrar", ["Em aberto (pendências)", "Só com sugestão de NF", "Alerta (15+ dias)", "Tudo"],
-            key="c70_mapa_filtro",
-        )
+    # v5.24: "Mostrar" amarelo. O F12 revelou que a caixa é react-aria (não
+    # data-baseweb=select, que eu vinha mirando) e que o container tem a classe
+    # estável st-key-c70_mapa_filtro. Miramos nela, no [role=group] (a caixa).
+    st.markdown(
+        "<style>"
+        '.st-key-c70_mapa_filtro [role="group"]{background-color:#FAC318!important;border-color:#d9a800!important}'
+        '.st-key-c70_mapa_filtro [role="group"] *{color:#041747!important}'
+        '.st-key-c70_mapa_filtro input{color:#041747!important;background:transparent!important;-webkit-text-fill-color:#041747!important}'
+        '.st-key-c70_mapa_filtro svg{fill:#041747!important}'
+        "</style>",
+        unsafe_allow_html=True,
+    )
+    filtro = st.selectbox(
+        "Mostrar", ["Em aberto (pendências)", "Só com sugestão de NF", "Alerta (15+ dias)", "Tudo"],
+        key="c70_mapa_filtro",
+    )
     if filtro == "Em aberto (pendências)":
         mf = m[m["aberto"]].copy()
     elif filtro == "Só com sugestão de NF":
@@ -7188,13 +7185,13 @@ def _render_conta70_casamento_numeracao():
         st.markdown("**Esteira — pendências abertas.** Valor negativo = despesa (saída); positivo = receita (entrada).")
         st.markdown(f"<div style='color:#9fb3d6;font-size:13px;margin:2px 0 8px'>{chips}</div>", unsafe_allow_html=True)
         with st.container(key="c70filtros"):
-            st.markdown('<span class="c70filtmk"></span>', unsafe_allow_html=True)
-            _FB = '[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .c70filtmk)'
             st.markdown(
                 "<style>"
-                f'{_FB} [data-baseweb="select"]>div{{border-left:4px solid #FAC318!important}}'
-                f'{_FB} [data-baseweb="input"]{{border-left:4px solid #FAC318!important}}'
-                f'{_FB} [data-baseweb="base-input"]{{border-left:4px solid #FAC318!important}}'
+                '.st-key-c70_fprio [role="group"],.st-key-c70_fdiag [role="group"],'
+                '.st-key-c70_fbanco [role="group"],.st-key-c70_fcol [role="group"],'
+                '.st-key-c70_busca [role="group"],.st-key-c70_busca [data-baseweb="base-input"],'
+                '.st-key-c70_busca [data-baseweb="input"]'
+                '{border-left:4px solid #FAC318!important}'
                 "</style>",
                 unsafe_allow_html=True,
             )
@@ -7472,7 +7469,7 @@ def pagina_conta70():
                          type=("primary" if _ativo == 2 else "secondary"), use_container_width=True):
                 st.session_state["c70_sub"] = "mapa"
                 st.rerun()
-    st.caption("Conta 70 · **v5.23** — se aqui não aparecer v5.23, o deploy ainda não pegou (faça Reboot do app).")
+    st.caption("Conta 70 · **v5.24** — se aqui não aparecer v5.24, o deploy ainda não pegou (faça Reboot do app).")
     # v5.21: renderiza AS DUAS seções sempre e esconde a inativa por CSS. Usa a
     # CHAVE do container (st-key-*) — jeito estável — com o marcador como reforço.
     # Assim circular entre as pílulas NÃO perde o estado (uploads/rodada).
