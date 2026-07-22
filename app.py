@@ -6898,18 +6898,14 @@ def _render_conta70_mapa_recebimentos():
 
     # ---- tabela ----
     st.markdown("##### Mapa detalhado")
-    # v5.16: seletor "Mostrar" amarelo — escopo por marcador + :has() (independe da versão do Streamlit)
+    # v5.17: seletor "Mostrar" amarelo — mesmo padrão das abas (marcador + :has() + irmão ~), alvo amplo
+    _S = '[data-testid="stElementContainer"]:has(.c70selmark)'
     st.markdown(
         "<style>"
-        '[data-testid="stElementContainer"]:has(.c70selmark)+[data-testid="stElementContainer"] div[data-baseweb="select"]>div,'
-        '[data-testid="element-container"]:has(.c70selmark)+[data-testid="element-container"] div[data-baseweb="select"]>div'
-        "{background-color:#FAC318!important;border-color:#d9a800!important}"
-        '[data-testid="stElementContainer"]:has(.c70selmark)+[data-testid="stElementContainer"] div[data-baseweb="select"] *,'
-        '[data-testid="element-container"]:has(.c70selmark)+[data-testid="element-container"] div[data-baseweb="select"] *'
-        "{color:#041747!important}"
-        '[data-testid="stElementContainer"]:has(.c70selmark)+[data-testid="stElementContainer"] svg,'
-        '[data-testid="element-container"]:has(.c70selmark)+[data-testid="element-container"] svg'
-        "{fill:#041747!important}"
+        f'{_S} ~ div [data-baseweb="select"]{{background-color:#FAC318!important;border-color:#d9a800!important}}'
+        f'{_S} ~ div [data-baseweb="select"]>div{{background-color:#FAC318!important}}'
+        f'{_S} ~ div [data-baseweb="select"] *{{color:#041747!important}}'
+        f'{_S} ~ div [data-baseweb="select"] svg{{fill:#041747!important}}'
         "</style>",
         unsafe_allow_html=True,
     )
@@ -7388,11 +7384,11 @@ def pagina_conta70():
     st.markdown(
         "<style>"
         f'{_M} ~ div [data-baseweb="tab-list"]{{border-bottom:none!important;gap:10px!important}}'
-        f'{_M} ~ div [data-baseweb="tab-list"] button[data-baseweb="tab"]{{border-radius:22px!important;padding:4px 18px!important}}'
-        f'{_M} ~ div [data-baseweb="tab-list"] button[data-baseweb="tab"] p{{color:#cdd9f2!important}}'
+        f'{_M} ~ div [data-baseweb="tab-list"] button{{border-radius:22px!important;padding:4px 18px!important}}'
+        f'{_M} ~ div [data-baseweb="tab-list"] button *{{color:#cdd9f2!important}}'
         f'{_M} ~ div [data-baseweb="tab-list"] button[aria-selected="true"]{{background-color:#FAC318!important}}'
-        f'{_M} ~ div [data-baseweb="tab-list"] button[aria-selected="true"] p{{color:#041747!important;font-weight:700!important}}'
-        f'{_M} ~ div [data-baseweb="tab-highlight"]{{background-color:transparent!important;height:0!important}}'
+        f'{_M} ~ div [data-baseweb="tab-list"] button[aria-selected="true"] *{{color:#041747!important;font-weight:700!important}}'
+        f'{_M} ~ div [data-baseweb="tab-highlight"]{{display:none!important}}'
         f'{_M} ~ div [data-baseweb="tab-border"]{{display:none!important}}'
         "</style>",
         unsafe_allow_html=True,
