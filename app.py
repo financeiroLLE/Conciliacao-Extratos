@@ -6861,19 +6861,15 @@ def _render_conta70_mapa_recebimentos():
             _ate = pd.to_datetime(R["capa_ate"]).strftime("%d/%m/%Y")
         except Exception:
             _ate = ""
+    # v5.15: cards enxutos (4) — remove os já resolvidos (Baixadas/Saídas) e a
+    # duplicidade "Em aberto (não atrelado)"; mantém a terminologia técnica.
     render_cards([
-        card_kpi("Saldo de despesas em aberto", fmt_brl(R["saldo_desp_aberto"]),
-                 f"{fmt_int(R['qtd_desp_aberto'])} despesas sem número · Capa até {_ate}",
+        card_kpi("Saldo em aberto na Conta 70", fmt_brl(R["saldo_desp_aberto"]),
+                 f"{fmt_int(R['qtd_desp_aberto'])} recebimentos sem baixa" + (f" · Capa até {_ate}" if _ate else ""),
                  classe="destaque-vermelho"),
-        card_kpi("Em aberto (não atrelado)", fmt_int(R["em_aberto_qtd"]),
-                 f"{fmt_brl(R['em_aberto_valor'])} · fecha por banco"),
         card_kpi("NF sugerida (valor exato)", fmt_int(R["exato"]),
-                 f"soma a conferir: {fmt_int(R['soma_conferir'])}",
+                 "valor bate — é só dar baixa" + (f" · soma a conferir: {fmt_int(R['soma_conferir'])}" if R["soma_conferir"] else ""),
                  classe="destaque-verde" if R["exato"] > 0 else ""),
-    ])
-    render_cards([
-        card_kpi("Baixadas no Sankhya", fmt_int(R["baixada"]), "já atreladas", classe="destaque-verde"),
-        card_kpi("Saídas da Conta 70", fmt_int(R["saida"]), "contrapartida"),
         card_kpi("Pendentes de baixa", fmt_int(R["pendente"]), "identificados, faltam baixar",
                  classe="destaque-amarelo" if R["pendente"] > 0 else ""),
         card_kpi("Sem identificação", fmt_int(R["sem_id"]), "nem CPF/CNPJ nem nome",
@@ -6886,17 +6882,31 @@ def _render_conta70_mapa_recebimentos():
     # ---- alerta de aging (só em aberto) ----
     ab = m[m["aberto"]].copy()
     ab["dias"] = pd.to_numeric(ab["dias"], errors="coerce")
-    faixas = [("15–30 dias", 15, 30), ("31–60 dias", 30, 60), ("61–90 dias", 60, 90), ("90+ dias", 90, 10**9)]
+    # v5.15: 4 faixas; 90+ em destaque (prioridade — o valor crítico da conta).
+    faixas = [
+        ("15–30 dias", 15, 30, "destaque-amarelo"),
+        ("31–60 dias", 30, 60, "destaque-amarelo"),
+        ("61–90 dias", 60, 90, "destaque-amarelo"),
+        ("90+ dias (prioridade)", 90, 10**9, "destaque-vermelho"),
+    ]
     cards_al = []
-    for rot, lo, hi in faixas:
+    for rot, lo, hi, classe in faixas:
         sub = ab[(ab["dias"] > lo) & (ab["dias"] <= hi)]
-        classe = "destaque-vermelho" if lo >= 60 else ("destaque-amarelo" if lo < 30 else "")
         cards_al.append(card_kpi(rot, fmt_int(len(sub)), fmt_brl(float(sub["valor"].sum())), classe=classe))
     section_title("ALERTA — PARADOS EM ABERTO (aging)")
     render_cards(cards_al)
 
     # ---- tabela ----
     st.markdown("##### Mapa detalhado")
+    # v5.14: seletor "Mostrar" com fundo amarelo da identidade LLE (para destacar)
+    st.markdown(
+        "<style>"
+        '.st-key-c70_mapa_filtro div[data-baseweb="select"]>div{background-color:#FAC318!important;border-color:#d9a800!important}'
+        '.st-key-c70_mapa_filtro div[data-baseweb="select"] *{color:#041747!important}'
+        ".st-key-c70_mapa_filtro svg{fill:#041747!important}"
+        "</style>",
+        unsafe_allow_html=True,
+    )
     filtro = st.selectbox(
         "Mostrar", ["Em aberto (pendências)", "Só com sugestão de NF", "Alerta (15+ dias)", "Tudo"],
         key="c70_mapa_filtro",
