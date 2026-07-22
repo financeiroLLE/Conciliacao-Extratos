@@ -6801,6 +6801,175 @@ def _c70_faturamento(fat_bytes, fat_name):
     return carregar_faturamento(x)
 
 
+@st.cache_data(show_spinner="Montando o Mapa de recebimentos…")
+def _mapa_c70_construir(capa_bytes, capa_name, fat_bytes, fat_name):
+    """Constrói o Mapa (cache por arquivo). fat_* pode ser None (sem notas)."""
+    import io as _io
+    from src.conta70.casamento import carregar_faturamento
+    from src.conta70.mapa_recebimentos import carregar_capa_bruta, construir_mapa
+
+    def _n(b, nome):
+        x = _io.BytesIO(b); x.name = nome; return x
+
+    capa = carregar_capa_bruta(_n(capa_bytes, capa_name))
+    fat = None
+    if fat_bytes is not None:
+        try:
+            fat = carregar_faturamento(_n(fat_bytes, fat_name))
+        except Exception:
+            fat = None
+    m, resumo = construir_mapa(capa, fat)
+    return m, resumo
+
+
+def _render_conta70_mapa_recebimentos():
+    """v5.13 — Mapa de Recebimentos (Conta 70). Visão aprovada na prévia:
+    três blocos com origem, status em cores da identidade LLE, alerta de aging,
+    reconciliação e download do Excel. Reaproveita os arquivos já subidos na aba
+    'Atrelamento e Numeração' — não pede upload de novo."""
+    from src.conta70.mapa_recebimentos import CORES_STATUS, exportar_mapa_excel
+
+    section_title("MAPA DE RECEBIMENTOS — CONTA 70")
+    st.markdown(
+        "Cruza a **Capa da Conta 70** com as **notas emitidas não baixadas**. A NF só é sugerida "
+        "quando o **valor** bate (exato) ou por **somatório** (a conferir) — nunca só pelo CNPJ."
+    )
+
+    up_capa = st.session_state.get("c70_capa")
+    up_fat = st.session_state.get("c70_fat")
+    if up_capa is None:
+        st.info(
+            "Suba a **Capa da Conta 70** na aba **Atrelamento e Numeração** — os mesmos arquivos "
+            "valem aqui. As **notas emitidas** (opcional) habilitam a sugestão de NF por valor."
+        )
+        return
+
+    try:
+        m, R = _mapa_c70_construir(
+            up_capa.getvalue(), up_capa.name,
+            (up_fat.getvalue() if up_fat is not None else None),
+            (up_fat.name if up_fat is not None else ""),
+        )
+    except Exception as e:
+        st.error(f"Não consegui montar o Mapa: {e}")
+        return
+
+    # ---- cards de resumo ----
+    _ate = ""
+    if R.get("capa_ate"):
+        try:
+            _ate = pd.to_datetime(R["capa_ate"]).strftime("%d/%m/%Y")
+        except Exception:
+            _ate = ""
+    render_cards([
+        card_kpi("Saldo de despesas em aberto", fmt_brl(R["saldo_desp_aberto"]),
+                 f"{fmt_int(R['qtd_desp_aberto'])} despesas sem número · Capa até {_ate}",
+                 classe="destaque-vermelho"),
+        card_kpi("Em aberto (não atrelado)", fmt_int(R["em_aberto_qtd"]),
+                 f"{fmt_brl(R['em_aberto_valor'])} · fecha por banco"),
+        card_kpi("NF sugerida (valor exato)", fmt_int(R["exato"]),
+                 f"soma a conferir: {fmt_int(R['soma_conferir'])}",
+                 classe="destaque-verde" if R["exato"] > 0 else ""),
+    ])
+    render_cards([
+        card_kpi("Baixadas no Sankhya", fmt_int(R["baixada"]), "já atreladas", classe="destaque-verde"),
+        card_kpi("Saídas da Conta 70", fmt_int(R["saida"]), "contrapartida"),
+        card_kpi("Pendentes de baixa", fmt_int(R["pendente"]), "identificados, faltam baixar",
+                 classe="destaque-amarelo" if R["pendente"] > 0 else ""),
+        card_kpi("Sem identificação", fmt_int(R["sem_id"]), "nem CPF/CNPJ nem nome",
+                 classe="destaque-vermelho" if R["sem_id"] > 0 else ""),
+    ])
+
+    if up_fat is None:
+        st.caption("💡 Suba as **notas emitidas (com CNPJ)** na aba ao lado para habilitar a sugestão de NF por valor.")
+
+    # ---- alerta de aging (só em aberto) ----
+    ab = m[m["aberto"]].copy()
+    ab["dias"] = pd.to_numeric(ab["dias"], errors="coerce")
+    faixas = [("15–30 dias", 15, 30), ("31–60 dias", 30, 60), ("61–90 dias", 60, 90), ("90+ dias", 90, 10**9)]
+    cards_al = []
+    for rot, lo, hi in faixas:
+        sub = ab[(ab["dias"] > lo) & (ab["dias"] <= hi)]
+        classe = "destaque-vermelho" if lo >= 60 else ("destaque-amarelo" if lo < 30 else "")
+        cards_al.append(card_kpi(rot, fmt_int(len(sub)), fmt_brl(float(sub["valor"].sum())), classe=classe))
+    section_title("ALERTA — PARADOS EM ABERTO (aging)")
+    render_cards(cards_al)
+
+    # ---- tabela ----
+    st.markdown("##### Mapa detalhado")
+    filtro = st.selectbox(
+        "Mostrar", ["Em aberto (pendências)", "Só com sugestão de NF", "Alerta (15+ dias)", "Tudo"],
+        key="c70_mapa_filtro",
+    )
+    if filtro == "Em aberto (pendências)":
+        mf = m[m["aberto"]].copy()
+    elif filtro == "Só com sugestão de NF":
+        mf = m[m["nf_baixar"].astype(str) != ""].copy()
+    elif filtro == "Alerta (15+ dias)":
+        mf = m[m["aberto"] & (pd.to_numeric(m["dias"], errors="coerce") > 15)].copy()
+    else:
+        mf = m.copy()
+
+    st.caption(f"{fmt_int(len(mf))} linhas · valor negativo = despesa (saída); positivo = receita (entrada).")
+
+    def _dstr(d):
+        try:
+            return pd.to_datetime(d).strftime("%d/%m/%Y") if pd.notna(d) else ""
+        except Exception:
+            return ""
+
+    disp = pd.DataFrame({
+        "Nº Capa 70": mf["num_txt"].values,
+        "Data": mf["data"].map(_dstr).values,
+        "Banco": mf["banco"].values,
+        "Identificação (CPF/CNPJ / origem)": mf["identificacao"].values,
+        "Valor": [fmt_brl(v) for v in pd.to_numeric(mf["valor"], errors="coerce").fillna(0)],
+        "R/D": mf["rd"].values,
+        "NF a baixar (sugestão)": mf["nf_baixar"].values,
+        "Parceiro da NF": mf["parceiro_nf"].values,
+        "Tipo de match": mf["tipo_match"].values,
+        "Status": mf["status"].values,
+        "Parceiro efetivo": mf["parceiro_efetivo"].values,
+        "Justificativa do vínculo": mf["justificativa"].values,
+    })
+    _keys = mf["status_key"].tolist()
+
+    def _style_status(col):
+        out = []
+        for k in _keys:
+            if k in CORES_STATUS:
+                bg, fg = CORES_STATUS[k]
+                out.append(f"background-color:#{bg};color:#{fg};font-weight:600")
+            else:
+                out.append("")
+        return out
+
+    try:
+        styler = disp.style.apply(_style_status, subset=["Status"])
+        st.dataframe(styler, use_container_width=True, hide_index=True, height=520)
+    except Exception:
+        st.dataframe(disp, use_container_width=True, hide_index=True, height=520)
+
+    # ---- download do Excel (mesmo layout aprovado) ----
+    st.divider()
+    cA, cB = st.columns([1, 3])
+    if cA.button("📥 Gerar Mapa em Excel", key="c70_mapa_gerar"):
+        try:
+            xls = exportar_mapa_excel(m, R)
+            st.session_state["c70_mapa_xls"] = xls
+        except Exception as e:
+            st.error(f"Não consegui gerar o Excel: {e}")
+    if st.session_state.get("c70_mapa_xls"):
+        from datetime import date as _date
+        cB.download_button(
+            "⬇️ Baixar Mapa_Recebimentos_Conta70.xlsx",
+            data=st.session_state["c70_mapa_xls"],
+            file_name=f"Mapa_Recebimentos_Conta70_{_date.today().isoformat()}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="c70_mapa_download",
+        )
+
+
 def _render_conta70_casamento_numeracao():
     """v5.7 — Atrelamento, numeração e esteira da Conta 70.
 
@@ -7185,9 +7354,9 @@ def _render_conta70_casamento_numeracao():
 
 
 def pagina_conta70():
-    from src.conta70 import gerar_conta_70, carregar_historico_conta_70, STATUS_VALIDOS
-    from io import BytesIO
-
+    # v5.13: submenu — "Atrelamento e Numeração" (fluxo original, intacto) +
+    # "Mapa de recebimentos" (visão aprovada). Aditivo: nada foi removido; o
+    # fluxo existente passou a viver dentro da primeira aba.
     section_title("CONTA 70 — CONTROLE PROVISÓRIO")
 
     st.markdown(
@@ -7195,6 +7364,17 @@ def pagina_conta70():
         "foram identificados** (não se sabe de qual NF / cliente / pedido são). Aqui você **atrela** "
         "cada um à sua origem e dá um **número sequencial**, atualizando a capa da conta."
     )
+
+    _tab_atrel, _tab_mapa = st.tabs(["Atrelamento e Numeração", "Mapa de recebimentos"])
+    with _tab_atrel:
+        _render_conta70_atrelamento_full()
+    with _tab_mapa:
+        _render_conta70_mapa_recebimentos()
+
+
+def _render_conta70_atrelamento_full():
+    from src.conta70 import gerar_conta_70, carregar_historico_conta_70, STATUS_VALIDOS
+    from io import BytesIO
 
     # v5.5: Casamento e numeração (Capa × Sankhya) — aditivo e independente da conciliação
     _render_conta70_casamento_numeracao()
