@@ -7065,22 +7065,29 @@ def _render_conta70_casamento_numeracao():
     up_capa = c1.file_uploader("📄 Capa da Conta 70 (consolidada · só leitura)", type=["xlsx", "xls", "xlsm", "csv"], accept_multiple_files=True, key="c70_capa")
     up_sk = c2.file_uploader("📄 Movimentação Conta 70 (Sankhya)", type=["xlsx", "xls", "xlsm", "csv"], accept_multiple_files=True, key="c70_sk")
     up_fat = c3.file_uploader("📄 Notas emitidas não baixadas (com CNPJ)", type=["xlsx", "xls", "xlsm", "csv"], accept_multiple_files=True, key="c70_fat")
-    # v5.19: guarda os arquivos numa chave persistente p/ o Mapa achar mesmo quando
-    # a aba de Atrelamento não está renderizada (submenu em pílulas).
-    st.session_state["_c70_saved"] = {
-        "capa": _c70_payload(up_capa),
-        "sk": _c70_payload(up_sk),
-        "fat": _c70_payload(up_fat),
-    }
+    # v5.22: guarda os bytes numa chave persistente SÓ quando o uploader tem
+    # arquivo — nunca sobrescreve com vazio. Assim trocar de aba NÃO perde os
+    # arquivos. Todo o processamento (e o Mapa) lê destas chaves, não do widget.
+    if up_capa:
+        st.session_state["_c70_bytes_capa"] = _c70_payload(up_capa)
+    if up_sk:
+        st.session_state["_c70_bytes_sk"] = _c70_payload(up_sk)
+    if up_fat:
+        st.session_state["_c70_bytes_fat"] = _c70_payload(up_fat)
+    capa_payload = st.session_state.get("_c70_bytes_capa", ())
+    sk_payload = st.session_state.get("_c70_bytes_sk", ())
+    fat_payload = st.session_state.get("_c70_bytes_fat", ())
+    # compat com o Mapa (que lê _c70_saved)
+    st.session_state["_c70_saved"] = {"capa": capa_payload, "sk": sk_payload, "fat": fat_payload}
     st.caption("Pode subir **mais de um arquivo** por campo — as linhas são **empilhadas** (sem remover repetições). Só junte relatórios da **mesma tela** e de **períodos que não se sobreponham**, senão os valores contam em dobro.")
 
-    if not up_capa or not up_sk:
+    if not capa_payload or not sk_payload:
         st.caption("Suba pelo menos a Capa e a movimentação do Sankhya. As notas emitidas são opcionais (habilitam os atrelamentos sugeridos por CNPJ).")
         return
 
     # ---- parte pesada em cache: instantâneo nos cliques seguintes ----
     try:
-        d, k, prox, ultimo, acum_rec, acum_desp = _c70_processar(_c70_payload(up_capa), _c70_payload(up_sk))
+        d, k, prox, ultimo, acum_rec, acum_desp = _c70_processar(capa_payload, sk_payload)
         d = d.copy()
     except Exception as e:
         st.error(f"Não consegui ler um dos arquivos: {e}")
@@ -7138,12 +7145,12 @@ def _render_conta70_casamento_numeracao():
     # prepara SUGERIDOS (fora do form)
     vis = None
     sug = None
-    if not up_fat:
+    if not fat_payload:
         st.caption("💡 Suba as notas emitidas (com CNPJ) para o app sugerir atrelamentos pelo CNPJ do histórico.")
     else:
         fat = None
         try:
-            fat = _c70_faturamento(_c70_payload(up_fat))
+            fat = _c70_faturamento(fat_payload)
         except Exception as e:
             st.warning(f"Não consegui ler o faturamento: {e}")
         if fat is not None:
@@ -7362,7 +7369,7 @@ def _render_conta70_casamento_numeracao():
         try:
             with st.spinner("Gerando a capa acumulada… isso leva alguns segundos (arquivo grande)."):
                 capa_out, preenchidos, n_novos = gerar_capa_acumulada(
-                    _io.BytesIO(up_capa[0].getvalue()), d, ultimo, acoes=acoes,
+                    _io.BytesIO(capa_payload[0][0]), d, ultimo, acoes=acoes,
                 )
 
                 # normaliza a coluna de data (mistura datetime + série do Excel)
@@ -7461,7 +7468,7 @@ def pagina_conta70():
                          type=("primary" if _ativo == 2 else "secondary"), use_container_width=True):
                 st.session_state["c70_sub"] = "mapa"
                 st.rerun()
-    st.caption("Conta 70 · **v5.21** — se aqui não aparecer v5.21, o deploy ainda não pegou (faça Reboot do app).")
+    st.caption("Conta 70 · **v5.22** — se aqui não aparecer v5.22, o deploy ainda não pegou (faça Reboot do app).")
     # v5.21: renderiza AS DUAS seções sempre e esconde a inativa por CSS. Usa a
     # CHAVE do container (st-key-*) — jeito estável — com o marcador como reforço.
     # Assim circular entre as pílulas NÃO perde o estado (uploads/rodada).
