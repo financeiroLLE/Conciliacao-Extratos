@@ -6768,10 +6768,20 @@ def pagina_auditoria_taxas():
 # ============================================================
 # Página: Conta 70 (v5.0 — módulo de controle provisório)
 # ============================================================
+def _c70_payload(uploaded):
+    """file_uploader (1 ou vários) -> tupla de (bytes, nome). Empilha sem dedup.
+    Vazio () quando nada foi subido. Mantém compatível com 1 arquivo."""
+    if not uploaded:
+        return ()
+    if isinstance(uploaded, list):
+        return tuple((f.getvalue(), f.name) for f in uploaded)
+    return ((uploaded.getvalue(), uploaded.name),)
+
+
 @st.cache_data(show_spinner="Processando a Conta 70 (uma vez)…")
-def _c70_processar(capa_bytes, capa_name, sk_bytes, sk_name):
-    """Parte pesada (ler Capa + Sankhya + atrelar) em cache: roda uma vez por
-    arquivo, então marcar caixinhas e navegar fica instantâneo."""
+def _c70_processar(capa_payload, sk_payload):
+    """Lê Capa + Sankhya (um ou VÁRIOS arquivos, empilhados linha-a-linha sem
+    dedup) e atrela. Cache por conjunto de arquivos. Com 1 arquivo, idêntico a antes."""
     import io as _io
     from src.conta70.casamento import carregar_movimento, atrelar
 
@@ -6780,8 +6790,8 @@ def _c70_processar(capa_bytes, capa_name, sk_bytes, sk_name):
         x.name = nome
         return x
 
-    capa = carregar_movimento(_n(capa_bytes, capa_name))
-    sk = carregar_movimento(_n(sk_bytes, sk_name))
+    capa = pd.concat([carregar_movimento(_n(b, nm)) for b, nm in capa_payload], ignore_index=True)
+    sk = pd.concat([carregar_movimento(_n(b, nm)) for b, nm in sk_payload], ignore_index=True)
     _m = pd.to_numeric(capa["numero"], errors="coerce").max()
     ult = int(_m) if pd.notna(_m) else 0
     res = atrelar(sk, capa, ultimo_numero=ult)
@@ -6793,17 +6803,22 @@ def _c70_processar(capa_bytes, capa_name, sk_bytes, sk_name):
 
 
 @st.cache_data(show_spinner=False)
-def _c70_faturamento(fat_bytes, fat_name):
+def _c70_faturamento(fat_payload):
     import io as _io
     from src.conta70.casamento import carregar_faturamento
-    x = _io.BytesIO(fat_bytes)
-    x.name = fat_name
-    return carregar_faturamento(x)
+
+    def _n(b, nome):
+        x = _io.BytesIO(b)
+        x.name = nome
+        return x
+
+    return pd.concat([carregar_faturamento(_n(b, nm)) for b, nm in fat_payload], ignore_index=True)
 
 
 @st.cache_data(show_spinner="Montando o Mapa de recebimentos…")
-def _mapa_c70_construir(capa_bytes, capa_name, fat_bytes, fat_name):
-    """Constrói o Mapa (cache por arquivo). fat_* pode ser None (sem notas)."""
+def _mapa_c70_construir(capa_payload, fat_payload):
+    """Constrói o Mapa (um ou VÁRIOS arquivos, empilhados sem dedup).
+    fat_payload pode ser vazio (sem notas)."""
     import io as _io
     from src.conta70.casamento import carregar_faturamento
     from src.conta70.mapa_recebimentos import carregar_capa_bruta, construir_mapa
@@ -6811,11 +6826,11 @@ def _mapa_c70_construir(capa_bytes, capa_name, fat_bytes, fat_name):
     def _n(b, nome):
         x = _io.BytesIO(b); x.name = nome; return x
 
-    capa = carregar_capa_bruta(_n(capa_bytes, capa_name))
+    capa = pd.concat([carregar_capa_bruta(_n(b, nm)) for b, nm in capa_payload], ignore_index=True)
     fat = None
-    if fat_bytes is not None:
+    if fat_payload:
         try:
-            fat = carregar_faturamento(_n(fat_bytes, fat_name))
+            fat = pd.concat([carregar_faturamento(_n(b, nm)) for b, nm in fat_payload], ignore_index=True)
         except Exception:
             fat = None
     m, resumo = construir_mapa(capa, fat)
@@ -6837,7 +6852,7 @@ def _render_conta70_mapa_recebimentos():
 
     up_capa = st.session_state.get("c70_capa")
     up_fat = st.session_state.get("c70_fat")
-    if up_capa is None:
+    if not up_capa:
         st.info(
             "Suba a **Capa da Conta 70** na aba **Atrelamento e Numeração** — os mesmos arquivos "
             "valem aqui. As **notas emitidas** (opcional) habilitam a sugestão de NF por valor."
@@ -6845,11 +6860,7 @@ def _render_conta70_mapa_recebimentos():
         return
 
     try:
-        m, R = _mapa_c70_construir(
-            up_capa.getvalue(), up_capa.name,
-            (up_fat.getvalue() if up_fat is not None else None),
-            (up_fat.name if up_fat is not None else ""),
-        )
+        m, R = _mapa_c70_construir(_c70_payload(up_capa), _c70_payload(up_fat))
     except Exception as e:
         st.error(f"Não consegui montar o Mapa: {e}")
         return
@@ -6876,7 +6887,7 @@ def _render_conta70_mapa_recebimentos():
                  classe="destaque-vermelho" if R["sem_id"] > 0 else ""),
     ])
 
-    if up_fat is None:
+    if not up_fat:
         st.caption("💡 Suba as **notas emitidas (com CNPJ)** na aba ao lado para habilitar a sugestão de NF por valor.")
 
     # ---- alerta de aging (só em aberto) ----
@@ -7028,17 +7039,18 @@ def _render_conta70_casamento_numeracao():
         )
 
     c1, c2, c3 = st.columns(3)
-    up_capa = c1.file_uploader("📄 Capa da Conta 70 (consolidada · só leitura)", type=["xlsx", "xls", "xlsm", "csv"], key="c70_capa")
-    up_sk = c2.file_uploader("📄 Movimentação Conta 70 (Sankhya)", type=["xlsx", "xls", "xlsm", "csv"], key="c70_sk")
-    up_fat = c3.file_uploader("📄 Notas emitidas não baixadas (com CNPJ)", type=["xlsx", "xls", "xlsm", "csv"], key="c70_fat")
+    up_capa = c1.file_uploader("📄 Capa da Conta 70 (consolidada · só leitura)", type=["xlsx", "xls", "xlsm", "csv"], accept_multiple_files=True, key="c70_capa")
+    up_sk = c2.file_uploader("📄 Movimentação Conta 70 (Sankhya)", type=["xlsx", "xls", "xlsm", "csv"], accept_multiple_files=True, key="c70_sk")
+    up_fat = c3.file_uploader("📄 Notas emitidas não baixadas (com CNPJ)", type=["xlsx", "xls", "xlsm", "csv"], accept_multiple_files=True, key="c70_fat")
+    st.caption("Pode subir **mais de um arquivo** por campo — as linhas são **empilhadas** (sem remover repetições). Só junte relatórios da **mesma tela** e de **períodos que não se sobreponham**, senão os valores contam em dobro.")
 
-    if up_capa is None or up_sk is None:
+    if not up_capa or not up_sk:
         st.caption("Suba pelo menos a Capa e a movimentação do Sankhya. As notas emitidas são opcionais (habilitam os atrelamentos sugeridos por CNPJ).")
         return
 
     # ---- parte pesada em cache: instantâneo nos cliques seguintes ----
     try:
-        d, k, prox, ultimo, acum_rec, acum_desp = _c70_processar(up_capa.getvalue(), up_capa.name, up_sk.getvalue(), up_sk.name)
+        d, k, prox, ultimo, acum_rec, acum_desp = _c70_processar(_c70_payload(up_capa), _c70_payload(up_sk))
         d = d.copy()
     except Exception as e:
         st.error(f"Não consegui ler um dos arquivos: {e}")
@@ -7096,12 +7108,12 @@ def _render_conta70_casamento_numeracao():
     # prepara SUGERIDOS (fora do form)
     vis = None
     sug = None
-    if up_fat is None:
+    if not up_fat:
         st.caption("💡 Suba as notas emitidas (com CNPJ) para o app sugerir atrelamentos pelo CNPJ do histórico.")
     else:
         fat = None
         try:
-            fat = _c70_faturamento(up_fat.getvalue(), up_fat.name)
+            fat = _c70_faturamento(_c70_payload(up_fat))
         except Exception as e:
             st.warning(f"Não consegui ler o faturamento: {e}")
         if fat is not None:
@@ -7311,7 +7323,7 @@ def _render_conta70_casamento_numeracao():
         try:
             with st.spinner("Gerando a capa acumulada… isso leva alguns segundos (arquivo grande)."):
                 capa_out, preenchidos, n_novos = gerar_capa_acumulada(
-                    _io.BytesIO(up_capa.getvalue()), d, ultimo, acoes=acoes,
+                    _io.BytesIO(up_capa[0].getvalue()), d, ultimo, acoes=acoes,
                 )
 
                 # normaliza a coluna de data (mistura datetime + série do Excel)
@@ -7384,11 +7396,13 @@ def pagina_conta70():
     st.markdown(
         "<style>"
         f'{_M} ~ div [data-baseweb="tab-list"]{{border-bottom:none!important;gap:10px!important}}'
-        f'{_M} ~ div [data-baseweb="tab-list"] button{{border-radius:22px!important;padding:4px 18px!important}}'
+        f'{_M} ~ div [data-baseweb="tab-list"] button{{border-radius:22px!important;overflow:hidden!important;padding:6px 18px!important;border:none!important}}'
+        f'{_M} ~ div [data-baseweb="tab-list"] button>*{{border-radius:22px!important}}'
         f'{_M} ~ div [data-baseweb="tab-list"] button *{{color:#cdd9f2!important}}'
-        f'{_M} ~ div [data-baseweb="tab-list"] button[aria-selected="true"]{{background-color:#FAC318!important}}'
+        f'{_M} ~ div [data-baseweb="tab-list"] button[aria-selected="true"]{{background-color:#FAC318!important;border-radius:22px!important}}'
         f'{_M} ~ div [data-baseweb="tab-list"] button[aria-selected="true"] *{{color:#041747!important;font-weight:700!important}}'
-        f'{_M} ~ div [data-baseweb="tab-highlight"]{{display:none!important}}'
+        f'{_M} ~ div [data-baseweb="tab-list"] [data-baseweb="tab-highlight"]{{display:none!important}}'
+        f'{_M} ~ div [data-baseweb="tab-list"] [data-baseweb="tab-border"]{{display:none!important}}'
         f'{_M} ~ div [data-baseweb="tab-border"]{{display:none!important}}'
         "</style>",
         unsafe_allow_html=True,
