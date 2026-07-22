@@ -6891,7 +6891,7 @@ def _render_conta70_mapa_recebimentos():
                  classe="destaque-vermelho" if R["sem_id"] > 0 else ""),
     ])
 
-    if not up_fat:
+    if not _fat_payload:
         st.caption("💡 Suba as **notas emitidas (com CNPJ)** na aba ao lado para habilitar a sugestão de NF por valor.")
 
     # ---- detalhe expansível da(s) NF sugerida(s): data, valor e qual NF baixar ----
@@ -7462,9 +7462,21 @@ def pagina_conta70():
                          type=("primary" if _ativo == 2 else "secondary"), use_container_width=True):
                 st.session_state["c70_sub"] = "mapa"
                 st.rerun()
-    if st.session_state["c70_sub"] == "atrel":
+    # v5.20: renderiza AS DUAS seções sempre e esconde a inativa por CSS. Assim
+    # circular entre as pílulas NÃO perde o estado (uploads/rodada) — o que
+    # acontecia com a renderização condicional (a seção some e perde os arquivos).
+    _esconder = "c70sec-mapa" if st.session_state["c70_sub"] == "atrel" else "c70sec-atrel"
+    st.markdown(
+        "<style>"
+        f'[data-testid="stVerticalBlock"]:has(> [data-testid="stElementContainer"] .{_esconder}){{display:none!important}}'
+        "</style>",
+        unsafe_allow_html=True,
+    )
+    with st.container():
+        st.markdown('<span class="c70sec-atrel"></span>', unsafe_allow_html=True)
         _render_conta70_atrelamento_full()
-    else:
+    with st.container():
+        st.markdown('<span class="c70sec-mapa"></span>', unsafe_allow_html=True)
         _render_conta70_mapa_recebimentos()
 
 
