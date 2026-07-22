@@ -24,6 +24,18 @@ from typing import Any
 
 import pandas as pd
 
+
+def _fmt_numero_txt(v: Any) -> str:
+    """Numeração da Capa como TEXTO. Aceita alfanumérico (ex.: '686a').
+    '' = sem número (em aberto). '839.0' -> '839'."""
+    if pd.isna(v):
+        return ""
+    sv = str(v).strip()
+    if sv.lower() in ("", "nan", "none"):
+        return ""
+    m = re.match(r"^(\d+)\.0$", sv)
+    return m.group(1) if m else sv
+
 # ---------------------------------------------------------------------------
 # Identidade (a chave de casamento)
 # ---------------------------------------------------------------------------
@@ -168,6 +180,9 @@ def carregar_movimento(arquivo: Any) -> pd.DataFrame:
     out["historico"] = df[c_hist].astype(str) if c_hist else ""
     out["num_unico"] = df[c_uni].astype(str) if c_uni else ""
     out["numero"] = pd.to_numeric(df[c_num], errors="coerce") if c_num else pd.NA
+    # v5.13: numeração como texto (aceita alfanumérico, ex.: "686a") — não perde
+    # linhas já numeradas com letra. '' = em aberto.
+    out["numero_txt"] = df[c_num].map(_fmt_numero_txt) if c_num else ""
 
     out = out.dropna(subset=["valor"]).reset_index(drop=True)
     out["identidade"] = out["historico"].map(extrair_identidade)
@@ -239,12 +254,21 @@ def atrelar(sankhya: pd.DataFrame, capa: pd.DataFrame, ultimo_numero: int | None
     sk = sk[sk["valor"].abs() > tol].reset_index(drop=True)
     sk["doc"] = sk["num_documento"].map(_cdoc)
 
-    capa_ok = capa[capa["numero"].notna()].copy()
-    capa_ok["doc"] = capa_ok["num_documento"].map(_cdoc)
-    doc2num: dict[str, int] = {}
-    for d, n in zip(capa_ok["doc"], capa_ok["numero"]):
+    # v5.13: reconhece numeração ALFANUMÉRICA (ex.: "686a") como já numerada,
+    # para não re-numerar uma linha que já tem número na Capa.
+    if "numero_txt" in capa.columns:
+        _numtxt = capa["numero_txt"].astype(str).str.strip().replace({"nan": "", "None": ""})
+        capa_ok = capa[_numtxt.str.len() > 0].copy()
+        capa_ok["doc"] = capa_ok["num_documento"].map(_cdoc)
+        capa_ok["_num_lbl"] = capa_ok["numero_txt"].map(_fmt_numero_txt)
+    else:
+        capa_ok = capa[capa["numero"].notna()].copy()
+        capa_ok["doc"] = capa_ok["num_documento"].map(_cdoc)
+        capa_ok["_num_lbl"] = capa_ok["numero"].map(lambda n: int(n))
+    doc2num: dict[str, Any] = {}
+    for d, n in zip(capa_ok["doc"], capa_ok["_num_lbl"]):
         if d and d not in doc2num:
-            doc2num[d] = int(n)
+            doc2num[d] = n
 
     sk["numero_final"] = pd.NA
     sk["situacao"] = ""
@@ -266,7 +290,7 @@ def atrelar(sankhya: pd.DataFrame, capa: pd.DataFrame, ultimo_numero: int | None
         somas = cand.groupby("numero_final")["valor"].apply(lambda s: s.abs().sum())
         casa = somas[(somas - abs(ent["valor"])).abs() <= tol]
         if len(casa) == 1:
-            sk.at[idx, "numero_final"] = int(casa.index[0])
+            sk.at[idx, "numero_final"] = casa.index[0]
             sk.at[idx, "situacao"] = "Herdado da baixa"
             sk.at[idx, "motivo"] = "Entrada pegou o número da baixa (identidade + valor fecha)"
         elif len(casa) > 1:
