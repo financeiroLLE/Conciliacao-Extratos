@@ -659,5 +659,52 @@ def gerar_capa_acumulada(capa_arquivo, detalhado, ultimo_numero: int, confirmado
     if novas_linhas:
         raw = pd.concat([raw, pd.DataFrame(novas_linhas)], ignore_index=True)
 
+    # v5.25 — Ponto 6 (Débora): status de baixa em TODOS os numerados que ainda
+    # estão SEM instrução, com base nos lados do número:
+    #   receita + despesa -> "Baixado no Sankhya"
+    #   só receita        -> "Pendente de numerar despesa"
+    #   só despesa        -> vazio
+    # As instruções desta rodada (ex.: "Baixar NF X") NÃO são sobrescritas.
+    if c_rd is not None:
+        _num_all = pd.to_numeric(raw[c_num], errors="coerce")
+        _rd_all = raw[c_rd].astype(str).str.upper()
+        _tem_rec, _tem_desp = {}, {}
+        for _nn, _rr in zip(_num_all, _rd_all):
+            if pd.isna(_nn):
+                continue
+            _k = int(_nn)
+            if "RECEITA" in _rr:
+                _tem_rec[_k] = True
+            if "DESPESA" in _rr:
+                _tem_desp[_k] = True
+
+        def _status6(nn):
+            if pd.isna(nn):
+                return None
+            _k = int(nn)
+            rec, desp = _tem_rec.get(_k, False), _tem_desp.get(_k, False)
+            if rec and desp:
+                return "Baixado no Sankhya"
+            if rec and not desp:
+                return "Pendente de numerar despesa"
+            return ""  # só despesa -> vazio
+
+        _ac_ser = raw[c_acao]
+        if isinstance(_ac_ser, pd.DataFrame):
+            _ac_ser = _ac_ser.iloc[:, 0]
+        _ac_list = [("" if pd.isna(x) else str(x)).strip() for x in _ac_ser.tolist()]
+        _num_list = _num_all.tolist()
+        _new_ac = []
+        for _pos in range(len(_ac_list)):
+            _cur = _ac_list[_pos]
+            # mantém só as instruções ACIONÁVEIS desta rodada; todo o resto
+            # (vazio, "Baixa já lançada", status antigo) é recalculado pelos lados.
+            if _cur.startswith("Baixar NF") or _cur.startswith("Atrelado manualmente"):
+                _new_ac.append(_cur)
+            else:
+                _st6 = _status6(_num_list[_pos])
+                _new_ac.append(_st6 if _st6 is not None else "")
+        raw[c_acao] = _new_ac
+
     raw = raw.drop(columns=["_v", "_d", "_cur"], errors="ignore")
     return raw[cols_orig], preenchidos + acrescentados, len(novos)
