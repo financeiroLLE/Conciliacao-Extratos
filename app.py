@@ -7409,27 +7409,38 @@ def pagina_conta70():
         "cada um à sua origem e dá um **número sequencial**, atualizando a capa da conta."
     )
 
-    # v5.16: submenu como pílula arredondada (ativa amarela · Opção A). Escopo por
-    # marcador + :has() para não afetar as abas de outras páginas.
-    _M = '[data-testid="stElementContainer"]:has(.c70tabsmark)'
+    # v5.18: submenu como PÍLULAS próprias (st.button estilizado). As abas nativas
+    # do Streamlit 1.59 não arredondam de jeito nenhum; aqui o visual é 100% meu
+    # (igual ao title pill). A ativa fica amarela; a inativa com contorno leve.
+    if "c70_sub" not in st.session_state:
+        st.session_state["c70_sub"] = "atrel"
+    st.markdown('<span class="c70pillmark"></span>', unsafe_allow_html=True)
+    _P = '[data-testid="stElementContainer"]:has(.c70pillmark)'
+    _ativo = 1 if st.session_state["c70_sub"] == "atrel" else 2
     st.markdown(
         "<style>"
-        f'{_M} ~ div [data-baseweb="tab-list"]{{border-bottom:none!important;gap:10px!important}}'
-        f'{_M} ~ div [data-baseweb="tab-list"] button{{border-radius:22px!important;overflow:hidden!important;padding:6px 18px!important;border:none!important;background:transparent!important}}'
-        f'{_M} ~ div [data-baseweb="tab-list"] button *{{background:transparent!important;color:#cdd9f2!important}}'
-        f'{_M} ~ div [data-baseweb="tab-list"] button[aria-selected="true"]{{background:#FAC318!important;border-radius:22px!important}}'
-        f'{_M} ~ div [data-baseweb="tab-list"] button[aria-selected="true"] *{{color:#041747!important;font-weight:700!important}}'
-        f'{_M} ~ div [data-baseweb="tab-list"] [data-baseweb="tab-highlight"]{{display:none!important}}'
-        f'{_M} ~ div [data-baseweb="tab-list"] [data-baseweb="tab-border"]{{display:none!important}}'
-        f'{_M} ~ div [data-baseweb="tab-border"]{{display:none!important}}'
+        f'{_P} ~ div .stButton button{{border-radius:22px!important;border:1px solid #24406f!important;'
+        f'background:transparent!important;color:#cdd9f2!important;font-weight:500!important;padding:6px 20px!important;box-shadow:none!important}}'
+        f'{_P} ~ div .stButton button:hover{{border-color:#FAC318!important;color:#ffffff!important}}'
+        f'{_P} ~ div [data-testid="stHorizontalBlock"]>div:nth-child({_ativo}) .stButton button{{'
+        f'background:#FAC318!important;border-color:#FAC318!important;color:#041747!important;font-weight:700!important}}'
         "</style>",
         unsafe_allow_html=True,
     )
-    st.markdown('<span class="c70tabsmark"></span>', unsafe_allow_html=True)
-    _tab_atrel, _tab_mapa = st.tabs(["Atrelamento e Numeração", "Mapa de recebimentos"])
-    with _tab_atrel:
+    _pc1, _pc2, _pc3 = st.columns([1.4, 1.4, 3])
+    with _pc1:
+        if st.button("Atrelamento e Numeração", key="c70pill_atrel",
+                     type=("primary" if _ativo == 1 else "secondary"), use_container_width=True):
+            st.session_state["c70_sub"] = "atrel"
+            st.rerun()
+    with _pc2:
+        if st.button("Mapa de recebimentos", key="c70pill_mapa",
+                     type=("primary" if _ativo == 2 else "secondary"), use_container_width=True):
+            st.session_state["c70_sub"] = "mapa"
+            st.rerun()
+    if st.session_state["c70_sub"] == "atrel":
         _render_conta70_atrelamento_full()
-    with _tab_mapa:
+    else:
         _render_conta70_mapa_recebimentos()
 
 
