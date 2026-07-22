@@ -6850,9 +6850,13 @@ def _render_conta70_mapa_recebimentos():
         "quando o **valor** bate (exato) ou por **somatório** (a conferir) — nunca só pelo CNPJ."
     )
 
-    up_capa = st.session_state.get("c70_capa")
-    up_fat = st.session_state.get("c70_fat")
-    if not up_capa:
+    # v5.19: com o submenu em pílulas, os uploaders (na aba Atrelamento) não
+    # renderizam junto do Mapa — então lemos os arquivos de uma chave persistente
+    # que a aba de Atrelamento preenche a cada render.
+    _saved = st.session_state.get("_c70_saved", {})
+    _capa_payload = _saved.get("capa", ())
+    _fat_payload = _saved.get("fat", ())
+    if not _capa_payload:
         st.info(
             "Suba a **Capa da Conta 70** na aba **Atrelamento e Numeração** — os mesmos arquivos "
             "valem aqui. As **notas emitidas** (opcional) habilitam a sugestão de NF por valor."
@@ -6860,7 +6864,7 @@ def _render_conta70_mapa_recebimentos():
         return
 
     try:
-        m, R = _mapa_c70_construir(_c70_payload(up_capa), _c70_payload(up_fat))
+        m, R = _mapa_c70_construir(_capa_payload, _fat_payload)
     except Exception as e:
         st.error(f"Não consegui montar o Mapa: {e}")
         return
@@ -7061,6 +7065,13 @@ def _render_conta70_casamento_numeracao():
     up_capa = c1.file_uploader("📄 Capa da Conta 70 (consolidada · só leitura)", type=["xlsx", "xls", "xlsm", "csv"], accept_multiple_files=True, key="c70_capa")
     up_sk = c2.file_uploader("📄 Movimentação Conta 70 (Sankhya)", type=["xlsx", "xls", "xlsm", "csv"], accept_multiple_files=True, key="c70_sk")
     up_fat = c3.file_uploader("📄 Notas emitidas não baixadas (com CNPJ)", type=["xlsx", "xls", "xlsm", "csv"], accept_multiple_files=True, key="c70_fat")
+    # v5.19: guarda os arquivos numa chave persistente p/ o Mapa achar mesmo quando
+    # a aba de Atrelamento não está renderizada (submenu em pílulas).
+    st.session_state["_c70_saved"] = {
+        "capa": _c70_payload(up_capa),
+        "sk": _c70_payload(up_sk),
+        "fat": _c70_payload(up_fat),
+    }
     st.caption("Pode subir **mais de um arquivo** por campo — as linhas são **empilhadas** (sem remover repetições). Só junte relatórios da **mesma tela** e de **períodos que não se sobreponham**, senão os valores contam em dobro.")
 
     if not up_capa or not up_sk:
@@ -7167,12 +7178,22 @@ def _render_conta70_casamento_numeracao():
         chips = " &nbsp;·&nbsp; ".join(f"<b>{nome}:</b> {qtd}" for nome, qtd in contagem.items())
         st.markdown("**Esteira — pendências abertas.** Valor negativo = despesa (saída); positivo = receita (entrada).")
         st.markdown(f"<div style='color:#9fb3d6;font-size:13px;margin:2px 0 8px'>{chips}</div>", unsafe_allow_html=True)
-        fc1, fc2, fc3, fc4, fc5 = st.columns([1, 1.2, 1, 1.3, 1.6])
-        f_prio = fc1.selectbox("Prioridade", ["todas", "Alta", "Média", "Baixa"], key="c70_fprio")
-        f_diag = fc2.selectbox("Tipo de pendência", ["todos"] + sorted(est["diagnostico"].dropna().unique().tolist()), key="c70_fdiag")
-        f_banco = fc3.selectbox("Banco", ["todos"] + sorted(est["banco"].dropna().unique().tolist()), key="c70_fbanco")
-        f_col = fc4.selectbox("Filtrar por coluna", ["Todas as colunas", "CNPJ / Histórico", "Data", "Banco", "R/D", "Valor", "Diagnóstico"], key="c70_fcol")
-        busca = fc5.text_input("Buscar", key="c70_busca", placeholder="digite e tecle Enter")
+        with st.container():
+            st.markdown('<span class="c70filtmark"></span>', unsafe_allow_html=True)
+            _F = '[data-testid="stElementContainer"]:has(.c70filtmark)'
+            st.markdown(
+                "<style>"
+                f'{_F} ~ div [data-testid="stHorizontalBlock"] [data-baseweb="select"]>div{{border-left:4px solid #FAC318!important}}'
+                f'{_F} ~ div [data-testid="stHorizontalBlock"] [data-baseweb="base-input"]{{border-left:4px solid #FAC318!important}}'
+                "</style>",
+                unsafe_allow_html=True,
+            )
+            fc1, fc2, fc3, fc4, fc5 = st.columns([1, 1.2, 1, 1.3, 1.6])
+            f_prio = fc1.selectbox("Prioridade", ["todas", "Alta", "Média", "Baixa"], key="c70_fprio")
+            f_diag = fc2.selectbox("Tipo de pendência", ["todos"] + sorted(est["diagnostico"].dropna().unique().tolist()), key="c70_fdiag")
+            f_banco = fc3.selectbox("Banco", ["todos"] + sorted(est["banco"].dropna().unique().tolist()), key="c70_fbanco")
+            f_col = fc4.selectbox("Filtrar por coluna", ["Todas as colunas", "CNPJ / Histórico", "Data", "Banco", "R/D", "Valor", "Diagnóstico"], key="c70_fcol")
+            busca = fc5.text_input("Buscar", key="c70_busca", placeholder="digite e tecle Enter")
         view = est
         if f_prio != "todas":
             view = view[view["prioridade"] == f_prio]
@@ -7409,39 +7430,38 @@ def pagina_conta70():
         "cada um à sua origem e dá um **número sequencial**, atualizando a capa da conta."
     )
 
-    # v5.18: submenu como PÍLULAS próprias (st.button estilizado). As abas nativas
-    # do Streamlit 1.59 não arredondam de jeito nenhum; aqui o visual é 100% meu
-    # (igual ao title pill). A ativa fica amarela; a inativa com contorno leve.
+    # v5.19: submenu como PÍLULAS próprias, ISOLADAS num container para o CSS não
+    # vazar pros outros botões (ex.: "Gerar capa atualizada"). Ativa amarela.
     if "c70_sub" not in st.session_state:
         st.session_state["c70_sub"] = "atrel"
-    st.markdown('<span class="c70pillmark"></span>', unsafe_allow_html=True)
-    _P = '[data-testid="stElementContainer"]:has(.c70pillmark)'
     _ativo = 1 if st.session_state["c70_sub"] == "atrel" else 2
-    st.markdown(
-        "<style>"
-        f'{_P} ~ div .stButton button{{border-radius:22px!important;border:1px solid #24406f!important;'
-        f'background:transparent!important;color:#cdd9f2!important;padding:6px 20px!important;box-shadow:none!important}}'
-        f'{_P} ~ div .stButton button, {_P} ~ div .stButton button *{{font-weight:700!important;color:#cdd9f2!important}}'
-        f'{_P} ~ div .stButton button:hover, {_P} ~ div .stButton button:hover *{{border-color:#FAC318!important;color:#ffffff!important}}'
-        f'{_P} ~ div [data-testid="stHorizontalBlock"]>div:nth-child({_ativo}) .stButton button{{'
-        f'background:#FAC318!important;border-color:#FAC318!important}}'
-        f'{_P} ~ div [data-testid="stHorizontalBlock"]>div:nth-child({_ativo}) .stButton button,'
-        f'{_P} ~ div [data-testid="stHorizontalBlock"]>div:nth-child({_ativo}) .stButton button *{{'
-        f'color:#041747!important;font-weight:800!important}}'
-        "</style>",
-        unsafe_allow_html=True,
-    )
-    _pc1, _pc2, _pc3 = st.columns([1.4, 1.4, 3])
-    with _pc1:
-        if st.button("Atrelamento e Numeração", key="c70pill_atrel",
-                     type=("primary" if _ativo == 1 else "secondary"), use_container_width=True):
-            st.session_state["c70_sub"] = "atrel"
-            st.rerun()
-    with _pc2:
-        if st.button("Mapa de recebimentos", key="c70pill_mapa",
-                     type=("primary" if _ativo == 2 else "secondary"), use_container_width=True):
-            st.session_state["c70_sub"] = "mapa"
-            st.rerun()
+    with st.container():
+        st.markdown('<span class="c70pillmark"></span>', unsafe_allow_html=True)
+        _P = '[data-testid="stElementContainer"]:has(.c70pillmark)'
+        _hb = f'{_P} ~ div [data-testid="stHorizontalBlock"]'
+        st.markdown(
+            "<style>"
+            f'{_hb} .stButton button{{border-radius:22px!important;border:1px solid #24406f!important;'
+            f'background:transparent!important;padding:6px 20px!important;box-shadow:none!important}}'
+            f'{_hb} .stButton button, {_hb} .stButton button *{{font-weight:700!important;color:#cdd9f2!important}}'
+            f'{_hb} .stButton button:hover{{border-color:#FAC318!important}}'
+            f'{_hb}>div:nth-child({_ativo}) .stButton button{{background:#FAC318!important;border-color:#FAC318!important}}'
+            f'{_hb}>div:nth-child({_ativo}) .stButton button,'
+            f'{_hb}>div:nth-child({_ativo}) .stButton button *{{color:#041747!important;font-weight:800!important}}'
+            "</style>",
+            unsafe_allow_html=True,
+        )
+        _pc1, _pc2, _pc3 = st.columns([1.4, 1.4, 3])
+        with _pc1:
+            if st.button("Atrelamento e Numeração", key="c70pill_atrel",
+                         type=("primary" if _ativo == 1 else "secondary"), use_container_width=True):
+                st.session_state["c70_sub"] = "atrel"
+                st.rerun()
+        with _pc2:
+            if st.button("Mapa de recebimentos", key="c70pill_mapa",
+                         type=("primary" if _ativo == 2 else "secondary"), use_container_width=True):
+                st.session_state["c70_sub"] = "mapa"
+                st.rerun()
     if st.session_state["c70_sub"] == "atrel":
         _render_conta70_atrelamento_full()
     else:
