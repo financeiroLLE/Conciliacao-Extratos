@@ -6890,6 +6890,24 @@ def _render_conta70_mapa_recebimentos():
     if not up_fat:
         st.caption("💡 Suba as **notas emitidas (com CNPJ)** na aba ao lado para habilitar a sugestão de NF por valor.")
 
+    # ---- detalhe expansível da(s) NF sugerida(s): data, valor e qual NF baixar ----
+    _sug = m[m["nf_baixar"].astype(str).str.strip() != ""].copy()
+    if len(_sug) > 0:
+        _tm = _sug["tipo_match"].astype(str) if "tipo_match" in _sug.columns else pd.Series([""] * len(_sug), index=_sug.index)
+        _n_exato = int((_tm.str.lower() == "exato").sum())
+        with st.expander(f"🔎 Ver as NF sugeridas — {fmt_int(len(_sug))} (valor exato: {fmt_int(_n_exato)})"):
+            _det = pd.DataFrame({
+                "Data": pd.to_datetime(_sug["data"], errors="coerce").dt.strftime("%d/%m/%Y"),
+                "Banco": _sug["banco"].astype(str),
+                "Valor": _sug["valor"].map(lambda v: fmt_brl(abs(float(v)))),
+                "CPF / CNPJ": _sug["identificacao"].astype(str),
+                "Parceiro (nota)": (_sug["parceiro_nf"].astype(str) if "parceiro_nf" in _sug.columns else ""),
+                "Tipo": _tm.str.lower().map({"exato": "Valor exato", "soma": "Soma (conferir)"}).fillna(_tm),
+                "NF a baixar": _sug["nf_baixar"].astype(str),
+            })
+            st.dataframe(_det, hide_index=True, width="stretch")
+            st.caption("As de **valor exato** podem ser baixadas contra o recebimento; as de **soma (conferir)** são só indicação — a decisão é sua.")
+
     # ---- alerta de aging (só em aberto) ----
     ab = m[m["aberto"]].copy()
     ab["dias"] = pd.to_numeric(ab["dias"], errors="coerce")
