@@ -7420,10 +7420,14 @@ def pagina_conta70():
     st.markdown(
         "<style>"
         f'{_P} ~ div .stButton button{{border-radius:22px!important;border:1px solid #24406f!important;'
-        f'background:transparent!important;color:#cdd9f2!important;font-weight:500!important;padding:6px 20px!important;box-shadow:none!important}}'
-        f'{_P} ~ div .stButton button:hover{{border-color:#FAC318!important;color:#ffffff!important}}'
+        f'background:transparent!important;color:#cdd9f2!important;padding:6px 20px!important;box-shadow:none!important}}'
+        f'{_P} ~ div .stButton button, {_P} ~ div .stButton button *{{font-weight:700!important;color:#cdd9f2!important}}'
+        f'{_P} ~ div .stButton button:hover, {_P} ~ div .stButton button:hover *{{border-color:#FAC318!important;color:#ffffff!important}}'
         f'{_P} ~ div [data-testid="stHorizontalBlock"]>div:nth-child({_ativo}) .stButton button{{'
-        f'background:#FAC318!important;border-color:#FAC318!important;color:#041747!important;font-weight:700!important}}'
+        f'background:#FAC318!important;border-color:#FAC318!important}}'
+        f'{_P} ~ div [data-testid="stHorizontalBlock"]>div:nth-child({_ativo}) .stButton button,'
+        f'{_P} ~ div [data-testid="stHorizontalBlock"]>div:nth-child({_ativo}) .stButton button *{{'
+        f'color:#041747!important;font-weight:800!important}}'
         "</style>",
         unsafe_allow_html=True,
     )
