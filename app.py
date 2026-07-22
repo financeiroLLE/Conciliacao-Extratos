@@ -6898,15 +6898,22 @@ def _render_conta70_mapa_recebimentos():
 
     # ---- tabela ----
     st.markdown("##### Mapa detalhado")
-    # v5.14: seletor "Mostrar" com fundo amarelo da identidade LLE (para destacar)
+    # v5.16: seletor "Mostrar" amarelo — escopo por marcador + :has() (independe da versão do Streamlit)
     st.markdown(
         "<style>"
-        '.st-key-c70_mapa_filtro div[data-baseweb="select"]>div{background-color:#FAC318!important;border-color:#d9a800!important}'
-        '.st-key-c70_mapa_filtro div[data-baseweb="select"] *{color:#041747!important}'
-        ".st-key-c70_mapa_filtro svg{fill:#041747!important}"
+        '[data-testid="stElementContainer"]:has(.c70selmark)+[data-testid="stElementContainer"] div[data-baseweb="select"]>div,'
+        '[data-testid="element-container"]:has(.c70selmark)+[data-testid="element-container"] div[data-baseweb="select"]>div'
+        "{background-color:#FAC318!important;border-color:#d9a800!important}"
+        '[data-testid="stElementContainer"]:has(.c70selmark)+[data-testid="stElementContainer"] div[data-baseweb="select"] *,'
+        '[data-testid="element-container"]:has(.c70selmark)+[data-testid="element-container"] div[data-baseweb="select"] *'
+        "{color:#041747!important}"
+        '[data-testid="stElementContainer"]:has(.c70selmark)+[data-testid="stElementContainer"] svg,'
+        '[data-testid="element-container"]:has(.c70selmark)+[data-testid="element-container"] svg'
+        "{fill:#041747!important}"
         "</style>",
         unsafe_allow_html=True,
     )
+    st.markdown('<span class="c70selmark"></span>', unsafe_allow_html=True)
     filtro = st.selectbox(
         "Mostrar", ["Em aberto (pendências)", "Só com sugestão de NF", "Alerta (15+ dias)", "Tudo"],
         key="c70_mapa_filtro",
@@ -7375,6 +7382,22 @@ def pagina_conta70():
         "cada um à sua origem e dá um **número sequencial**, atualizando a capa da conta."
     )
 
+    # v5.16: submenu como pílula arredondada (ativa amarela · Opção A). Escopo por
+    # marcador + :has() para não afetar as abas de outras páginas.
+    _M = '[data-testid="stElementContainer"]:has(.c70tabsmark)'
+    st.markdown(
+        "<style>"
+        f'{_M} ~ div [data-baseweb="tab-list"]{{border-bottom:none!important;gap:10px!important}}'
+        f'{_M} ~ div [data-baseweb="tab-list"] button[data-baseweb="tab"]{{border-radius:22px!important;padding:4px 18px!important}}'
+        f'{_M} ~ div [data-baseweb="tab-list"] button[data-baseweb="tab"] p{{color:#cdd9f2!important}}'
+        f'{_M} ~ div [data-baseweb="tab-list"] button[aria-selected="true"]{{background-color:#FAC318!important}}'
+        f'{_M} ~ div [data-baseweb="tab-list"] button[aria-selected="true"] p{{color:#041747!important;font-weight:700!important}}'
+        f'{_M} ~ div [data-baseweb="tab-highlight"]{{background-color:transparent!important;height:0!important}}'
+        f'{_M} ~ div [data-baseweb="tab-border"]{{display:none!important}}'
+        "</style>",
+        unsafe_allow_html=True,
+    )
+    st.markdown('<span class="c70tabsmark"></span>', unsafe_allow_html=True)
     _tab_atrel, _tab_mapa = st.tabs(["Atrelamento e Numeração", "Mapa de recebimentos"])
     with _tab_atrel:
         _render_conta70_atrelamento_full()
