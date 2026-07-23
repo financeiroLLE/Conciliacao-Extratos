@@ -73,6 +73,42 @@ def _lado(receita_despesa: Any) -> str:
     return "entrada" if "DESPESA" in str(receita_despesa).upper() else "baixa"
 
 
+# v5.71: nova regra de casamento Sankhya × Capa por chave (data + |valor| + R/D +
+# histórico normalizado). Não usa mais Núm. Documento (numeração interna do
+# Sankhya, não confiável — a Débora sempre destacou isso). Além disso, aplica
+# um corte histórico no balde vermelho: movimentos anteriores a essa data que
+# não estão em nenhuma linha da Capa são resíduo histórico (a Capa anterior a
+# fev/2024 estava incompleta) e ficam fora da esteira.
+DATA_CORTE_ESTEIRA = pd.Timestamp("2024-02-01")
+
+
+def _norm_hist_esteira(h: Any) -> str:
+    """Histórico normalizado (uppercase, espaços colapsados, sem aspas).
+    Usado como parte da chave (data + |valor| + R/D + hist) para casar linhas
+    da Conciliação Bancária contra a Capa da Conta 70.
+    """
+    if h is None:
+        return ""
+    s = str(h).upper()
+    s = re.sub(r"\s+", " ", s).strip()
+    return s.replace('"', "")
+
+
+def _chave_esteira(row) -> tuple:
+    """Chave (data_date, |valor| em centavos, R/D, hist_norm) para casamento.
+    Usa valor absoluto em centavos como inteiro para evitar erro de float.
+    """
+    dt = pd.to_datetime(row.get("data"), errors="coerce")
+    dt = dt.date() if pd.notna(dt) else None
+    try:
+        v = int(round(abs(float(row.get("valor", 0))) * 100))
+    except Exception:
+        v = 0
+    rd = str(row.get("receita_despesa", "")).strip()
+    hn = _norm_hist_esteira(row.get("historico", ""))
+    return (dt, v, rd, hn)
+
+
 # ---------------------------------------------------------------------------
 # Leitura de arquivos (somente leitura)
 # ---------------------------------------------------------------------------
@@ -274,11 +310,48 @@ def atrelar(sankhya: pd.DataFrame, capa: pd.DataFrame, ultimo_numero: int | None
     sk["situacao"] = ""
     sk["motivo"] = ""
 
-    # A) baixa/linha pelo documento
-    mask_doc = sk["doc"].map(lambda d: bool(d) and d in doc2num)
-    sk.loc[mask_doc, "numero_final"] = sk.loc[mask_doc, "doc"].map(doc2num)
-    sk.loc[mask_doc, "situacao"] = "Já identificado"
-    sk.loc[mask_doc, "motivo"] = "Atrelou pelo Núm. Documento da Capa"
+    # A) v5.71: casa cada linha do Sankhya (Conciliação Bancária) contra a Capa
+    # pela chave (data + |valor| + R/D + histórico normalizado). Núm. Documento
+    # NÃO é usado — é numeração interna do Sankhya, não confiável (regra travada
+    # com a Débora). Cada linha da Capa vira UM slot; se a mesma chave tem 3
+    # ocorrências na Capa, consome até 3 linhas do Sankhya (pareamento 1:1).
+    #
+    # A ordem importa: primeiro tenta casar com uma linha NUMERADA da Capa
+    # (marcar como "Já identificado" — sai da esteira). Só se não achar
+    # numerada, tenta casar com uma linha SEM número (fica "Aguardando baixa"
+    # / "A conferir" — entra na esteira).
+    from collections import Counter as _Counter
+
+    # Slots das linhas NUMERADAS da Capa (com número a atrelar)
+    capa_ok_chaves = capa_ok.apply(_chave_esteira, axis=1) if not capa_ok.empty else pd.Series(dtype=object)
+    slots_numerados: dict[tuple, list] = {}
+    for k, num in zip(capa_ok_chaves, capa_ok["_num_lbl"] if not capa_ok.empty else []):
+        slots_numerados.setdefault(k, []).append(num)
+
+    # Slots das linhas SEM número da Capa
+    if "numero_txt" in capa.columns:
+        _numtxt_all = capa["numero_txt"].astype(str).str.strip().replace({"nan": "", "None": ""})
+        capa_sem = capa[_numtxt_all.str.len() == 0].copy()
+    else:
+        capa_sem = capa[capa["numero"].isna()].copy()
+    capa_sem_chaves = capa_sem.apply(_chave_esteira, axis=1) if not capa_sem.empty else pd.Series(dtype=object)
+    slots_sem_num: _Counter = _Counter(capa_sem_chaves.tolist())
+
+    # Casa cada linha do Sankhya
+    for idx in sk.index:
+        k = _chave_esteira(sk.loc[idx])
+        if slots_numerados.get(k):
+            num = slots_numerados[k].pop(0)
+            sk.at[idx, "numero_final"] = num
+            sk.at[idx, "situacao"] = "Já identificado"
+            sk.at[idx, "motivo"] = (
+                "Bate com linha numerada da Capa (data+valor+R/D+histórico)"
+            )
+        elif slots_sem_num.get(k, 0) > 0:
+            # Bate com linha SEM número na Capa — fica pendente pra numeração
+            slots_sem_num[k] -= 1
+            sk.at[idx, "situacao"] = "Aguardando baixa" if sk.at[idx, "lado"] == "entrada" else "A conferir"
+            sk.at[idx, "motivo"] = "Está na Capa, ainda sem número (aguarda numeração)"
 
     # B) entrada herda o número da baixa (mesma identidade + valor fecha)
     atr = sk[sk["numero_final"].notna()]
@@ -327,14 +400,29 @@ def atrelar(sankhya: pd.DataFrame, capa: pd.DataFrame, ultimo_numero: int | None
                 prox += 1
                 bx_disp.remove(match)
 
-    # D/E) resto
+    # D/E) resto — linhas do Sankhya que NÃO bateram em nenhuma linha da Capa
+    # (nem numerada, nem sem número). Isso é o "balde vermelho".
+    #
+    # v5.71: aplica corte histórico. Linhas anteriores a DATA_CORTE_ESTEIRA
+    # (01/02/2024) que não estão em lugar nenhum da Capa são resíduo da
+    # Capa velha (incompleta antes desse marco) — não vão pra esteira. Ficam
+    # marcadas como "Órfão histórico" para auditoria, mas o app.py filtra por
+    # situações {"Aguardando baixa", "A conferir"} antes de chamar diagnosticar,
+    # então naturalmente não aparecem na esteira.
     for idx in sk[sk["situacao"] == ""].index:
-        if sk.at[idx, "lado"] == "entrada":
+        _dt = pd.to_datetime(sk.at[idx, "data"], errors="coerce")
+        _antigo = pd.notna(_dt) and _dt < DATA_CORTE_ESTEIRA
+        if _antigo:
+            sk.at[idx, "situacao"] = "Órfão histórico"
+            sk.at[idx, "motivo"] = (
+                f"Anterior a {DATA_CORTE_ESTEIRA.strftime('%d/%m/%Y')} e ausente da Capa — fora do escopo"
+            )
+        elif sk.at[idx, "lado"] == "entrada":
             sk.at[idx, "situacao"] = "Aguardando baixa"
-            sk.at[idx, "motivo"] = "Entrada parada, ainda sem baixa"
+            sk.at[idx, "motivo"] = "Não está na Capa (novo — falta numerar)"
         else:
             sk.at[idx, "situacao"] = "A conferir"
-            sk.at[idx, "motivo"] = "Baixa sem par/número na base"
+            sk.at[idx, "motivo"] = "Não está na Capa (baixa sem par identificado)"
 
     return ResultadoAtrelamento(detalhado=sk, proximo_numero=prox)
 
