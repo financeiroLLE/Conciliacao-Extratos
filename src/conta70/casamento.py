@@ -83,15 +83,32 @@ DATA_CORTE_ESTEIRA = pd.Timestamp("2024-02-01")
 
 
 def _norm_hist_esteira(h: Any) -> str:
-    """Histórico normalizado (uppercase, espaços colapsados, sem aspas).
-    Usado como parte da chave (data + |valor| + R/D + hist) para casar linhas
-    da Conciliação Bancária contra a Capa da Conta 70.
+    """Histórico normalizado para usar como parte da chave de casamento
+    (data + |valor| + R/D + hist) entre Conciliação Bancária e Capa 70.
+
+    v5.71 revisado — trata as variações reais que aparecem entre o export da
+    ConcB e a linha correspondente na Capa:
+      • aspas simples, duplas e escapadas com "\\": todas viram espaço
+      • espaços consecutivos: colapsados em um único
+      • duplicação de sufixo no final ("X - Y - Y" → "X - Y"): removida em
+        até 3 iterações, cobrindo casos como o real
+        `... - DEXCO S.A" - DEXCO S.A`
+      • uppercase + strip para comparação estável
     """
     if h is None:
         return ""
     s = str(h).upper()
-    s = re.sub(r"\s+", " ", s).strip()
-    return s.replace('"', "")
+    # aspas (simples, duplas) e barras invertidas viram espaço
+    s = re.sub(r'["\'\\]+', ' ', s)
+    # colapsa espaços
+    s = re.sub(r'\s+', ' ', s).strip()
+    # remove duplicações de sufixo (até 3 níveis, pra estabilizar)
+    for _ in range(3):
+        m = re.match(r'^(.*?)(\s*-\s*[^-]+?)\s*\2\s*$', s)
+        if not m:
+            break
+        s = m.group(1) + m.group(2)
+    return s
 
 
 def _chave_esteira(row) -> tuple:
@@ -310,48 +327,96 @@ def atrelar(sankhya: pd.DataFrame, capa: pd.DataFrame, ultimo_numero: int | None
     sk["situacao"] = ""
     sk["motivo"] = ""
 
-    # A) v5.71: casa cada linha do Sankhya (Conciliação Bancária) contra a Capa
-    # pela chave (data + |valor| + R/D + histórico normalizado). Núm. Documento
-    # NÃO é usado — é numeração interna do Sankhya, não confiável (regra travada
-    # com a Débora). Cada linha da Capa vira UM slot; se a mesma chave tem 3
-    # ocorrências na Capa, consome até 3 linhas do Sankhya (pareamento 1:1).
+    # A) v5.71 (revisto pós-produção, 2ª iteração): casa cada linha do Sankhya
+    # contra a Capa por chave curta (data + |valor| + R/D) + PREFIX MATCH no
+    # histórico normalizado. Regra descoberta olhando dado real:
+    #   • A Capa acrescenta o NOME DO PARCEIRO no fim do histórico da ConcB.
+    #     Exemplo real:
+    #        ConcB: "DEP IDENT- 46647633000197 - SANTANDER - 07/05/2024" -
+    #        Capa : "DEP IDENT- 46647633000197 - SANTANDER - 07/05/2024" - CONSORCIO RIO IMAGEM II BAIXADA
+    #   • Meu match exato antigo não pegava isso (histórico "diferente"),
+    #     então dezenas de receitas já numeradas caíam na esteira falsamente.
+    #   • Prefix match é SEGURO: se um começa com o outro, é a mesma linha
+    #     (não é fuzzy arbitrário). Alinhado com "zero falso positivo".
     #
-    # A ordem importa: primeiro tenta casar com uma linha NUMERADA da Capa
-    # (marcar como "Já identificado" — sai da esteira). Só se não achar
-    # numerada, tenta casar com uma linha SEM número (fica "Aguardando baixa"
-    # / "A conferir" — entra na esteira).
-    from collections import Counter as _Counter
+    # Ordem: NUMERADAS primeiro (marca "Já identificado"). SEM número NÃO
+    # decide aqui — deixa pro Bloco C parear entrada↔baixa e numerar.
+    from collections import Counter as _Counter, defaultdict as _defaultdict
 
-    # Slots das linhas NUMERADAS da Capa (com número a atrelar)
-    capa_ok_chaves = capa_ok.apply(_chave_esteira, axis=1) if not capa_ok.empty else pd.Series(dtype=object)
-    slots_numerados: dict[tuple, list] = {}
-    for k, num in zip(capa_ok_chaves, capa_ok["_num_lbl"] if not capa_ok.empty else []):
-        slots_numerados.setdefault(k, []).append(num)
+    def _chave_curta(row):
+        """Chave curta (data + |valor| + R/D) — sem histórico."""
+        dt = pd.to_datetime(row.get("data"), errors="coerce")
+        dt = dt.date() if pd.notna(dt) else None
+        try:
+            v = int(round(abs(float(row.get("valor", 0))) * 100))
+        except Exception:
+            v = 0
+        rd = str(row.get("receita_despesa", "")).strip()
+        return (dt, v, rd)
 
-    # Slots das linhas SEM número da Capa
+    def _bate_hist(h_sk: str, h_ca: str) -> bool:
+        """True se históricos normalizados são iguais OU um é prefixo do outro."""
+        if not h_sk or not h_ca:
+            return False
+        if h_sk == h_ca:
+            return True
+        # Prefix (aceita "quase igual" com sufixo diferente, como nome do parceiro)
+        m = min(len(h_sk), len(h_ca))
+        if m >= 20:  # exige pelo menos 20 chars em comum para ser conservador
+            if h_ca.startswith(h_sk) or h_sk.startswith(h_ca):
+                return True
+        return False
+
+    # Índice das linhas NUMERADAS da Capa por chave curta
+    # valor: lista de tuples (hist_norm, num, idx_original_capa)
+    slots_numerados: dict = _defaultdict(list)
+    if not capa_ok.empty:
+        for i_capa, r_capa in capa_ok.iterrows():
+            k = _chave_curta(r_capa)
+            h_norm = _norm_hist_esteira(r_capa.get("historico", ""))
+            slots_numerados[k].append([h_norm, r_capa["_num_lbl"], i_capa])
+
+    # Índice das linhas SEM número da Capa (só como INFO para o motivo)
     if "numero_txt" in capa.columns:
         _numtxt_all = capa["numero_txt"].astype(str).str.strip().replace({"nan": "", "None": ""})
         capa_sem = capa[_numtxt_all.str.len() == 0].copy()
     else:
         capa_sem = capa[capa["numero"].isna()].copy()
-    capa_sem_chaves = capa_sem.apply(_chave_esteira, axis=1) if not capa_sem.empty else pd.Series(dtype=object)
-    slots_sem_num: _Counter = _Counter(capa_sem_chaves.tolist())
+    slots_sem_num_info: _Counter = _Counter()
+    if not capa_sem.empty:
+        for _, r_capa in capa_sem.iterrows():
+            slots_sem_num_info[_chave_curta(r_capa)] += 1
 
     # Casa cada linha do Sankhya
     for idx in sk.index:
-        k = _chave_esteira(sk.loc[idx])
-        if slots_numerados.get(k):
-            num = slots_numerados[k].pop(0)
+        k = _chave_curta(sk.loc[idx])
+        h_sk = _norm_hist_esteira(sk.at[idx, "historico"])
+        candidatos = slots_numerados.get(k, [])
+        pos_match = None
+        # 1ª passada: match EXATO
+        for pos, (h_ca, _n, _i) in enumerate(candidatos):
+            if h_ca == h_sk:
+                pos_match = pos
+                break
+        # 2ª passada: PREFIX (só se não achou exato)
+        if pos_match is None:
+            for pos, (h_ca, _n, _i) in enumerate(candidatos):
+                if _bate_hist(h_sk, h_ca):
+                    pos_match = pos
+                    break
+
+        if pos_match is not None:
+            _hist, num, _i_capa = candidatos.pop(pos_match)
             sk.at[idx, "numero_final"] = num
             sk.at[idx, "situacao"] = "Já identificado"
             sk.at[idx, "motivo"] = (
                 "Bate com linha numerada da Capa (data+valor+R/D+histórico)"
             )
-        elif slots_sem_num.get(k, 0) > 0:
-            # Bate com linha SEM número na Capa — fica pendente pra numeração
-            slots_sem_num[k] -= 1
-            sk.at[idx, "situacao"] = "Aguardando baixa" if sk.at[idx, "lado"] == "entrada" else "A conferir"
-            sk.at[idx, "motivo"] = "Está na Capa, ainda sem número (aguarda numeração)"
+        elif slots_sem_num_info.get(k, 0) > 0:
+            # Bate por chave curta com sem-número da Capa — marca info mas
+            # NÃO decide situação, para o Bloco C tentar parear e numerar.
+            slots_sem_num_info[k] -= 1
+            sk.at[idx, "_capa_sem_num"] = True
 
     # B) entrada herda o número da baixa (mesma identidade + valor fecha)
     atr = sk[sk["numero_final"].notna()]
@@ -400,29 +465,41 @@ def atrelar(sankhya: pd.DataFrame, capa: pd.DataFrame, ultimo_numero: int | None
                 prox += 1
                 bx_disp.remove(match)
 
-    # D/E) resto — linhas do Sankhya que NÃO bateram em nenhuma linha da Capa
-    # (nem numerada, nem sem número). Isso é o "balde vermelho".
+    # D/E) resto — linhas do Sankhya que não foram identificadas (bloco A),
+    # não herdaram (bloco B) e não pariam (bloco C).
     #
     # v5.71: aplica corte histórico. Linhas anteriores a DATA_CORTE_ESTEIRA
-    # (01/02/2024) que não estão em lugar nenhum da Capa são resíduo da
-    # Capa velha (incompleta antes desse marco) — não vão pra esteira. Ficam
-    # marcadas como "Órfão histórico" para auditoria, mas o app.py filtra por
-    # situações {"Aguardando baixa", "A conferir"} antes de chamar diagnosticar,
-    # então naturalmente não aparecem na esteira.
+    # (01/02/2024) que NÃO estão em nenhuma linha da Capa são resíduo da Capa
+    # velha (incompleta antes desse marco) — não vão pra esteira. Ficam
+    # marcadas como "Órfão histórico" para auditoria; o app.py filtra por
+    # {"Aguardando baixa", "A conferir"} antes da esteira, então naturalmente
+    # não aparecem.
     for idx in sk[sk["situacao"] == ""].index:
         _dt = pd.to_datetime(sk.at[idx, "data"], errors="coerce")
         _antigo = pd.notna(_dt) and _dt < DATA_CORTE_ESTEIRA
-        if _antigo:
+        _na_capa_sem_num = bool(sk.at[idx, "_capa_sem_num"]) if "_capa_sem_num" in sk.columns else False
+
+        if _antigo and not _na_capa_sem_num:
             sk.at[idx, "situacao"] = "Órfão histórico"
             sk.at[idx, "motivo"] = (
                 f"Anterior a {DATA_CORTE_ESTEIRA.strftime('%d/%m/%Y')} e ausente da Capa — fora do escopo"
             )
         elif sk.at[idx, "lado"] == "entrada":
             sk.at[idx, "situacao"] = "Aguardando baixa"
-            sk.at[idx, "motivo"] = "Não está na Capa (novo — falta numerar)"
+            if _na_capa_sem_num:
+                sk.at[idx, "motivo"] = "Está na Capa sem número — falta a baixa correspondente pra numerar"
+            else:
+                sk.at[idx, "motivo"] = "Não está na Capa (nova entrada — falta numerar)"
         else:
             sk.at[idx, "situacao"] = "A conferir"
-            sk.at[idx, "motivo"] = "Não está na Capa (baixa sem par identificado)"
+            if _na_capa_sem_num:
+                sk.at[idx, "motivo"] = "Está na Capa sem número — falta a entrada correspondente pra numerar"
+            else:
+                sk.at[idx, "motivo"] = "Não está na Capa (baixa sem par identificado)"
+
+    # Limpa coluna auxiliar antes de retornar
+    if "_capa_sem_num" in sk.columns:
+        sk = sk.drop(columns=["_capa_sem_num"])
 
     return ResultadoAtrelamento(detalhado=sk, proximo_numero=prox)
 
@@ -522,7 +599,25 @@ def diagnosticar(pend: pd.DataFrame, hoje=None) -> pd.DataFrame:
         u = str(r["historico"]).upper()
         dias = r["dias"]
         idt = str(r["identidade"])
-        if r["situacao"] == "A conferir":
+        motivo = str(r.get("motivo", ""))
+        sit = str(r.get("situacao", ""))
+
+        # v5.71 (revisto): usa o motivo real do atrelar para gerar um
+        # diagnóstico específico, em vez do texto genérico "Vários candidatos"
+        # que era aplicado sem distinção a toda linha com situacao "A conferir".
+        if "Mais de um grupo possível" in motivo:
+            return ("Vários candidatos", "Vários candidatos — escolher", "Escolher o título certo", "Média")
+        if "Está na Capa sem número — falta a baixa" in motivo:
+            return ("Aguardando baixa no Sankhya", "Já está na Capa sem número — falta a baixa correspondente aparecer", "Ver se a baixa foi lançada", "Alta")
+        if "Está na Capa sem número — falta a entrada" in motivo:
+            return ("Aguardando entrada no Sankhya", "Já está na Capa sem número — falta a entrada correspondente aparecer", "Ver se a entrada foi lançada", "Alta")
+        if "Não está na Capa (nova entrada" in motivo:
+            return ("Nova entrada — sem par", "Entrada não está na Capa e sem baixa correspondente", "Verificar se falta lançar no Sankhya", "Média")
+        if "Não está na Capa (baixa sem par" in motivo:
+            return ("Baixa sem par no Sankhya", "Baixa sem par identificado — não está na Capa", "Verificar comprovante/nota", "Média")
+
+        # Fallbacks antigos (mantidos por compatibilidade com outras origens)
+        if sit == "A conferir":
             return ("Precisa de conferência", "Vários candidatos — escolher", "Escolher o título certo", "Média")
         if "CARTORIO" in u or "CARTÓRIO" in u or "NITEROI" in u or "SISPAG" in u:
             return ("Pode ser cartório", "Pode ser cartório", "Verificar cartório", "Alta")
