@@ -6,6 +6,19 @@ Mudanças sobre v2:
 - Auditoria nova: detecta excesso de lançamentos no Sankhya em relação ao banco.
 - Cards "Receitas Absolutas" e "Despesas Absolutas" foram removidos do dashboard.
 - Cards de "Aplicações" e "Resgates" foram unificados em um único card "Investimentos".
+
+v5.71 — CORREÇÃO ESTRUTURAL de colisão inocente:
+- Regras de agrupamento (TOP 1722, TOP 1702, Folha, Salários N→M, Depósitos
+  Abertos) agora rodam ANTES do match_exato — sobre banco_mov / sistema_mov
+  diretamente. Antes disso, o match_exato 1-pra-1 podia "roubar" uma linha
+  componente de um grupo por coincidência de data+valor com uma despesa avulsa
+  do Sankhya (ex.: 141 SISPAG SALARIOS + 1 avulso PEDRO HENRIQUE com mesmo
+  valor de um SISPAG → grupo perdia um componente → soma não fechava → 141
+  SISPAG viravam divergência falsa). Reservando as linhas do agrupamento
+  primeiro, o match_exato só vê o que sobrou e não há colisão.
+- Tarifas Repetidas continua depois do match_exato (rede de segurança).
+- Estornos, AUT MAIS, Tarifas Adquirente ficam onde estavam.
+- Nenhuma regra individual foi tocada — só a ORDEM de execução no pipeline.
 """
 
 from __future__ import annotations
@@ -295,6 +308,19 @@ def _eh_movimentado(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty or "categoria_mov" not in df.columns:
         return df
     return df[df["categoria_mov"] != "saldo"]
+
+
+def _remover_por_indices(df: pd.DataFrame, indices: set[int]) -> pd.DataFrame:
+    """v5.71: helper para remover linhas por índice após reset_index e retornar
+    o DataFrame já resetado. Usado pelas regras de agrupamento pré-match_exato.
+    """
+    if not indices:
+        return df
+    df = df.reset_index(drop=True)
+    idx_validos = [i for i in indices if i < len(df)]
+    if not idx_validos:
+        return df
+    return df.drop(index=idx_validos).reset_index(drop=True)
 
 
 def _calcular_kpis(
@@ -655,98 +681,74 @@ def executar_pipeline(
                     saldos[col] = "" if banco_mov[col].dtype == object else 0
             banco_mov = pd.concat([banco_mov, saldos[banco_mov.columns]], ignore_index=True)
 
+    # =================================================================
+    # v5.71: REGRAS DE AGRUPAMENTO agora rodam ANTES do match_exato.
+    #
+    # Motivo: match_exato casa data+valor 1-pra-1 e não sabe distinguir uma
+    # linha componente de um grupo (ex.: 1 SISPAG SALARIO de -R$304,62) de
+    # uma despesa avulsa do Sankhya com o mesmo valor (ex.: PEDRO HENRIQUE
+    # -R$304,62). Se casa por acidente, o grupo perde um componente, a soma
+    # total não fecha mais, e a regra de agrupamento rejeita — devolvendo
+    # dezenas ou centenas de linhas como divergência falsa.
+    #
+    # Solução: cada regra de agrupamento roda primeiro sobre banco_mov /
+    # sistema_mov completos. Consome os grupos que fecham por soma. Só o que
+    # sobra é entregue ao match_exato 1-pra-1.
+    #
+    # Ordem interna preservada (TOP 1722 antes de folha, etc.) porque as
+    # regras não competem entre si — TOP 1722 procura CARTÃO no banco; folha
+    # procura SISPAG SALARIOS; nenhuma pega o que a outra pega. A ordem só
+    # importa em relação ao match_exato.
+    # =================================================================
+
+    # v5.0: TOP 1722 (cartão de crédito). N recebimentos cartão banco → 1
+    # linha 1722 no Sankhya (soma do dia). v5.59: com a adquirente presente
+    # o dia pode fechar líquido de tarifa.
+    from src.matching.cartao_top1722 import detectar_top_1722
+    res_top1722 = detectar_top_1722(
+        banco_mov, sistema_mov, janela_dias=tolerancia_dias,
+        tarifas_adquirente=tarifas_adquirente,
+    )
+    banco_mov = _remover_por_indices(banco_mov, res_top1722.indices_banco_casados)
+    sistema_mov = _remover_por_indices(sistema_mov, res_top1722.indices_sankhya_casados)
+
+    # v5.35: TOP 1702 (boleto). Irmão do 1722.
+    from src.matching.boleto_top1702 import detectar_top_1702
+    res_top1702 = detectar_top_1702(banco_mov, sistema_mov, janela_dias=tolerancia_dias)
+    banco_mov = _remover_por_indices(banco_mov, res_top1702.indices_banco_casados)
+    sistema_mov = _remover_por_indices(sistema_mov, res_top1702.indices_sankhya_casados)
+
+    # v5.21: FOLHA DE PAGAMENTO (SISPAG SALARIOS). N banco → 1 Sankhya.
+    from src.matching.folha_pagamento import detectar_folha_pagamento
+    res_folha = detectar_folha_pagamento(banco_mov, sistema_mov)
+    banco_mov = _remover_por_indices(banco_mov, res_folha.indices_banco_casados)
+    sistema_mov = _remover_por_indices(sistema_mov, res_folha.indices_sankhya_casados)
+
+    # v5.28: SALÁRIOS N→M. Sankhya lança salários individuais em vez de
+    # consolidar em FOLHA.
+    from src.matching.salarios_n_m import detectar_salarios_n_m
+    res_salarios_nm = detectar_salarios_n_m(banco_mov, sistema_mov)
+    banco_mov = _remover_por_indices(banco_mov, res_salarios_nm.indices_banco_casados)
+    sistema_mov = _remover_por_indices(sistema_mov, res_salarios_nm.indices_sankhya_casados)
+
+    # v5.24: depósitos abertos (1 banco → N Sankhya). Ex.: 1 PIX de R$X
+    # aberto em várias notas fiscais no Sankhya.
+    from src.matching.depositos_abertos import detectar_depositos_abertos
+    res_depositos = detectar_depositos_abertos(banco_mov, sistema_mov)
+    banco_mov = _remover_por_indices(banco_mov, res_depositos.indices_banco_casados)
+    sistema_mov = _remover_por_indices(sistema_mov, res_depositos.indices_sankhya_casados)
+
+    # =================================================================
+    # Agora sim: match_exato 1-pra-1 sobre o que sobrou.
+    # =================================================================
     conciliados, pend_banco, pend_sistema = match_exato(
         banco_mov, sistema_mov, tolerancia_dias=tolerancia_dias
     )
 
-    # v5.0: conciliação por agrupamento TOP 1722 (cartão de crédito).
-    # Roda APÓS o match 1-pra-1, sobre as pendências que sobraram.
-    from src.matching.cartao_top1722 import detectar_top_1722
-    # v5.59: com o extrato da adquirente presente, o dia pode fechar líquido
-    # de tarifa (depósitos = vendas 1722 + despesa de tarifa lançada, com a
-    # adquirente comprovando o valor ao centavo).
-    res_top1722 = detectar_top_1722(
-        pend_banco, pend_sistema, janela_dias=tolerancia_dias,
-        tarifas_adquirente=tarifas_adquirente,
-    )
-    if res_top1722.indices_banco_casados or res_top1722.indices_sankhya_casados:
-        # Remove das pendências o que foi consumido pelo agrupamento
-        pend_banco = pend_banco.reset_index(drop=True)
-        pend_sistema = pend_sistema.reset_index(drop=True)
-        pend_banco = pend_banco.drop(
-            index=[i for i in res_top1722.indices_banco_casados if i < len(pend_banco)]
-        ).reset_index(drop=True)
-        pend_sistema = pend_sistema.drop(
-            index=[i for i in res_top1722.indices_sankhya_casados if i < len(pend_sistema)]
-        ).reset_index(drop=True)
-
-    # v5.35: conciliação por agrupamento TOP 1702 (boleto). Irmão do 1722, mesma
-    # mecânica de soma total por conta — roda sobre as pendências que sobraram.
-    from src.matching.boleto_top1702 import detectar_top_1702
-    res_top1702 = detectar_top_1702(pend_banco, pend_sistema, janela_dias=tolerancia_dias)
-    if res_top1702.indices_banco_casados or res_top1702.indices_sankhya_casados:
-        pend_banco = pend_banco.reset_index(drop=True)
-        pend_sistema = pend_sistema.reset_index(drop=True)
-        pend_banco = pend_banco.drop(
-            index=[i for i in res_top1702.indices_banco_casados if i < len(pend_banco)]
-        ).reset_index(drop=True)
-        pend_sistema = pend_sistema.drop(
-            index=[i for i in res_top1702.indices_sankhya_casados if i < len(pend_sistema)]
-        ).reset_index(drop=True)
-
-    # v5.21: conciliação por agrupamento FOLHA DE PAGAMENTO (SISPAG SALARIOS).
-    # Mesma ideia do TOP 1722 mas INVERSA: N linhas no banco → 1 linha no sankhya.
-    # Banco lança 1 SISPAG por funcionário; Sankhya tem 1 folha consolidada.
-    from src.matching.folha_pagamento import detectar_folha_pagamento
-    res_folha = detectar_folha_pagamento(pend_banco, pend_sistema)
-    if res_folha.indices_banco_casados or res_folha.indices_sankhya_casados:
-        pend_banco = pend_banco.reset_index(drop=True)
-        pend_sistema = pend_sistema.reset_index(drop=True)
-        pend_banco = pend_banco.drop(
-            index=[i for i in res_folha.indices_banco_casados if i < len(pend_banco)]
-        ).reset_index(drop=True)
-        pend_sistema = pend_sistema.drop(
-            index=[i for i in res_folha.indices_sankhya_casados if i < len(pend_sistema)]
-        ).reset_index(drop=True)
-
-    # v5.28: SALÁRIOS pagos avulsos no Sankhya (N→M).
-    # Quando o Sankhya não consolida em FOLHA DE PAGAMENTO mas lança cada
-    # salário individualmente (ex: 6 SISPAG no banco vs 2 lançamentos individuais
-    # no Sankhya somando o mesmo valor). Busca combinações que somem o total dos
-    # SISPAG do banco na mesma data.
-    from src.matching.salarios_n_m import detectar_salarios_n_m
-    res_salarios_nm = detectar_salarios_n_m(pend_banco, pend_sistema)
-    if res_salarios_nm.indices_banco_casados or res_salarios_nm.indices_sankhya_casados:
-        pend_banco = pend_banco.reset_index(drop=True)
-        pend_sistema = pend_sistema.reset_index(drop=True)
-        pend_banco = pend_banco.drop(
-            index=[i for i in res_salarios_nm.indices_banco_casados if i < len(pend_banco)]
-        ).reset_index(drop=True)
-        pend_sistema = pend_sistema.drop(
-            index=[i for i in res_salarios_nm.indices_sankhya_casados if i < len(pend_sistema)]
-        ).reset_index(drop=True)
-
-    # v5.24: depósitos abertos no Sankhya (1 banco → N sankhya).
-    # Quando o banco recebe 1 PIX/TED de R$ X mas o Sankhya abre esse depósito em
-    # várias notas (cada NFD lançada separadamente), o match 1-pra-1 não acha par.
-    # Esta regra agrupa as pendências do Sankhya por data+conta+sinal e procura
-    # combinações que somem o valor do lançamento do banco.
-    from src.matching.depositos_abertos import detectar_depositos_abertos
-    res_depositos = detectar_depositos_abertos(pend_banco, pend_sistema)
-    if res_depositos.indices_banco_casados or res_depositos.indices_sankhya_casados:
-        pend_banco = pend_banco.reset_index(drop=True)
-        pend_sistema = pend_sistema.reset_index(drop=True)
-        pend_banco = pend_banco.drop(
-            index=[i for i in res_depositos.indices_banco_casados if i < len(pend_banco)]
-        ).reset_index(drop=True)
-        pend_sistema = pend_sistema.drop(
-            index=[i for i in res_depositos.indices_sankhya_casados if i < len(pend_sistema)]
-        ).reset_index(drop=True)
-
-    # v5.27: tarifas/pagamentos repetidos N pra N.
-    # Quando o banco tem N linhas idênticas (data + valor) E o Sankhya tem a mesma
-    # quantidade na mesma data + valor, NÃO é duplicidade — é casamento legítimo.
-    # Ex: 4× TAR C/C SISPAG -R$0,32 no banco vs 4× tarifa -R$0,32 no Sankhya.
+    # v5.27: tarifas/pagamentos repetidos N pra N — REDE DE SEGURANÇA
+    # DEPOIS do match_exato. Casos onde o banco tem N linhas idênticas
+    # (data + valor) e o Sankhya tem a mesma quantidade — na maioria dos
+    # dias o match_exato já resolve, esta regra só pega o que sobrou.
     from src.matching.tarifas_repetidas import detectar_tarifas_repetidas
     res_tarifas = detectar_tarifas_repetidas(pend_banco, pend_sistema)
     if res_tarifas.indices_banco_casados or res_tarifas.indices_sankhya_casados:
@@ -799,7 +801,12 @@ def executar_pipeline(
         ].reset_index(drop=True)
 
     divergencias = detectar_divergencia_valor(pend_banco, pend_sistema)
-    duplicidades = detectar_duplicidades(banco_mov, sistema_mov)
+    # v5.71: duplicidades e possíveis_duplicidades usam os DataFrames originais
+    # ANTES da limpeza dos grupos (banco original _eh_movimentado). Aqui
+    # recuperamos a versão completa para o cálculo delas.
+    banco_mov_completo = _eh_movimentado(banco).copy() if not banco.empty else banco
+    sistema_mov_completo = _eh_movimentado(sistema).copy() if not sistema.empty else sistema
+    duplicidades = detectar_duplicidades(banco_mov_completo, sistema_mov_completo)
 
     # v5.23: antes de detectar possíveis duplicidades, remove do escopo as linhas
     # que JÁ FORAM consumidas pelos agrupamentos (TOP 1722 cartão + Folha N→1).
@@ -814,8 +821,8 @@ def executar_pipeline(
             + "|" + df["valor"].round(2).astype(str)
         )
 
-    banco_para_dup = banco_mov.copy()
-    sistema_para_dup = sistema_mov.copy()
+    banco_para_dup = banco_mov_completo.copy()
+    sistema_para_dup = sistema_mov_completo.copy()
 
     # Constrói set de chaves já consumidas no banco
     chaves_banco_consumidas: set[str] = set()
