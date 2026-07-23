@@ -7161,18 +7161,24 @@ def _render_conta70_casamento_numeracao():
                     st.caption("Nenhum CNPJ do faturamento bateu com as entradas abertas.")
                 else:
                     sug = _sug.drop_duplicates(subset=["idx", "nota", "valor_recebido"]).reset_index(drop=True)
-                    _rds = sug["receita_despesa"].astype(str).str.upper()
-                    _sinal = _rds.map(lambda x: -1 if "DESPESA" in x else 1)
-                    vis = pd.DataFrame({
-                        "Confirmar": False,
-                        "R/D": _rds.map(lambda x: "Despesa" if "DESPESA" in x else "Receita").values,
-                        "CNPJ": sug["cnpj"].values,
-                        "Cliente": sug["nome"].astype(str).str.slice(0, 28).values,
-                        "Nota": sug["nota"].astype(str).values,
-                        "Recebido": [_brl(x * sg) for x, sg in zip(sug["valor_recebido"].astype(float), _sinal)],
-                        "Valor da nota": [_brl(x) for x in pd.to_numeric(sug["valor_nota"], errors="coerce").fillna(0)],
-                        "Confere": sug["valor_fecha"].map(lambda b: "✅ bate" if b else "⚠️ conferir valor").values,
-                    })
+                    # v5.25 — Opção A (Débora): mostrar SÓ os que batem exato;
+                    # esconder os "conferir valor" (poluíam com combinações que não fecham).
+                    sug = sug[sug["valor_fecha"] == True].reset_index(drop=True)
+                    if sug.empty:
+                        st.caption("Nenhuma sugestão com **valor exato** no momento (as tentativas que não fecham ficam ocultas).")
+                    else:
+                        _rds = sug["receita_despesa"].astype(str).str.upper()
+                        _sinal = _rds.map(lambda x: -1 if "DESPESA" in x else 1)
+                        vis = pd.DataFrame({
+                            "Confirmar": False,
+                            "R/D": _rds.map(lambda x: "Despesa" if "DESPESA" in x else "Receita").values,
+                            "CNPJ": sug["cnpj"].values,
+                            "Cliente": sug["nome"].astype(str).str.slice(0, 28).values,
+                            "Nota": sug["nota"].astype(str).values,
+                            "Recebido": [_brl(x * sg) for x, sg in zip(sug["valor_recebido"].astype(float), _sinal)],
+                            "Valor da nota": [_brl(x) for x in pd.to_numeric(sug["valor_nota"], errors="coerce").fillna(0)],
+                            "Confere": "✅ bate",
+                        })
 
     # prepara ESTEIRA + filtros (fora do form, pra os filtros reagirem na hora)
     est = esteira.copy()
@@ -7314,13 +7320,46 @@ def _render_conta70_casamento_numeracao():
             conf[idx] = grupos[chave]
             conf_nota[idx] = sug_notas.get(idx)  # nota se veio dos sugeridos; None se veio da esteira
 
+        # v5.71: para cada linha confirmada, buscar automaticamente o PAR
+        # (mesma identidade + mesmo |valor| + lado oposto) em `d` e atribuir o
+        # MESMO número — assim receita e despesa saem juntas na Capa gerada.
+        # Sem isso, marcar só a despesa deixava a receita órfã (Capa saía sem
+        # ela). Regra da Débora do PROJETO CONCILIAÇÃO 5: "receita e despesa da
+        # mesma operação recebem o mesmo número".
+        _pares_derivados = 0
+        for idx in list(conf.keys()):
+            ident = str(d.at[idx, "identidade"])
+            if ident.startswith("SEM-ID"):
+                continue  # sem identidade não dá pra achar par confiável
+            valor_abs = round(abs(float(d.at[idx, "valor"])), 2)
+            lado_atual = str(d.at[idx, "lado"])
+            lado_oposto = "baixa" if lado_atual == "entrada" else "entrada"
+            num_desse = conf[idx]
+            # candidatos: mesma identidade + valor + lado oposto + ainda não numerados
+            par_mask = (
+                (d["identidade"].astype(str) == ident)
+                & (d["valor"].astype(float).abs().round(2) == valor_abs)
+                & (d["lado"].astype(str) == lado_oposto)
+                & (~d.index.isin(conf.keys()))
+            )
+            # e que ainda não tenham número (evita reatribuir sobre já identificado)
+            _num_final_num = pd.to_numeric(d["numero_final"], errors="coerce")
+            par_mask = par_mask & (_num_final_num.isna())
+            pares = d[par_mask]
+            if not pares.empty:
+                idx_par = pares.index[0]
+                conf[idx_par] = num_desse
+                conf_nota[idx_par] = None  # par derivado — sem nota associada
+                _pares_derivados += 1
+
         st.session_state["c70_confirmados_num"] = conf
         st.session_state["c70_confirmados_nota"] = conf_nota
         st.session_state.pop("c70_capa_bytes", None)
         n_ops = len(grupos)
         if conf:
             faixa = f"número {prox}" if n_ops == 1 else f"números {prox} a {s - 1}"
-            st.success(f"{len(conf)} linha(s) confirmada(s) em {n_ops} operação(ões) — {faixa}. "
+            _msg_par = f" (+{_pares_derivados} par(es) derivado(s) automaticamente)" if _pares_derivados else ""
+            st.success(f"{len(conf)} linha(s) confirmada(s){_msg_par} em {n_ops} operação(ões) — {faixa}. "
                        "Receita e despesa da mesma operação recebem o mesmo número. Agora gere a capa abaixo.")
         else:
             st.info("Nada marcado — nenhum atrelamento confirmado.")
@@ -7469,7 +7508,7 @@ def pagina_conta70():
                          type=("primary" if _ativo == 2 else "secondary"), use_container_width=True):
                 st.session_state["c70_sub"] = "mapa"
                 st.rerun()
-    st.caption("Conta 70 · **v5.24** — se aqui não aparecer v5.24, o deploy ainda não pegou (faça Reboot do app).")
+    st.caption("Conta 70 · **v5.25** — se aqui não aparecer v5.25, o deploy ainda não pegou (faça Reboot do app).")
     # v5.21: renderiza AS DUAS seções sempre e esconde a inativa por CSS. Usa a
     # CHAVE do container (st-key-*) — jeito estável — com o marcador como reforço.
     # Assim circular entre as pílulas NÃO perde o estado (uploads/rodada).
