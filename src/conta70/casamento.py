@@ -717,7 +717,7 @@ def sugerir_atrelamentos_cnpj(entradas_abertas: pd.DataFrame, faturamento: pd.Da
     return pd.DataFrame(linhas)
 
 
-def gerar_capa_acumulada(capa_arquivo, detalhado, ultimo_numero: int, confirmados=None, acoes=None):
+def gerar_capa_acumulada(capa_arquivo, detalhado, ultimo_numero: int, confirmados=None, acoes=None, envios_c70=None):
     """Devolve a Capa COMPLETA (todas as linhas e colunas originais, com o sinal
     original — despesa negativa) e preenche a numeração SÓ nas linhas que o app
     identificou este período, quando há match único. Nunca sobrescreve número
@@ -726,10 +726,18 @@ def gerar_capa_acumulada(capa_arquivo, detalhado, ultimo_numero: int, confirmado
     `acoes` = {numero: texto} escreve, na coluna I ("O que fazer no Sankhya"),
     a instrução de baixa para cada linha numerada.
 
+    v5.72 — `envios_c70` = lista de dicts com pendências que a Débora enviou
+    manualmente pra Conta 70 (via botão "Enviar pra Conta 70" na aba de
+    pendências da conciliação). Cada envio vira uma linha nova de DESPESA na
+    Capa (sem número, aguardando numeração na esteira). Anti-duplicação por
+    chave (data + |valor| + R/D + histórico normalizado): se já existe linha
+    equivalente na Capa oficial, o envio é ignorado (a Viviane já lançou).
+
     Retorna (df_capa_completa, n_preenchidos, n_novos_total).
     """
     confirmados = confirmados or {}
     acoes = acoes or {}
+    envios_c70 = envios_c70 or []
     hdr = _detectar_header(capa_arquivo)
     if hasattr(capa_arquivo, "seek"):
         try:
@@ -847,6 +855,57 @@ def gerar_capa_acumulada(capa_arquivo, detalhado, ultimo_numero: int, confirmado
 
     if novas_linhas:
         raw = pd.concat([raw, pd.DataFrame(novas_linhas)], ignore_index=True)
+
+    # v5.72 — Envios manuais de pendências pra Conta 70. Cada envio vira uma
+    # linha nova de DESPESA na Capa, SEM número (vai pra esteira aguardando).
+    # Anti-duplicação: se já existe uma linha com (data + |valor| + R/D +
+    # histórico normalizado) na Capa oficial, pula (a Viviane já lançou).
+    if envios_c70:
+        # Recomputa os índices auxiliares porque acabamos de concatenar novas_linhas
+        raw["_v"] = pd.to_numeric(raw[c_val], errors="coerce").abs().round(2) if c_val else 0.0
+        raw["_d"] = raw[c_dt].map(_to_data) if c_dt else pd.NaT
+        _rd_col_env = raw[c_rd].astype(str).str.upper() if c_rd else None
+        _hist_col_norm = (
+            raw[c_hist].astype(str).map(_norm_hist_esteira)
+            if c_hist else pd.Series([""] * len(raw), index=raw.index)
+        )
+        novas_env_linhas = []
+        for envio in envios_c70:
+            env_data = _to_data(envio.get("data"))
+            try:
+                env_val_abs = round(abs(float(envio.get("valor_c70", envio.get("valor_original", 0)))), 2)
+            except Exception:
+                continue
+            env_hist_c70 = str(envio.get("historico_c70", "") or "")
+            env_hist_norm = _norm_hist_esteira(env_hist_c70)
+
+            # Anti-duplicação
+            if _rd_col_env is not None:
+                mask_desp = _rd_col_env.str.contains("DESPESA", na=False)
+            else:
+                mask_desp = pd.Series(True, index=raw.index)
+            mask_dup = (
+                mask_desp
+                & (raw["_v"] == env_val_abs)
+                & (raw["_d"] == env_data)
+                & (_hist_col_norm == env_hist_norm)
+            )
+            if mask_dup.any():
+                continue  # já existe — não duplica
+
+            nova = {c: pd.NA for c in cols_orig}
+            if c_tipo: nova[c_tipo] = envio.get("tipo_movimento", "") or ""
+            if c_doc: nova[c_doc] = envio.get("documento", "") or ""
+            if c_val: nova[c_val] = -env_val_abs  # despesa negativa na Conta 70
+            if c_conc: nova[c_conc] = "Sim"
+            if c_rd: nova[c_rd] = "Despesa"
+            if c_dt: nova[c_dt] = env_data
+            if c_hist: nova[c_hist] = env_hist_c70
+            # Número fica em branco (aguarda numeração via esteira)
+            novas_env_linhas.append(nova)
+
+        if novas_env_linhas:
+            raw = pd.concat([raw, pd.DataFrame(novas_env_linhas)], ignore_index=True)
 
     # v5.25 — Ponto 6 (Débora): status de baixa em TODOS os numerados que ainda
     # estão SEM instrução, com base nos lados do número:
