@@ -89,6 +89,10 @@ def _norm_hist_esteira(h: Any) -> str:
     v5.71 revisado — trata as variações reais que aparecem entre o export da
     ConcB e a linha correspondente na Capa:
       • aspas simples, duplas e escapadas com "\\": todas viram espaço
+      • carriage return (\\r), line feed (\\n), tab (\\t) e a variante
+        Excel "_x000D_" (que é como o Excel escreve o \\r ao exportar):
+        todos viram espaço. Sem isso, uma linha com "\\r20/06/2024" na ConcB
+        não bate com "_x000D_20/06/2024" na Capa mesmo sendo idênticas.
       • espaços consecutivos: colapsados em um único
       • duplicação de sufixo no final ("X - Y - Y" → "X - Y"): removida em
         até 3 iterações, cobrindo casos como o real
@@ -98,8 +102,10 @@ def _norm_hist_esteira(h: Any) -> str:
     if h is None:
         return ""
     s = str(h).upper()
-    # aspas (simples, duplas) e barras invertidas viram espaço
-    s = re.sub(r'["\'\\]+', ' ', s)
+    # Excel escreve \r como _x000D_ ao exportar — trata como espaço
+    s = s.replace('_X000D_', ' ')
+    # aspas (simples, duplas), barras invertidas E controles (\r \n \t) viram espaço
+    s = re.sub(r'["\'\\\r\n\t]+', ' ', s)
     # colapsa espaços
     s = re.sub(r'\s+', ' ', s).strip()
     # remove duplicações de sufixo (até 3 níveis, pra estabilizar)
