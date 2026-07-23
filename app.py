@@ -5532,7 +5532,122 @@ def render_tab_pendentes(resultado: ResultadoConciliacao, conta: str):
         if len(novas_edicoes) > len(edicoes):
             st.toast(f"✅ {len(novas_edicoes) - len(edicoes)} classificações atualizadas", icon="✅")
 
-    # Bot\u00e3o pra resetar edi\u00e7\u00f5es
+    # ==================================================================
+    # v5.72 — ENVIAR PRA CONTA 70
+    # Só aparece para receitas elegíveis (dinheiro que entrou sem par no
+    # Sankhya, que não seja adquirente / rendimento / aplicação / tarifa).
+    # Regra da Débora: só recebimentos vão pra Conta 70.
+    # ==================================================================
+    def _eh_elegivel_c70(row):
+        try:
+            v = float(row.get("valor", 0))
+        except Exception:
+            return False
+        if v <= 0:
+            return False  # só receitas (dinheiro que entrou)
+        h = str(row.get("historico", "") or "").upper()
+        # exclui adquirentes
+        if any(t in h for t in ["GETNET", "CIELO", "PAGBANK", "PAGSEGURO", "REC LIQ"]):
+            return False
+        # exclui rendimentos/aplicações/resgates (dupla checagem — já filtrado antes)
+        if any(t in h for t in ["APLIC", "RESG", "REND ", "REND PAGO", "RENDIMENTO", "AUT MAIS"]):
+            return False
+        return True
+
+    df_elegivel = df[df.apply(_eh_elegivel_c70, axis=1)].copy() if "valor" in df.columns else pd.DataFrame()
+    if not df_elegivel.empty:
+        st.divider()
+        st.markdown("**Enviar pra Conta 70**")
+        st.caption(
+            f"{len(df_elegivel)} pendência(s) elegível(is) — recebimentos sem par no Sankhya "
+            "(exclui adquirente, rendimento, aplicação e tarifa). Marque as que quer registrar "
+            "na Capa 70 como despesa não identificada."
+        )
+
+        # Chave persistente com seleções desta conta
+        chave_sel = f"c70_envio_selecao_{conta}"
+        sel_prev = st.session_state.get(chave_sel, set())
+
+        # Tabela editável só de elegíveis, com coluna de checkbox
+        cols_env = [c for c in ["data", "historico", "documento", "valor"] if c in df_elegivel.columns]
+        df_env_visu = df_elegivel[cols_env].copy().reset_index(drop=True)
+
+        def _chave_linha(r):
+            return (str(r.get("data", "")), str(r.get("historico", "")), round(float(r.get("valor", 0)), 2))
+
+        df_env_visu.insert(0, "Enviar", df_env_visu.apply(lambda r: _chave_linha(r) in sel_prev, axis=1))
+
+        edit_env = st.data_editor(
+            df_env_visu,
+            column_config={
+                "Enviar": st.column_config.CheckboxColumn("→ C70", help="Marque para enviar à Conta 70", default=False),
+                "data": st.column_config.DateColumn("Data", format="DD/MM/YYYY", disabled=True),
+                "historico": st.column_config.TextColumn("Histórico (original do banco)", disabled=True),
+                "documento": st.column_config.TextColumn("Documento", disabled=True),
+                "valor": st.column_config.NumberColumn("Valor (R$)", format="+%.2f", disabled=True),
+            },
+            use_container_width=True,
+            hide_index=True,
+            key=f"c70_envio_editor_{conta}",
+        )
+
+        # Atualiza a seleção persistente
+        nova_sel = set()
+        for _, r in edit_env.iterrows():
+            if bool(r["Enviar"]):
+                nova_sel.add(_chave_linha(r))
+        if nova_sel != sel_prev:
+            st.session_state[chave_sel] = nova_sel
+
+        marcadas = edit_env[edit_env["Enviar"] == True]
+        n_mark = len(marcadas)
+        soma_mark = float(marcadas["valor"].sum()) if n_mark else 0.0
+
+        col_info, col_btn = st.columns([3, 1])
+        col_info.markdown(
+            f"**{fmt_int(n_mark)} selecionada(s)** · total **{fmt_brl(soma_mark)}**"
+            if n_mark else "_Nenhuma selecionada._"
+        )
+        if col_btn.button(
+            f"→ Enviar {n_mark} pra Conta 70" if n_mark else "→ Enviar pra Conta 70",
+            key=f"btn_enviar_c70_{conta}",
+            type="primary",
+            disabled=(n_mark == 0),
+            use_container_width=True,
+        ):
+            import re as _re_env
+            envios = st.session_state.get("c70_envios_pendencias", [])
+            n_novos = 0
+            for _, r in marcadas.iterrows():
+                hist_orig = str(r.get("historico", "") or "")
+                # Adiciona prefixo "DEP N IDENT - " se ainda não tiver
+                if _re_env.search(r"DEP\s*N\s*(A[OÃ]?)?\s*IDENT", hist_orig, flags=_re_env.IGNORECASE):
+                    hist_c70 = hist_orig
+                else:
+                    hist_c70 = f"DEP N IDENT - {hist_orig}"
+                val_original = float(r.get("valor", 0))
+                envios.append({
+                    "data": r.get("data"),
+                    "valor_original": val_original,        # +X do extrato
+                    "valor_c70": -abs(val_original),        # -X na Conta 70
+                    "historico_original": hist_orig,
+                    "historico_c70": hist_c70,
+                    "documento": str(r.get("documento", "") or ""),
+                    "tipo_movimento": "Transferência",
+                    "conta": conta,
+                })
+                n_novos += 1
+            st.session_state["c70_envios_pendencias"] = envios
+            st.session_state.pop("c70_capa_bytes", None)  # invalida cache da capa gerada
+            st.session_state[chave_sel] = set()  # limpa seleção
+            st.success(
+                f"✅ {n_novos} pendência(s) enviada(s) pra Conta 70. Vá em **Conta 70 → Atrelamento e Numeração** "
+                "e clique em **Gerar capa atualizada** — elas vão aparecer na Capa como despesa sem número, "
+                "prontas pra numerar pela esteira."
+            )
+            st.rerun()
+
+    # Botão pra resetar edições
     if edicoes:
         col_a, col_b = st.columns([3, 1])
         with col_b:
@@ -7326,31 +7441,78 @@ def _render_conta70_casamento_numeracao():
         # Sem isso, marcar só a despesa deixava a receita órfã (Capa saía sem
         # ela). Regra da Débora do PROJETO CONCILIAÇÃO 5: "receita e despesa da
         # mesma operação recebem o mesmo número".
+        #
+        # v5.71.2: quando NÃO acha o par em `d` (caso do PIX identificado
+        # manualmente: despesa "DEP N IDENT" na Capa e a receita ainda não
+        # existe em lugar nenhum), o app CRIA uma linha ESPELHO sintética de
+        # receita com:
+        #   • Data = HOJE (data em que a confirmação está sendo feita)
+        #   • Valor = |despesa|, sinal POSITIVO
+        #   • R/D = Receita
+        #   • Histórico = mesmo texto, trocando "DEP N IDENT" por "DEP IDENT"
+        #   • Mesmo número da despesa
+        # Essa linha entra em `d`; o gerar_capa_acumulada depois adiciona ela
+        # na Capa (como já faz com linhas novas).
+        import re as _re_hist
         _pares_derivados = 0
+        _pares_espelho = 0
+        _hoje = pd.Timestamp.today().normalize()
         for idx in list(conf.keys()):
             ident = str(d.at[idx, "identidade"])
-            if ident.startswith("SEM-ID"):
-                continue  # sem identidade não dá pra achar par confiável
             valor_abs = round(abs(float(d.at[idx, "valor"])), 2)
             lado_atual = str(d.at[idx, "lado"])
             lado_oposto = "baixa" if lado_atual == "entrada" else "entrada"
             num_desse = conf[idx]
+
             # candidatos: mesma identidade + valor + lado oposto + ainda não numerados
-            par_mask = (
-                (d["identidade"].astype(str) == ident)
-                & (d["valor"].astype(float).abs().round(2) == valor_abs)
-                & (d["lado"].astype(str) == lado_oposto)
-                & (~d.index.isin(conf.keys()))
-            )
-            # e que ainda não tenham número (evita reatribuir sobre já identificado)
             _num_final_num = pd.to_numeric(d["numero_final"], errors="coerce")
-            par_mask = par_mask & (_num_final_num.isna())
-            pares = d[par_mask]
-            if not pares.empty:
-                idx_par = pares.index[0]
-                conf[idx_par] = num_desse
-                conf_nota[idx_par] = None  # par derivado — sem nota associada
-                _pares_derivados += 1
+            achou_par = False
+            if not ident.startswith("SEM-ID"):
+                par_mask = (
+                    (d["identidade"].astype(str) == ident)
+                    & (d["valor"].astype(float).abs().round(2) == valor_abs)
+                    & (d["lado"].astype(str) == lado_oposto)
+                    & (~d.index.isin(conf.keys()))
+                    & (_num_final_num.isna())
+                )
+                pares = d[par_mask]
+                if not pares.empty:
+                    idx_par = pares.index[0]
+                    conf[idx_par] = num_desse
+                    conf_nota[idx_par] = None  # par derivado — sem nota associada
+                    _pares_derivados += 1
+                    achou_par = True
+
+            # v5.71.2 — não achou par → cria linha ESPELHO sintética.
+            # Só faz sentido para DESPESA confirmada manualmente (o caso comum:
+            # "essa despesa foi baixada, cria a receita correspondente na
+            # Capa"). Para receita sem par, deixa como está (não força criação
+            # de despesa espelho — cenário raro e mais arriscado).
+            if not achou_par and lado_atual == "entrada":
+                linha_origem = d.loc[idx]
+                hist_orig = str(linha_origem.get("historico", "") or "")
+                # substitui "DEP N IDENT" (com variações de espaço) por "DEP IDENT"
+                hist_novo = _re_hist.sub(
+                    r'DEP\s*N\s+IDENT', 'DEP IDENT', hist_orig, flags=_re_hist.IGNORECASE
+                )
+                # também variação "DEP NAO IDENT" / "DEP NÃO IDENT"
+                hist_novo = _re_hist.sub(
+                    r'DEP\s+N[AÃ]?O?\s+IDENT', 'DEP IDENT', hist_novo, flags=_re_hist.IGNORECASE
+                )
+                nova_linha = {c: linha_origem.get(c) for c in d.columns}
+                nova_linha["data"] = _hoje
+                nova_linha["valor"] = valor_abs  # positivo
+                nova_linha["receita_despesa"] = "Receita"
+                nova_linha["lado"] = "baixa"
+                nova_linha["historico"] = hist_novo
+                nova_linha["numero_final"] = num_desse
+                nova_linha["situacao"] = "Atrelado (espelho)"
+                nova_linha["motivo"] = "Receita espelho criada na confirmação manual"
+                idx_novo = (d.index.max() + 1) if len(d) else 0
+                d.loc[idx_novo] = nova_linha
+                conf[idx_novo] = num_desse
+                conf_nota[idx_novo] = None
+                _pares_espelho += 1
 
         st.session_state["c70_confirmados_num"] = conf
         st.session_state["c70_confirmados_nota"] = conf_nota
@@ -7358,8 +7520,13 @@ def _render_conta70_casamento_numeracao():
         n_ops = len(grupos)
         if conf:
             faixa = f"número {prox}" if n_ops == 1 else f"números {prox} a {s - 1}"
-            _msg_par = f" (+{_pares_derivados} par(es) derivado(s) automaticamente)" if _pares_derivados else ""
-            st.success(f"{len(conf)} linha(s) confirmada(s){_msg_par} em {n_ops} operação(ões) — {faixa}. "
+            _partes_msg = []
+            if _pares_derivados:
+                _partes_msg.append(f"{_pares_derivados} par(es) achado(s) na ConcB")
+            if _pares_espelho:
+                _partes_msg.append(f"{_pares_espelho} receita(s) espelho criada(s) (data de hoje, DEP IDENT)")
+            _extra = f" — {' + '.join(_partes_msg)}" if _partes_msg else ""
+            st.success(f"{len(conf)} linha(s) confirmada(s) em {n_ops} operação(ões) — {faixa}{_extra}. "
                        "Receita e despesa da mesma operação recebem o mesmo número. Agora gere a capa abaixo.")
         else:
             st.info("Nada marcado — nenhum atrelamento confirmado.")
@@ -7408,8 +7575,12 @@ def _render_conta70_casamento_numeracao():
                 acoes.setdefault(num, "Baixa já lançada no Sankhya")
         try:
             with st.spinner("Gerando a capa acumulada… isso leva alguns segundos (arquivo grande)."):
+                # v5.72: passa envios manuais de pendências (feitos na aba
+                # "Sem baixa no Sankhya" via botão "Enviar pra Conta 70").
+                envios_c70 = st.session_state.get("c70_envios_pendencias", [])
                 capa_out, preenchidos, n_novos = gerar_capa_acumulada(
                     _io.BytesIO(capa_payload[0][0]), d, ultimo, acoes=acoes,
+                    envios_c70=envios_c70,
                 )
 
                 # normaliza a coluna de data (mistura datetime + série do Excel)
