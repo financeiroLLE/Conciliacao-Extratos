@@ -789,16 +789,22 @@ def executar_pipeline(
             index=[i for i in res_tarifas_adq.indices_sankhya_consumidos if i < len(pend_sistema)]
         ).reset_index(drop=True)
 
-    # v5.31: resgates/aplicações/rendimentos NÃO são "banco sem explicação" —
-    # são movimento de investimento (já listados na aba Investimentos, que vem do
-    # banco completo). Removê-los do pend_banco evita inflar Falta Conciliar e
-    # Pendentes. A categoria_mov já foi classificada no início do pipeline.
-    if "categoria_mov" in pend_banco.columns:
-        pend_banco = pend_banco[
-            ~pend_banco["categoria_mov"].isin(
-                ["aplicacao", "resgate", "rendimento", "investimento_outro"]
-            )
-        ].reset_index(drop=True)
+    # v5.74 (removeu v5.31): antes o pipeline filtrava aplicação/resgate/
+    # rendimento/investimento_outro do pend_banco pra "não inflar Falta
+    # Conciliar" — mas isso escondia divergências reais quando o Sankhya
+    # simplesmente não tinha o par lançado (ex.: REND PAGO 0,14 no extrato
+    # de 22/07 sem par no Sankhya sumia da lista, exposto pela Débora).
+    #
+    # Nova regra travada com ela: "Tudo que tiver no banco e não tiver no
+    # Sankhya lançado é uma divergência". Se rendimento/aplicação/resgate
+    # do banco JÁ tem par no Sankhya, o match_exato consome ambos os lados
+    # e eles não ficam em pend_banco. Se NÃO tem par, agora aparecem como
+    # divergência — que é o comportamento esperado.
+    #
+    # A aba "Investimentos" continua listando esses movimentos porque vem
+    # do banco_completo (não de pend_banco) — não há dupla contagem, só
+    # visibilidade em dois lugares (na aba Investimentos para conferir
+    # totais; em Divergências quando falta lançar no Sankhya).
 
     divergencias = detectar_divergencia_valor(pend_banco, pend_sistema)
     # v5.71: duplicidades e possíveis_duplicidades usam os DataFrames originais
