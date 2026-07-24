@@ -3855,12 +3855,17 @@ def tela_upload():
     rodar_fuzzy = st.session_state.get("rodar_fuzzy", True)
     tolerancia = int(st.session_state.get("tolerancia", 2))
 
+    # v5.78: quando a usuária re-subiu um novo Sankhya via "Atualizar Sankhya",
+    # setamos essa flag pra disparar a conciliação sem exigir novo clique no
+    # botão "▶️ Executar conciliação".
+    _forcar_conciliar = st.session_state.pop("_disparar_conciliacao", False)
+
     if st.button(
         "▶️ Executar conciliação",
         type="primary",
         disabled=not pode_executar,
         use_container_width=True,
-    ):
+    ) or (_forcar_conciliar and pode_executar):
         with st.spinner("Processando... isso pode levar alguns segundos."):
             try:
                 dfs_banco = []
@@ -4590,6 +4595,9 @@ def _render_botao_atualizar_sankhya():
                 st.cache_data.clear()
             except Exception:
                 pass
+            # v5.78 fix2: dispara a conciliação automaticamente no próximo run
+            # (sem exigir clique no botão "Executar conciliação")
+            st.session_state["_disparar_conciliacao"] = True
             st.success(
                 f"✓ Novo Sankhya recebido ({len(_bytes_lista)} arquivo(s)). "
                 "Recalculando…"
