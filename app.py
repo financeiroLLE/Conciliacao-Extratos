@@ -3860,12 +3860,34 @@ def tela_upload():
     # botão "▶️ Executar conciliação".
     _forcar_conciliar = st.session_state.pop("_disparar_conciliacao", False)
 
+    # v5.81: mecanismo robusto — se o override tem UM ID (baseado em nome+tamanho
+    # dos arquivos) DIFERENTE do último processado, força rodar. Isso resolve o
+    # problema em que a flag `_disparar_conciliacao` era consumida sem re-rodar
+    # a conciliação (a Débora clicava em Aplicar e os cards não atualizavam).
+    _override_bytes = st.session_state.get("_sistema_override_bytes")
+    _override_id = None
+    if _override_bytes:
+        try:
+            _override_id = "|".join(f"{nm}:{len(bts)}" for nm, bts in _override_bytes)
+        except Exception:
+            _override_id = "override"
+    _override_processado_id = st.session_state.get("_override_processado_id")
+    _precisa_rodar_override = (
+        _override_id is not None and _override_id != _override_processado_id
+    )
+
     if st.button(
         "▶️ Executar conciliação",
         type="primary",
         disabled=not pode_executar,
         use_container_width=True,
-    ) or (_forcar_conciliar and pode_executar):
+    ) or (_forcar_conciliar and pode_executar) or (_precisa_rodar_override and pode_executar):
+        # v5.81: marca o override como processado LOGO ao entrar, pra evitar
+        # loop de re-execução no próximo rerun (o override continua no
+        # session_state; sem essa marca, entraria de novo pela condição
+        # `_precisa_rodar_override`).
+        if _override_id:
+            st.session_state["_override_processado_id"] = _override_id
         with st.spinner("Processando... isso pode levar alguns segundos."):
             try:
                 dfs_banco = []
