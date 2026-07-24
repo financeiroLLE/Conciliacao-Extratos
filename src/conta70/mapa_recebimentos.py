@@ -399,20 +399,13 @@ def construir_mapa(
     _parc = parceiros_cnpj or {}
 
     def _nome(dig, fallback=""):
-        """v5.77 — Retorna 'CPF/CNPJ · NOME' quando o nome é conhecido (via
-        arquivo FIN de parceiros OU extraído do histórico da ConcB). Se só
-        tem CPF/CNPJ → retorna o fallback (que é o CPF/CNPJ formatado, como
-        antes). Se só tem nome — sem CPF/CNPJ, ex.: 'CLAUDIO SANTIAGO
-        MADUREIRA' no histórico — retorna o próprio nome do fallback.
+        """v5.77.2 (simplificada com Débora):
+          - Achou nome via arquivo FIN ou ConcB → retorna SÓ O NOME
+          - Não achou → retorna o fallback (CPF/CNPJ formatado ou origem)
+        Assim a coluna 'Parceiro efetivo' fica enxuta. O CPF/CNPJ já aparece
+        na coluna 'Identificação (CPF/CNPJ / origem)' — não precisa duplicar.
         """
-        nome_parc = _parc.get(_norm_doc(dig))
-        if not nome_parc:
-            return fallback  # comportamento antigo
-        # Tem nome. Se fallback é o CPF/CNPJ formatado, junta os dois.
-        fb = str(fallback or "").strip()
-        if fb and fb != nome_parc:
-            return f"{fb} · {nome_parc}"
-        return nome_parc
+        return _parc.get(_norm_doc(dig)) or fallback
 
     notas_por_cnpj: dict[str, list[tuple[str, str, float]]] = {}
     if faturamento is not None and not faturamento.empty:
