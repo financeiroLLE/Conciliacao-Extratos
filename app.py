@@ -3781,6 +3781,36 @@ def tela_upload():
         if erro:
             erros_validacao.append(erro)
 
+    # v5.84: se precisa reprocessar via re-upload do Sankhya MAS o widget
+    # do banco perdeu os arquivos (comportamento inconsistente do Streamlit
+    # quando se navega entre telas), reconstituir `arquivos_banco` e
+    # `arquivo_sistema` a partir dos bytes persistidos em session_state.
+    # Isso permite que o usuário clique em "Aplicar e recalcular" e o app
+    # reprocesse mesmo se os file_uploaders aparecerem vazios após rerun.
+    _precisa_rodar_override_local = (
+        int(st.session_state.get("_override_versao", 0))
+        > int(st.session_state.get("_override_versao_processada", -1))
+    )
+    if _precisa_rodar_override_local:
+        import io as _io_reup
+        # Restaura arquivos do banco se widget está vazio
+        if not arquivos_banco:
+            _banco_bytes = st.session_state.get("_banco_persistido_bytes") or []
+            for _nm, _bts in _banco_bytes:
+                _buf = _io_reup.BytesIO(_bts)
+                _buf.name = _nm
+                arquivos_banco.append((_nm, _buf))
+        # Restaura arquivo_sistema se widget está vazio
+        if not arquivo_sistema:
+            _sis_bytes = st.session_state.get("_sistema_override_bytes") or []
+            if _sis_bytes:
+                _lista_sis = []
+                for _nm, _bts in _sis_bytes:
+                    _buf = _io_reup.BytesIO(_bts)
+                    _buf.name = _nm
+                    _lista_sis.append(_buf)
+                arquivo_sistema = _lista_sis
+
     pode_executar = (
         bool(arquivos_banco) and bool(arquivo_sistema) and not erros_validacao
     )
@@ -4147,6 +4177,17 @@ def tela_upload():
 
                 st.session_state.resultado = resultado
                 st.session_state.adquirente_df = _adquirentes_da_sessao()
+                # v5.84: persistir bytes+nomes dos arquivos do banco em
+                # session_state próprio (não some entre reruns como o widget
+                # file_uploader às vezes faz). Usado quando a Débora clica em
+                # "Atualizar Sankhya" e o app precisa reprocessar sem depender
+                # dos widgets do modo de upload.
+                try:
+                    st.session_state["_banco_persistido_bytes"] = [
+                        (nome, arq.getvalue()) for nome, arq in arquivos_banco
+                    ]
+                except Exception:
+                    st.session_state["_banco_persistido_bytes"] = []
                 # v5.43: guarda os BYTES crus dos extratos de adquirente numa chave
                 # própria (não some ao trocar de página) pra a Auditoria de Cartões
                 # reaproveitar sem exigir novo upload.
