@@ -7050,7 +7050,20 @@ def _render_conta70_mapa_recebimentos():
     _saved = st.session_state.get("_c70_saved", {})
     _capa_payload = _saved.get("capa", ())
     _fat_payload = _saved.get("fat", ())
-    _sk_payload = _saved.get("sk", ())  # v5.77: ConcB para extrair nomes de parceiros
+    _sk_payload = _saved.get("sk", ())  # v5.77: Movimento Conta 70 (poucos CPFs)
+
+    # v5.77 (bug corrigido): o Movimento Conta 70 (up_sk) tem poucos CPFs no
+    # histórico. Quem tem MUITOS parceiros/nomes é o "EXTRATO SANKHYA
+    # CONCILIAÇÃO" (key='sistema') da aba principal de Conciliação Bancária,
+    # que a Débora sobe pra rodar a conciliação Banco × Sankhya. Se estiver
+    # disponível na sessão, usamos ele — dá muito mais match. Se não estiver,
+    # fallback para o sk_payload (Movimento Conta 70).
+    _sistema_up = st.session_state.get("sistema", None)
+    if _sistema_up:
+        _concb_payload = _c70_payload(_sistema_up)
+    else:
+        _concb_payload = _sk_payload  # fallback
+
     if not _capa_payload:
         st.info(
             "Suba a **Capa da Conta 70** na aba **Atrelamento e Numeração** — os mesmos arquivos "
@@ -7059,7 +7072,7 @@ def _render_conta70_mapa_recebimentos():
         return
 
     try:
-        m, R = _mapa_c70_construir(_capa_payload, _fat_payload, _sk_payload)
+        m, R = _mapa_c70_construir(_capa_payload, _fat_payload, _concb_payload)
     except Exception as e:
         st.error(f"Não consegui montar o Mapa: {e}")
         return
