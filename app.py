@@ -4551,29 +4551,38 @@ def _explicar_diferenca_por_dia(resultado, conta):
 
 
 def _render_botao_atualizar_sankhya():
-    """v5.78 — Botão compacto acima do alerta de diferença que permite subir
-    um novo arquivo do EXTRATO SANKHYA CONCILIAÇÃO sem sair da página.
-    Fluxo: usuária clica → mostra uploader inline → arquivo novo entra em
-    `_sistema_override_files` (session_state) → força reprocessamento.
-    A linha ~3961 lê esse override se existir; senão, usa o file_uploader
-    original da coluna 2. Simples, não invasivo.
+    """v5.78 / v5.80 — Botão compacto acima do alerta de diferença que permite
+    subir um novo arquivo do EXTRATO SANKHYA CONCILIAÇÃO sem sair da página.
+
+    v5.80: fluxo em 3 estados com CONFIRMAÇÃO EXPLÍCITA (evita atualizações
+    silenciosas que davam confusão):
+      Estado A — botão "↻ Atualizar Sankhya"
+      Estado B — (após clicar) uploader visível
+      Estado C — (após subir) botão "▶️ Aplicar e recalcular" visível
+                 até a usuária confirmar a substituição.
     """
     _mostrar = st.session_state.get("_mostrar_reupload_sk", False)
+    _pendente = st.session_state.get("_sistema_pendente_bytes")
+
     col_a, col_b = st.columns([5, 1])
     with col_b:
-        if not _mostrar:
+        if not _mostrar and not _pendente:
+            # ESTADO A
             if st.button("↻ Atualizar Sankhya", key="btn_atualizar_sankhya",
                          help="Subir o arquivo Sankhya corrigido e recalcular sem re-fazer tudo",
                          use_container_width=True):
                 st.session_state["_mostrar_reupload_sk"] = True
                 st.rerun()
         else:
+            # ESTADO B ou C: mostrar cancelar
             if st.button("✕ Cancelar", key="btn_cancelar_reupload",
                          use_container_width=True):
                 st.session_state.pop("_mostrar_reupload_sk", None)
+                st.session_state.pop("_sistema_pendente_bytes", None)
                 st.rerun()
 
-    if _mostrar:
+    # ESTADO B: uploader
+    if _mostrar and not _pendente:
         st.caption(
             "Corrigiu algo no Sankhya? Arraste o novo arquivo abaixo. "
             "Os outros (extrato, adquirente) continuam valendo."
@@ -4585,24 +4594,36 @@ def _render_botao_atualizar_sankhya():
         )
         if _novo:
             _lista_up = _novo if isinstance(_novo, list) else [_novo]
-            # v5.78 fix: salvar como bytes+nome pra sobreviver o rerun (o objeto
-            # UploadedFile do widget é invalidado quando o widget some).
             _bytes_lista = [(f.name, f.getvalue()) for f in _lista_up]
-            st.session_state["_sistema_override_bytes"] = _bytes_lista
+            # v5.80: guarda como PENDENTE (aguardando confirmação), não aplica
+            # direto — evita o problema de "subi o arquivo mas nada atualizou"
+            # que confundia sobre o momento em que a conciliação era refeita.
+            st.session_state["_sistema_pendente_bytes"] = _bytes_lista
             st.session_state.pop("_mostrar_reupload_sk", None)
-            # Limpa cache pra forçar recarga com o arquivo novo
-            try:
-                st.cache_data.clear()
-            except Exception:
-                pass
-            # v5.78 fix2: dispara a conciliação automaticamente no próximo run
-            # (sem exigir clique no botão "Executar conciliação")
-            st.session_state["_disparar_conciliacao"] = True
-            st.success(
-                f"✓ Novo Sankhya recebido ({len(_bytes_lista)} arquivo(s)). "
-                "Recalculando…"
-            )
             st.rerun()
+
+    # ESTADO C: arquivo carregado, aguardando confirmação
+    if _pendente:
+        _nomes = ", ".join(nm for nm, _ in _pendente)
+        st.info(
+            f"📄 Arquivo pronto pra aplicar: **{_nomes}** ({len(_pendente)} arquivo(s)). "
+            "Clique em **Aplicar e recalcular** pra substituir o Sankhya e refazer a conciliação."
+        )
+        col_apl_a, col_apl_b = st.columns([5, 1])
+        with col_apl_b:
+            if st.button("▶️ Aplicar e recalcular", key="btn_aplicar_reupload",
+                         type="primary", use_container_width=True):
+                # Efetivamente move para o override e limpa cache
+                st.session_state["_sistema_override_bytes"] = _pendente
+                st.session_state.pop("_sistema_pendente_bytes", None)
+                try:
+                    st.cache_data.clear()
+                except Exception:
+                    pass
+                # Dispara a re-execução automaticamente
+                st.session_state["_disparar_conciliacao"] = True
+                st.success("✓ Aplicando novo Sankhya e recalculando…")
+                st.rerun()
 
 
 def _render_alerta_diferenca_por_dia(dif_bs, explicacao, nota_extra: str = "",
