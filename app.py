@@ -2845,8 +2845,11 @@ def pagina_dashboard():
                 _bcc = resultado.banco_completo
                 _bcc = _bcc[_bcc["conta"] == _conta_sc] if (_bcc is not None and not _bcc.empty and "conta" in _bcc.columns) else None
                 if _bcc is not None and not _bcc.empty:
+                    # v5.75: rendimento entra como receita normal (não é filtrado
+                    # como investimento). Isso deixa o cálculo consistente com o
+                    # KPI de movimentado (que também mantém rendimento).
                     _mask_mov = ~_bcc["categoria_mov"].isin(
-                        ["saldo", "aplicacao", "resgate", "rendimento", "investimento_outro"]
+                        ["saldo", "aplicacao", "resgate", "investimento_outro"]
                     ) if "categoria_mov" in _bcc.columns else pd.Series([True] * len(_bcc), index=_bcc.index)
                     _rec_sc = float(_bcc[_mask_mov & (_bcc["valor"] > 0)]["valor"].sum())
                     _desp_sc = float(-_bcc[_mask_mov & (_bcc["valor"] < 0)]["valor"].sum())
@@ -4277,7 +4280,11 @@ def _diferenca_bxs_por_dia(resultado: "ResultadoConciliacao", conta: str) -> lis
     ordenada do maior para o menor em módulo. Serve pra apontar no alerta EM QUE
     DIA está a diferença — e agora o valor de cada dia fecha exatamente com as
     linhas listadas no detalhe."""
-    _excl = ("saldo", "aplicacao", "resgate", "rendimento")
+    # v5.75: rendimento entra como receita normal (banco RENTAB × Sankhya
+    # BANCO BRADESCO S/A). Antes o filtro tirava rendimento só do banco
+    # (categoria=rendimento), mantinha no Sankhya (categoria=movimentacao),
+    # gerando falso "R$ X,XX Sankhya a mais" por dia — caso 20/07 R$ 14,05.
+    _excl = ("saldo", "aplicacao", "resgate")
 
     def _abs_por_dia(df):
         if df is None or getattr(df, "empty", True):
@@ -4367,9 +4374,9 @@ def _linhas_pendentes_do_dia(resultado, conta, dia, lado):
     """[(historico, valor), ...] das linhas que NÃO casaram naquele dia.
     lado='banco' -> pendentes_banco (estão no banco, faltam no Sankhya);
     lado='sankhya' -> pendentes_sistema (baixados no Sankhya, sem par no banco).
-    Exclui saldo/aplicação/resgate/rendimento (mesmo filtro do KPI de movimentado).
+    Exclui saldo/aplicação/resgate (v5.75: rendimento passou a ser receita normal).
     """
-    _excl = ("saldo", "aplicacao", "resgate", "rendimento")
+    _excl = ("saldo", "aplicacao", "resgate")
     df = resultado.pendentes_banco if lado == "banco" else resultado.pendentes_sistema
     if df is None or getattr(df, "empty", True):
         return []
@@ -4427,7 +4434,7 @@ def _explicar_diferenca_por_dia(resultado, conta):
     """
     dias_dif = dict(_diferenca_bxs_por_dia(resultado, conta))
     # dias com pendências (banco/sankhya), ainda que a dif líquida seja 0
-    _excl = ("saldo", "aplicacao", "resgate", "rendimento")
+    _excl = ("saldo", "aplicacao", "resgate")  # v5.75: rendimento é receita normal
     dias_pend: set = set()
     for _df in (getattr(resultado, "pendentes_banco", None),
                 getattr(resultado, "pendentes_sistema", None)):
@@ -4806,7 +4813,15 @@ def _render_regua_conferencia_sankhya(resultado: ResultadoConciliacao, conta: st
         rend_s = float(_val[_rend & _eh_sk].sum())
         rend_b = float(_val[_rend & ~_eh_sk].sum())
 
-    cred_b = round(rec_b + rg_b + rend_b, 2); cred_s = round(rec_s + rg_s + rend_s, 2)
+    cred_b = round(rec_b + rg_b, 2); cred_s = round(rec_s + rg_s, 2)
+    # v5.75: NÃO somamos rend_b/rend_s aqui porque rendimento já entra em
+    # rec_b/rec_s como receita normal (via pipeline v5.75 que tirou "rendimento"
+    # do filtro do KPI). Somar novamente aqui gerava DUPLA CONTAGEM: o banco
+    # ficava com o rendimento contado 2x (via rec_b da v5.75 E via rend_b desse
+    # cálculo), enquanto o Sankhya só uma vez (BANCO BRADESCO S/A entra em
+    # rec_s mas não em rend_s porque não é classificado como categoria
+    # rendimento). Resultado: o rodapé apontava R$ 14,05 falsos mesmo com o
+    # dia 20/07 já fechando ao centavo.
     deb_b = round(desp_b + ap_b, 2); deb_s = round(desp_s + ap_s, 2)
 
     # v5.70: desconto par-a-par de tarifas da adquirente já lançadas no Sankhya.
