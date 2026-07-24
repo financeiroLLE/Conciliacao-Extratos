@@ -7739,6 +7739,60 @@ def _render_conta70_casamento_numeracao():
             conf[idx] = grupos[chave]
             conf_nota[idx] = sug_notas.get(idx)  # nota se veio dos sugeridos; None se veio da esteira
 
+        # v5.89: lógica conservadora de par natural — quando o usuário marca
+        # despesa + receita natural juntas (identidades DIFERENTES mas valor,
+        # conta e data batendo), elas devem receber o MESMO número. Sem isso
+        # cada uma ficava num "grupo" separado (por identidade) e a Capa saía
+        # triplicada: despesa numerada A + receita espelho A + receita natural B.
+        # Regra: casa só quando os 4 critérios batem juntos (valor exato,
+        # mesma conta, data ±1 dia, uma única candidata) — evita falso positivo.
+        _sel_lista = [i for i in selecionados if i in d.index]
+        for i, idx_a in enumerate(_sel_lista):
+            for idx_b in _sel_lista[i + 1:]:
+                if conf.get(idx_a) == conf.get(idx_b):
+                    continue  # já estão no mesmo grupo (mesma identidade)
+                # Critérios conservadores
+                val_a = round(abs(float(d.at[idx_a, "valor"])), 2)
+                val_b = round(abs(float(d.at[idx_b, "valor"])), 2)
+                if val_a != val_b or val_a == 0.0:
+                    continue
+                conta_a = str(d.at[idx_a, "conta"] if "conta" in d.columns else "")
+                conta_b = str(d.at[idx_b, "conta"] if "conta" in d.columns else "")
+                if conta_a and conta_b and conta_a != conta_b:
+                    continue
+                # datas: aceita mesmo dia OU ±1 dia
+                try:
+                    dt_a = pd.to_datetime(d.at[idx_a, "data"], errors="coerce")
+                    dt_b = pd.to_datetime(d.at[idx_b, "data"], errors="coerce")
+                    if pd.isna(dt_a) or pd.isna(dt_b):
+                        continue
+                    if abs((dt_a - dt_b).days) > 1:
+                        continue
+                except Exception:
+                    continue
+                # lados opostos (despesa+receita)
+                lado_a = str(d.at[idx_a, "lado"])
+                lado_b = str(d.at[idx_b, "lado"])
+                if lado_a == lado_b:
+                    continue
+                # 4º critério: UMA ÚNICA candidata — só há UM par possível para
+                # esse (valor, conta, ±1dia, lado_oposto) entre os selecionados
+                _mesmo_val = [
+                    k for k in _sel_lista
+                    if k != idx_a
+                    and round(abs(float(d.at[k, "valor"])), 2) == val_a
+                    and str(d.at[k, "lado"]) != lado_a
+                ]
+                if len(_mesmo_val) != 1:
+                    continue  # ambíguo (0 ou >1 candidatos) — pula
+                # Unifica: idx_b recebe o número do idx_a (o grupo do idx_b é reatribuído)
+                num_a = conf[idx_a]
+                num_b_antigo = conf[idx_b]
+                for k, v in list(conf.items()):
+                    if v == num_b_antigo:
+                        conf[k] = num_a
+                break  # já pareou idx_a, próximo
+
         # v5.71: para cada linha confirmada, buscar automaticamente o PAR
         # (mesma identidade + mesmo |valor| + lado oposto) em `d` e atribuir o
         # MESMO número — assim receita e despesa saem juntas na Capa gerada.
