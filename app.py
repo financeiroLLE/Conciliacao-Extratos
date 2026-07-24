@@ -3958,7 +3958,14 @@ def tela_upload():
                         )
 
                 # Múltiplos relatórios do Sankhya: carrega cada um e junta tudo.
-                _lista_sistema = arquivo_sistema if isinstance(arquivo_sistema, list) else [arquivo_sistema]
+                # v5.78: se a usuária clicou em "Atualizar Sankhya" e subiu um
+                # novo arquivo pelo re-upload inline, esse override tem
+                # prioridade sobre o file_uploader original da coluna 2.
+                _override_sk = st.session_state.get("_sistema_override_files")
+                if _override_sk:
+                    _lista_sistema = _override_sk
+                else:
+                    _lista_sistema = arquivo_sistema if isinstance(arquivo_sistema, list) else [arquivo_sistema]
                 _dfs_sistema = []
                 for _arq_sis in _lista_sistema:
                     _dfs_sistema.append(
@@ -4531,6 +4538,50 @@ def _explicar_diferenca_por_dia(resultado, conta):
     return out
 
 
+def _render_botao_atualizar_sankhya():
+    """v5.78 — Botão compacto acima do alerta de diferença que permite subir
+    um novo arquivo do EXTRATO SANKHYA CONCILIAÇÃO sem sair da página.
+    Fluxo: usuária clica → mostra uploader inline → arquivo novo entra em
+    `_sistema_override_files` (session_state) → força reprocessamento.
+    A linha ~3961 lê esse override se existir; senão, usa o file_uploader
+    original da coluna 2. Simples, não invasivo.
+    """
+    _mostrar = st.session_state.get("_mostrar_reupload_sk", False)
+    col_a, col_b = st.columns([5, 1])
+    with col_b:
+        if not _mostrar:
+            if st.button("↻ Atualizar Sankhya", key="btn_atualizar_sankhya",
+                         help="Subir o arquivo Sankhya corrigido e recalcular sem re-fazer tudo",
+                         use_container_width=True):
+                st.session_state["_mostrar_reupload_sk"] = True
+                st.rerun()
+        else:
+            if st.button("✕ Cancelar", key="btn_cancelar_reupload",
+                         use_container_width=True):
+                st.session_state.pop("_mostrar_reupload_sk", None)
+                st.rerun()
+
+    if _mostrar:
+        st.caption(
+            "Corrigiu algo no Sankhya? Arraste o novo arquivo abaixo. "
+            "Os outros (extrato, adquirente) continuam valendo."
+        )
+        _novo = st.file_uploader(
+            "Novo EXTRATO SANKHYA CONCILIAÇÃO",
+            type=["xlsx", "xls"], accept_multiple_files=True,
+            key="sistema_reupload_widget",
+        )
+        if _novo:
+            _lista = _novo if isinstance(_novo, list) else [_novo]
+            st.session_state["_sistema_override_files"] = _lista
+            st.session_state.pop("_mostrar_reupload_sk", None)
+            st.success(
+                f"✓ Novo Sankhya recebido ({len(_lista)} arquivo(s)). "
+                "Recalculando… role a página até o botão **Concilie agora** e clique."
+            )
+            st.rerun()
+
+
 def _render_alerta_diferenca_por_dia(dif_bs, explicacao, nota_extra: str = "",
                                      falta: float = 0.0, diverg: float = 0.0):
     """Banner enxuto + seta (expander) que explica a diferença por dia e por
@@ -4539,7 +4590,10 @@ def _render_alerta_diferenca_por_dia(dif_bs, explicacao, nota_extra: str = "",
     informa quanto foi anulado, pra conta fechar com os cards acima.
     v5.49: quando a diferença líquida é ~zero mas há lançamentos sem par dos
     dois lados (mesmo dinheiro aberto de formas diferentes), o cabeçalho
-    mostra os dois lados em vez de um falso 'R$ 0,00'."""
+    mostra os dois lados em vez de um falso 'R$ 0,00'.
+    v5.78: botão de re-upload do Sankhya renderizado acima."""
+    _render_botao_atualizar_sankhya()
+
     if abs(dif_bs) >= 0.01:
         _cabeca = ('&#9888;&#65039; <b>Diferença Banco &times; Sankhya: '
                    + fmt_brl(abs(dif_bs)) + '</b> &middot; <b>a analisar por dia</b>')
