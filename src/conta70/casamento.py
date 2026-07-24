@@ -856,53 +856,157 @@ def gerar_capa_acumulada(capa_arquivo, detalhado, ultimo_numero: int, confirmado
     if novas_linhas:
         raw = pd.concat([raw, pd.DataFrame(novas_linhas)], ignore_index=True)
 
-    # v5.72 — Envios manuais de pendências pra Conta 70. Cada envio vira uma
-    # linha nova de DESPESA na Capa, SEM número (vai pra esteira aguardando).
-    # Anti-duplicação: se já existe uma linha com (data + |valor| + R/D +
-    # histórico normalizado) na Capa oficial, pula (a Viviane já lançou).
+    # v5.73 — Envios manuais de pendências pra Conta 70. Cada envio vira um
+    # PAR NUMERADO (despesa + receita espelho) na Capa, dando continuidade à
+    # sequência de numeração. Regra da Débora do teste real: ao confirmar o
+    # envio, o par já sai completo — não fica "aguardando" na esteira.
+    #
+    # Estrutura de cada envio:
+    #   • data (data original do extrato)  → usada na DESPESA
+    #   • valor_original (+X do banco)     → despesa = -X, receita = +X
+    #   • historico_original (do banco)    → despesa: "DEP N IDENT - X"; receita: "DEP IDENT - X"
+    #   • documento, tipo_movimento, conta (opcionais)
+    #
+    # Anti-duplicação: se já existe uma DESPESA equivalente NUMERADA na Capa
+    # oficial (chave data + |valor| + histórico normalizado), pula (a Viviane
+    # já lançou). Se existe DESPESA equivalente SEM número, preenche o número
+    # nela em vez de criar linha nova.
     if envios_c70:
-        # Recomputa os índices auxiliares porque acabamos de concatenar novas_linhas
+        # Recomputa índices auxiliares porque acabamos de concatenar novas_linhas
         raw["_v"] = pd.to_numeric(raw[c_val], errors="coerce").abs().round(2) if c_val else 0.0
         raw["_d"] = raw[c_dt].map(_to_data) if c_dt else pd.NaT
+        raw["_cur"] = pd.to_numeric(raw[c_num], errors="coerce")
         _rd_col_env = raw[c_rd].astype(str).str.upper() if c_rd else None
         _hist_col_norm = (
             raw[c_hist].astype(str).map(_norm_hist_esteira)
             if c_hist else pd.Series([""] * len(raw), index=raw.index)
         )
+
+        # Próximo número a atribuir: continua de onde a numeração parou
+        _prox_env = int(ultimo_numero) + 1
+        _num_series = pd.to_numeric(raw[c_num], errors="coerce")
+        if _num_series.notna().any():
+            _max_atual = int(_num_series.max())
+            _prox_env = max(_prox_env, _max_atual + 1)
+
+        _hoje = pd.Timestamp.today().normalize()
         novas_env_linhas = []
+        import re as _re_env
         for envio in envios_c70:
             env_data = _to_data(envio.get("data"))
             try:
-                env_val_abs = round(abs(float(envio.get("valor_c70", envio.get("valor_original", 0)))), 2)
+                env_val_abs = round(abs(float(envio.get("valor_original", envio.get("valor_c70", 0)))), 2)
             except Exception:
                 continue
-            env_hist_c70 = str(envio.get("historico_c70", "") or "")
-            env_hist_norm = _norm_hist_esteira(env_hist_c70)
+            env_hist_orig = str(envio.get("historico_original") or envio.get("historico_c70") or "")
 
-            # Anti-duplicação
+            # Prepara os dois históricos: despesa (DEP N IDENT) e receita (DEP IDENT)
+            _tem_prefixo_ndent = bool(_re_env.search(
+                r"DEP\s*N\s*(A[OÃ]?)?\s*IDENT", env_hist_orig, flags=_re_env.IGNORECASE
+            ))
+            env_hist_desp = env_hist_orig if _tem_prefixo_ndent else f"DEP N IDENT - {env_hist_orig}"
+            if _tem_prefixo_ndent:
+                env_hist_rec = _re_env.sub(
+                    r"DEP\s*N\s+IDENT", "DEP IDENT", env_hist_orig, flags=_re_env.IGNORECASE
+                )
+                env_hist_rec = _re_env.sub(
+                    r"DEP\s+N[AÃ]?O?\s+IDENT", "DEP IDENT", env_hist_rec, flags=_re_env.IGNORECASE
+                )
+            else:
+                env_hist_rec = f"DEP IDENT - {env_hist_orig}"
+
+            env_hist_desp_norm = _norm_hist_esteira(env_hist_desp)
+            env_hist_rec_norm = _norm_hist_esteira(env_hist_rec)
+
             if _rd_col_env is not None:
                 mask_desp = _rd_col_env.str.contains("DESPESA", na=False)
+                mask_rec = _rd_col_env.str.contains("RECEITA", na=False)
             else:
                 mask_desp = pd.Series(True, index=raw.index)
-            mask_dup = (
+                mask_rec = pd.Series(True, index=raw.index)
+
+            # === PASSO 1: decidir o número deste par ===
+            # Prioridade: 1) numero_hint (vindo da esteira, já veio da confirmação)
+            #             2) despesa já numerada na Capa (reusa esse número)
+            #             3) próximo número da sequência
+
+            mask_desp_por_chave = (
                 mask_desp
                 & (raw["_v"] == env_val_abs)
                 & (raw["_d"] == env_data)
-                & (_hist_col_norm == env_hist_norm)
+                & (_hist_col_norm == env_hist_desp_norm)
             )
-            if mask_dup.any():
-                continue  # já existe — não duplica
+            desps_por_chave = raw[mask_desp_por_chave]
+            desps_num = desps_por_chave[desps_por_chave["_cur"].notna()]
+            desps_sem_num = desps_por_chave[desps_por_chave["_cur"].isna()]
 
-            nova = {c: pd.NA for c in cols_orig}
-            if c_tipo: nova[c_tipo] = envio.get("tipo_movimento", "") or ""
-            if c_doc: nova[c_doc] = envio.get("documento", "") or ""
-            if c_val: nova[c_val] = -env_val_abs  # despesa negativa na Conta 70
-            if c_conc: nova[c_conc] = "Sim"
-            if c_rd: nova[c_rd] = "Despesa"
-            if c_dt: nova[c_dt] = env_data
-            if c_hist: nova[c_hist] = env_hist_c70
-            # Número fica em branco (aguarda numeração via esteira)
-            novas_env_linhas.append(nova)
+            hint = envio.get("numero_hint")
+            try:
+                hint_int = int(hint) if hint is not None else None
+            except Exception:
+                hint_int = None
+
+            if hint_int is not None:
+                num_desse = hint_int
+            elif not desps_num.empty:
+                # Já tem despesa numerada com essa chave — reusa o número dela
+                num_desse = int(desps_num.iloc[0]["_cur"])
+            else:
+                num_desse = _prox_env
+                _prox_env += 1
+
+            # === PASSO 2: garantir que a DESPESA existe na Capa com o número ===
+            # Se já existe despesa numerada com esse número + chave → nada a fazer.
+            # Se existe despesa sem número → preenche.
+            # Se não existe nenhuma despesa → cria.
+            despesa_ja_pronta = not desps_num.empty and int(desps_num.iloc[0]["_cur"]) == num_desse
+            if not despesa_ja_pronta:
+                if not desps_sem_num.empty:
+                    idx_desp = desps_sem_num.index[0]
+                    raw.loc[idx_desp, c_num] = num_desse
+                    raw.loc[idx_desp, "_cur"] = num_desse
+                elif desps_num.empty:  # nem numerada nem sem número → cria
+                    nova_d = {c: pd.NA for c in cols_orig}
+                    if c_tipo: nova_d[c_tipo] = envio.get("tipo_movimento", "") or "Transferência"
+                    if c_doc: nova_d[c_doc] = envio.get("documento", "") or ""
+                    if c_val: nova_d[c_val] = -env_val_abs
+                    if c_conc: nova_d[c_conc] = "Sim"
+                    if c_rd: nova_d[c_rd] = "Despesa"
+                    if c_dt: nova_d[c_dt] = env_data
+                    if c_hist: nova_d[c_hist] = env_hist_desp
+                    nova_d[c_num] = num_desse
+                    novas_env_linhas.append(nova_d)
+
+            # === PASSO 3: garantir que a RECEITA ESPELHO existe com o número ===
+            # Se já existe receita com esse número → nada a fazer (evita duplicar).
+            # Se existe receita SEM número que bate na chave → preenche.
+            # Senão → cria receita nova com data de hoje.
+            mask_rec_com_num_igual = mask_rec & (raw["_cur"] == num_desse)
+            if mask_rec_com_num_igual.any():
+                pass  # já tem
+            else:
+                mask_rec_por_chave = (
+                    mask_rec
+                    & (raw["_v"] == env_val_abs)
+                    & (_hist_col_norm == env_hist_rec_norm)
+                )
+                recs_por_chave = raw[mask_rec_por_chave]
+                recs_sem_num = recs_por_chave[recs_por_chave["_cur"].isna()]
+                if not recs_sem_num.empty:
+                    idx_rec = recs_sem_num.index[0]
+                    raw.loc[idx_rec, c_num] = num_desse
+                    raw.loc[idx_rec, "_cur"] = num_desse
+                elif recs_por_chave.empty:  # nem numerada nem sem número → cria
+                    nova_r = {c: pd.NA for c in cols_orig}
+                    if c_tipo: nova_r[c_tipo] = envio.get("tipo_movimento", "") or "Transferência"
+                    if c_doc: nova_r[c_doc] = envio.get("documento", "") or ""
+                    if c_val: nova_r[c_val] = env_val_abs
+                    if c_conc: nova_r[c_conc] = "Sim"
+                    if c_rd: nova_r[c_rd] = "Receita"
+                    if c_dt: nova_r[c_dt] = _hoje
+                    if c_hist: nova_r[c_hist] = env_hist_rec
+                    nova_r[c_num] = num_desse
+                    novas_env_linhas.append(nova_r)
 
         if novas_env_linhas:
             raw = pd.concat([raw, pd.DataFrame(novas_env_linhas)], ignore_index=True)
