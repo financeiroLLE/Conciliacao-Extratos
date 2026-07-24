@@ -3960,10 +3960,17 @@ def tela_upload():
                 # Múltiplos relatórios do Sankhya: carrega cada um e junta tudo.
                 # v5.78: se a usuária clicou em "Atualizar Sankhya" e subiu um
                 # novo arquivo pelo re-upload inline, esse override tem
-                # prioridade sobre o file_uploader original da coluna 2.
-                _override_sk = st.session_state.get("_sistema_override_files")
-                if _override_sk:
-                    _lista_sistema = _override_sk
+                # prioridade sobre o file_uploader original da coluna 2. O
+                # override é armazenado como bytes+nome porque o UploadedFile
+                # do widget não sobrevive ao rerun quando o widget some.
+                _override_bytes = st.session_state.get("_sistema_override_bytes")
+                if _override_bytes:
+                    import io as _io_ov
+                    _lista_sistema = []
+                    for _nm, _bts in _override_bytes:
+                        _buf = _io_ov.BytesIO(_bts)
+                        _buf.name = _nm
+                        _lista_sistema.append(_buf)
                 else:
                     _lista_sistema = arquivo_sistema if isinstance(arquivo_sistema, list) else [arquivo_sistema]
                 _dfs_sistema = []
@@ -4572,12 +4579,20 @@ def _render_botao_atualizar_sankhya():
             key="sistema_reupload_widget",
         )
         if _novo:
-            _lista = _novo if isinstance(_novo, list) else [_novo]
-            st.session_state["_sistema_override_files"] = _lista
+            _lista_up = _novo if isinstance(_novo, list) else [_novo]
+            # v5.78 fix: salvar como bytes+nome pra sobreviver o rerun (o objeto
+            # UploadedFile do widget é invalidado quando o widget some).
+            _bytes_lista = [(f.name, f.getvalue()) for f in _lista_up]
+            st.session_state["_sistema_override_bytes"] = _bytes_lista
             st.session_state.pop("_mostrar_reupload_sk", None)
+            # Limpa cache pra forçar recarga com o arquivo novo
+            try:
+                st.cache_data.clear()
+            except Exception:
+                pass
             st.success(
-                f"✓ Novo Sankhya recebido ({len(_lista)} arquivo(s)). "
-                "Recalculando… role a página até o botão **Concilie agora** e clique."
+                f"✓ Novo Sankhya recebido ({len(_bytes_lista)} arquivo(s)). "
+                "Recalculando…"
             )
             st.rerun()
 
