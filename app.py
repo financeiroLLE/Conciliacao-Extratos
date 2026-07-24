@@ -3870,6 +3870,19 @@ def tela_upload():
     _override_versao_processada = int(st.session_state.get("_override_versao_processada", -1))
     _precisa_rodar_override = _override_versao > _override_versao_processada
 
+    # v5.82 DEBUG: mostrar estado sempre que tem override pendente ou versão > 0
+    if _override_versao > 0 or st.session_state.get("_sistema_override_bytes"):
+        _tem_bytes = st.session_state.get("_sistema_override_bytes")
+        _n_bytes = len(_tem_bytes) if _tem_bytes else 0
+        _nomes = ", ".join(nm for nm, _ in (_tem_bytes or []))
+        st.info(
+            f"🔍 [DEBUG v5.82] _override_versao={_override_versao} · "
+            f"_versao_processada={_override_versao_processada} · "
+            f"_precisa_rodar={_precisa_rodar_override} · "
+            f"pode_executar={pode_executar} · "
+            f"override_bytes={_n_bytes} arquivos ({_nomes})"
+        )
+
     if st.button(
         "▶️ Executar conciliação",
         type="primary",
@@ -3983,6 +3996,11 @@ def tela_upload():
                 # do widget não sobrevive ao rerun quando o widget some.
                 _override_bytes = st.session_state.get("_sistema_override_bytes")
                 if _override_bytes:
+                    st.warning(
+                        f"🔍 [DEBUG v5.82] Carregando SANKHYA do OVERRIDE "
+                        f"({len(_override_bytes)} arquivo(s)): "
+                        f"{', '.join(nm for nm, _ in _override_bytes)}"
+                    )
                     import io as _io_ov
                     _lista_sistema = []
                     for _nm, _bts in _override_bytes:
