@@ -11,6 +11,8 @@ Formatos vistos em extratos reais LLE:
   - Caixa    : "GERENCIADOR CAIXA" ... "Conta: 4263 | 1292 | 000577224045-1"
   - Itaú     : tratado de forma genérica (procura agência/conta); cai na lista
                de escolha quando não houver certeza.
+  - Banco do Brasil (v5.79) : "Extrato Conta Corrente" com "Agencia" + "Conta
+               corrente"; coluna "Inf." tem C/D (parser aplica sinal por lá).
 
 Regra de ouro: quando não achar com segurança, NÃO chuta — devolve o que
 conseguiu e marca `confianca="baixa"` para a tela oferecer a lista de escolha.
@@ -107,40 +109,55 @@ def detectar_conta_extrato(arquivo) -> ContaDetectada:
         # v5.51: export diário do Itaú (bankline) NÃO escreve "Itaú" em lugar
         # nenhum — a assinatura é o título acima + rótulo "Agência/Conta:".
         banco = "Itaú"
+    # v5.79: detecção do Banco do Brasil pelo formato do extrato. O export do
+    # BB NÃO escreve "Banco do Brasil" em lugar nenhum — a assinatura é:
+    # - Título "Extrato Conta Corrente" (sem "e Conta Investimento", que é Itaú)
+    # - Cabeçalho "Agencia" (sem acento) + "Conta corrente" separados
+    # - Coluna "Inf." com marcador C/D
+    elif ("EXTRATO CONTA CORRENTE" in u and "CONTA CORRENTE" in u
+          and "AGENCIA" in u and "ITAU" not in u and "ITAÚ" not in u):
+        banco = "Banco do Brasil"
     else:
         banco = ""
 
     ag = conta = ""
 
+    # v5.79: Banco do Brasil — cabeçalho vem em linhas separadas:
+    # "Agencia | 1253X | Conta corrente | 000000412597"
+    if banco == "Banco do Brasil":
+        m = re.search(r"AGENCIA\s+([\w\-]+)\s+CONTA\s+CORRENTE\s+([\w\-]+)", u)
+        if m:
+            ag, conta = m.group(1), m.group(2)
     # v5.51: rótulo "Agência/Conta: 0023/ 64321-6" (Itaú diário) — específico,
     # testa ANTES dos padrões por banco (o genérico pegava a agência como conta).
-    m_agconta = re.search(r"AG[ÊE]NCIA\s*/\s*CONTA\s*[:\-]?\s*(\d+)\s*/\s*([\d.\-]+)", u)
-    if m_agconta:
-        ag, conta = m_agconta.group(1), m_agconta.group(2)
-    elif banco == "Bradesco":
-        m = re.search(r"AG[ÊE]NCIA\s*[:\-]?\s*(\d+)\s*CONTA\s*[:\-]?\s*([\d.\-]+)", u)
-        if m:
-            ag, conta = m.group(1), m.group(2)
-    elif banco == "Sicredi":
-        ma = re.search(r"COOPERATIVA\s*[:|\-]?\s*(\d+)", u)
-        mc = re.search(r"CONTA\s*[:|\-]?\s*([\d.\-]+)", u)
-        ag = ma.group(1) if ma else ""
-        conta = mc.group(1) if mc else ""
-    elif banco == "Santander":
-        m = re.search(r"AG[ÊE]NCIA\s*[:\-]?\s*(\d+)\s*CONTA\s*[:\-]?\s*([\d.\-]+)", u)
-        if m:
-            ag, conta = m.group(1), m.group(2)
-    elif banco == "Caixa":
-        # "Conta: 4263 | 1292 | 000577224045-1"  (agência | operação | conta)
-        m = re.search(r"CONTA\s*[:\-]?\s*(\d+)\s*\|\s*(\d+)\s*\|\s*([\d.\-]+)", u)
-        if m:
-            ag, conta = m.group(1), m.group(3)
-    else:
-        # Itaú / desconhecido: tentativa genérica
-        ma = re.search(r"AG[ÊE]NCIA\s*[:\-]?\s*(\d+)", u)
-        mc = re.search(r"CONTA\s*[:\-]?\s*([\d.\-]{4,})", u)
-        ag = ma.group(1) if ma else ""
-        conta = mc.group(1) if mc else ""
+    elif True:
+        m_agconta = re.search(r"AG[ÊE]NCIA\s*/\s*CONTA\s*[:\-]?\s*(\d+)\s*/\s*([\d.\-]+)", u)
+        if m_agconta:
+            ag, conta = m_agconta.group(1), m_agconta.group(2)
+        elif banco == "Bradesco":
+            m = re.search(r"AG[ÊE]NCIA\s*[:\-]?\s*(\d+)\s*CONTA\s*[:\-]?\s*([\d.\-]+)", u)
+            if m:
+                ag, conta = m.group(1), m.group(2)
+        elif banco == "Sicredi":
+            ma = re.search(r"COOPERATIVA\s*[:|\-]?\s*(\d+)", u)
+            mc = re.search(r"CONTA\s*[:|\-]?\s*([\d.\-]+)", u)
+            ag = ma.group(1) if ma else ""
+            conta = mc.group(1) if mc else ""
+        elif banco == "Santander":
+            m = re.search(r"AG[ÊE]NCIA\s*[:\-]?\s*(\d+)\s*CONTA\s*[:\-]?\s*([\d.\-]+)", u)
+            if m:
+                ag, conta = m.group(1), m.group(2)
+        elif banco == "Caixa":
+            # "Conta: 4263 | 1292 | 000577224045-1"  (agência | operação | conta)
+            m = re.search(r"CONTA\s*[:\-]?\s*(\d+)\s*\|\s*(\d+)\s*\|\s*([\d.\-]+)", u)
+            if m:
+                ag, conta = m.group(1), m.group(3)
+        else:
+            # Itaú / desconhecido: tentativa genérica
+            ma = re.search(r"AG[ÊE]NCIA\s*[:\-]?\s*(\d+)", u)
+            mc = re.search(r"CONTA\s*[:\-]?\s*([\d.\-]{4,})", u)
+            ag = ma.group(1) if ma else ""
+            conta = mc.group(1) if mc else ""
 
     det = ContaDetectada(
         banco=banco, agencia=ag.strip(), conta=conta.strip(),
