@@ -6978,10 +6978,39 @@ def _c70_faturamento(fat_payload):
     return pd.concat([carregar_faturamento(_n(b, nm)) for b, nm in fat_payload], ignore_index=True)
 
 
+@st.cache_data(show_spinner=False)
+def _c70_nomes_da_concb(sk_payload):
+    """v5.77 — extrai dicionário {CPF/CNPJ: nome_parceiro} do histórico da
+    Conciliação Bancária (mesmo arquivo que já é usado no atrelamento).
+    Usado pelo Mapa de Recebimentos pra mostrar o NOME junto do CPF/CNPJ.
+    Cache pelo conjunto de arquivos (mesma chave do _c70_processar).
+    """
+    if not sk_payload:
+        return {}
+    import io as _io
+    from src.conta70.casamento import carregar_movimento
+    from src.conta70.mapa_recebimentos import construir_mapa_nomes_da_concb
+
+    def _n(b, nome):
+        x = _io.BytesIO(b); x.name = nome; return x
+
+    try:
+        sk = pd.concat(
+            [carregar_movimento(_n(b, nm)) for b, nm in sk_payload],
+            ignore_index=True,
+        )
+        return construir_mapa_nomes_da_concb(sk)
+    except Exception:
+        return {}
+
+
 @st.cache_data(show_spinner="Montando o Mapa de recebimentos…")
-def _mapa_c70_construir(capa_payload, fat_payload):
+def _mapa_c70_construir(capa_payload, fat_payload, sk_payload=()):
     """Constrói o Mapa (um ou VÁRIOS arquivos, empilhados sem dedup).
-    fat_payload pode ser vazio (sem notas)."""
+    fat_payload pode ser vazio (sem notas).
+    v5.77: sk_payload usado só pra extrair nomes de parceiros do histórico
+    da Conciliação Bancária, enriquecendo a coluna 'Parceiro efetivo'.
+    """
     import io as _io
     from src.conta70.casamento import carregar_faturamento
     from src.conta70.mapa_recebimentos import carregar_capa_bruta, construir_mapa
@@ -6996,7 +7025,9 @@ def _mapa_c70_construir(capa_payload, fat_payload):
             fat = pd.concat([carregar_faturamento(_n(b, nm)) for b, nm in fat_payload], ignore_index=True)
         except Exception:
             fat = None
-    m, resumo = construir_mapa(capa, fat)
+    # v5.77: parceiros_cnpj vem do dict extraído da ConcB
+    nomes = _c70_nomes_da_concb(sk_payload) if sk_payload else {}
+    m, resumo = construir_mapa(capa, fat, parceiros_cnpj=nomes)
     return m, resumo
 
 
@@ -7019,6 +7050,7 @@ def _render_conta70_mapa_recebimentos():
     _saved = st.session_state.get("_c70_saved", {})
     _capa_payload = _saved.get("capa", ())
     _fat_payload = _saved.get("fat", ())
+    _sk_payload = _saved.get("sk", ())  # v5.77: ConcB para extrair nomes de parceiros
     if not _capa_payload:
         st.info(
             "Suba a **Capa da Conta 70** na aba **Atrelamento e Numeração** — os mesmos arquivos "
@@ -7027,7 +7059,7 @@ def _render_conta70_mapa_recebimentos():
         return
 
     try:
-        m, R = _mapa_c70_construir(_capa_payload, _fat_payload)
+        m, R = _mapa_c70_construir(_capa_payload, _fat_payload, _sk_payload)
     except Exception as e:
         st.error(f"Não consegui montar o Mapa: {e}")
         return
