@@ -583,6 +583,21 @@ def _calcular_kpis(
             if (top1702_grupos is not None and not top1702_grupos.empty
                 and "valor_banco_total" in top1702_grupos.columns) else 0.0
         ),
+        # v5.76: total consolidado de linhas do Sankhya casadas via AGRUPAMENTO
+        # (cartão TOP 1722, boleto TOP 1702, folha, salários N→M, depósitos
+        # abertos 1→N, tarifas repetidas). Usado no card "CONCILIAÇÃO" pra
+        # separar visualmente: pares 1-a-1 (match_exato) vs grupos.
+        "qtd_linhas_grupos_casados": (
+            int(len(linhas_casadas_grupos_sis))
+            if linhas_casadas_grupos_sis is not None
+            and not getattr(linhas_casadas_grupos_sis, "empty", True) else 0
+        ),
+        "valor_grupos_casados": (
+            float(linhas_casadas_grupos_sis["valor"].abs().sum())
+            if (linhas_casadas_grupos_sis is not None
+                and not getattr(linhas_casadas_grupos_sis, "empty", True)
+                and "valor" in linhas_casadas_grupos_sis.columns) else 0.0
+        ),
     }
 
 
