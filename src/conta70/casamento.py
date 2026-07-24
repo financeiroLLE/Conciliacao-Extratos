@@ -927,6 +927,19 @@ def gerar_capa_acumulada(capa_arquivo, detalhado, ultimo_numero: int, confirmado
             else:
                 env_hist_rec = f"DEP IDENT - {env_hist_orig}"
 
+            # v5.85: adiciona a data ORIGINAL do lançamento no final do histórico
+            # da receita espelho. Rastreabilidade pedida pela Débora — quando ela
+            # olha a receita espelho (data de hoje) precisa saber de que dia era
+            # o depósito original. Fica tipo:
+            #   "DEP IDENT -RECEBIMENTO PIX ... A FAVORITA COMERC -SICREDI 13/07/2026"
+            try:
+                if env_data is not None and hasattr(env_data, "strftime"):
+                    _dt_str = env_data.strftime("%d/%m/%Y")
+                    if _dt_str and _dt_str not in env_hist_rec:
+                        env_hist_rec = env_hist_rec.rstrip() + " " + _dt_str
+            except Exception:
+                pass
+
             env_hist_desp_norm = _norm_hist_esteira(env_hist_desp)
             env_hist_rec_norm = _norm_hist_esteira(env_hist_rec)
 
