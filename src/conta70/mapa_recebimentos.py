@@ -221,28 +221,32 @@ def _norm_doc(d: Any) -> str:
 
 
 def construir_mapa_nomes_da_concb(concb_df: pd.DataFrame) -> dict[str, str]:
-    """v5.77 — Constrói dicionário {CPF/CNPJ normalizado: nome do parceiro}
-    a partir do histórico da Conciliação Bancária (Movimentação Bancária do
-    Sankhya). Usado pelo Mapa de Recebimentos pra mostrar o NOME do parceiro
-    ao lado do CPF/CNPJ (ex.: "036.153.547-37 · PATRICIO CARVALHO RIBEIRO").
+    """v5.77.3 — Constrói dicionário {CPF/CNPJ normalizado: nome do parceiro}
+    a partir da Conciliação Bancária (Movimentação Bancária do Sankhya).
+    Usado pelo Mapa de Recebimentos pra mostrar o NOME do parceiro na coluna
+    'Parceiro efetivo'.
 
-    Estratégia:
-      1. Para cada linha da ConcB, procura CPF (11d) ou CNPJ (14d) no histórico
-      2. Extrai o nome como o bloco alfabético mais "significativo" (múltiplas
-         palavras, sem tokens de banco/valor/data) que não seja o próprio doc
-      3. Agrega — se o mesmo doc aparece com nomes diferentes, escolhe o mais
-         frequente (majority vote)
+    FONTES por ordem de prioridade:
+      1. Coluna 'Nome Parceiro' (ou variantes) da ConcB, quando presente —
+         é o nome que o Sankhya guarda na baixa (mais confiável).
+      2. Extração do histórico (fallback) — pega o bloco alfabético mais
+         "significativo" (múltiplas palavras, sem tokens de banco/valor/data).
 
-    Retorna dict vazio se concb_df estiver vazio ou sem coluna "historico".
-    Chaves usam o mesmo normalizador `_norm_doc` (14 dígitos p/ CNPJ, 11 p/ CPF).
+    Retorna dict vazio se concb_df estiver vazio. Chaves usam `_norm_doc`
+    (14 dígitos p/ CNPJ, 11 p/ CPF).
     """
-    if concb_df is None or concb_df.empty or "historico" not in concb_df.columns:
+    if concb_df is None or concb_df.empty:
         return {}
 
     from collections import Counter as _C
     votos: dict[str, _C] = {}
 
-    # Termos a ignorar (não são nomes de parceiro real)
+    tem_col_parceiro = "parceiro" in concb_df.columns
+    tem_col_historico = "historico" in concb_df.columns
+    if not tem_col_historico and not tem_col_parceiro:
+        return {}
+
+    # Termos "genéricos" ignorados
     _lixo_full = {
         "DEP IDENT", "DEP N IDENT", "DEP NAO IDENT", "DEP NÃO IDENT", "DEP",
         "SICREDI", "SANTANDER", "ITAU", "ITAU PISA", "BRADESCO", "CAIXA",
@@ -258,29 +262,44 @@ def construir_mapa_nomes_da_concb(concb_df: pd.DataFrame) -> dict[str, str]:
     _lixo_contains = ("SISPAG", "CARTAO", "BANCO ", "RENDIMENTOS", "RENTAB",
                       "TARIFA CONCILIADOR", "CONCILIADOR")
 
-    for hist in concb_df["historico"].astype(str):
+    for _, row in concb_df.iterrows():
+        hist = row["historico"] if tem_col_historico else ""
         h = hist.strip() if isinstance(hist, str) else ""
-        if not h or h.lower() in ("nan", "none"):
+        if (not h or h.lower() in ("nan", "none")) and not tem_col_parceiro:
             continue
 
-        # 1) Detecta CPF/CNPJ com pontuação flexível
+        # 1) Detecta CPF/CNPJ no histórico (pontuação flexível)
         doc_raw = ""
-        m_cnpj = re.search(r"(?<!\d)(\d{2}\.?\d{3}\.?\d{3}[/-]?\d{4}[-]?\d{2})(?!\d)", h)
-        m_cpf = re.search(r"(?<!\d)(\d{3}\.?\d{3}\.?\d{3}[-]?\d{2})(?!\d)", h)
-        if m_cnpj:
-            d = re.sub(r"[^\d]", "", m_cnpj.group(1))
-            if len(d) == 14:
-                doc_raw = d
-        if not doc_raw and m_cpf:
-            d = re.sub(r"[^\d]", "", m_cpf.group(1))
-            if len(d) == 11:
-                doc_raw = d
+        if h:
+            m_cnpj = re.search(r"(?<!\d)(\d{2}\.?\d{3}\.?\d{3}[/-]?\d{4}[-]?\d{2})(?!\d)", h)
+            m_cpf = re.search(r"(?<!\d)(\d{3}\.?\d{3}\.?\d{3}[-]?\d{2})(?!\d)", h)
+            if m_cnpj:
+                d = re.sub(r"[^\d]", "", m_cnpj.group(1))
+                if len(d) == 14:
+                    doc_raw = d
+            if not doc_raw and m_cpf:
+                d = re.sub(r"[^\d]", "", m_cpf.group(1))
+                if len(d) == 11:
+                    doc_raw = d
         if not doc_raw:
             continue  # sem doc, não indexamos
 
         doc = _norm_doc(doc_raw)
 
-        # 2) Limpa histórico e quebra em partes
+        # 2) FONTE PRIMÁRIA: coluna Parceiro/Nome Parceiro do Sankhya
+        if tem_col_parceiro:
+            parc = row.get("parceiro", "")
+            parc_str = str(parc).strip() if isinstance(parc, str) else ""
+            if parc_str and parc_str.lower() not in ("nan", "none"):
+                # sanity: não é "lixo" nem só números
+                pu = parc_str.upper()
+                if pu not in _lixo_full and not re.match(r"^[\d\.,\-/\s]+$", parc_str):
+                    votos.setdefault(doc, _C())[parc_str] += 3  # peso maior (é da baixa)
+                    continue  # não precisa extrair do histórico
+
+        # 3) FALLBACK: extrai do histórico
+        if not h:
+            continue
         h_clean = h.replace('"', " ").replace("'", " ")
         h_clean = re.sub(
             r"\d{2,3}\.?\d{3}\.?\d{3}[/-]?\d{0,4}[-]?\d{0,2}", " ", h_clean
@@ -305,7 +324,6 @@ def construir_mapa_nomes_da_concb(concb_df: pd.DataFrame) -> dict[str, str]:
                 continue
             if any(k in pu for k in _lixo_contains):
                 continue
-            # Remove tokens genéricos que ficaram grudados
             p_clean = re.sub(
                 r"\b(PARCIAL|PIX|TED|DOC|DEP|IDENT|N\s+IDENT|NAO\s+IDENT|NÃO\s+IDENT)\b",
                 "", p, flags=re.IGNORECASE
@@ -319,7 +337,7 @@ def construir_mapa_nomes_da_concb(concb_df: pd.DataFrame) -> dict[str, str]:
 
         nomes_multi = [c for c in candidatos if len(c.split()) >= 2]
         nome = max(nomes_multi, key=len) if nomes_multi else max(candidatos, key=len)
-        votos.setdefault(doc, _C())[nome.strip()] += 1
+        votos.setdefault(doc, _C())[nome.strip()] += 1  # peso menor (extraído)
 
     return {doc: c.most_common(1)[0][0] for doc, c in votos.items()}
 
