@@ -3870,19 +3870,6 @@ def tela_upload():
     _override_versao_processada = int(st.session_state.get("_override_versao_processada", -1))
     _precisa_rodar_override = _override_versao > _override_versao_processada
 
-    # v5.82 DEBUG: mostrar estado sempre que tem override pendente ou versão > 0
-    if _override_versao > 0 or st.session_state.get("_sistema_override_bytes"):
-        _tem_bytes = st.session_state.get("_sistema_override_bytes")
-        _n_bytes = len(_tem_bytes) if _tem_bytes else 0
-        _nomes = ", ".join(nm for nm, _ in (_tem_bytes or []))
-        st.info(
-            f"🔍 [DEBUG v5.82] _override_versao={_override_versao} · "
-            f"_versao_processada={_override_versao_processada} · "
-            f"_precisa_rodar={_precisa_rodar_override} · "
-            f"pode_executar={pode_executar} · "
-            f"override_bytes={_n_bytes} arquivos ({_nomes})"
-        )
-
     if st.button(
         "▶️ Executar conciliação",
         type="primary",
@@ -3996,11 +3983,6 @@ def tela_upload():
                 # do widget não sobrevive ao rerun quando o widget some.
                 _override_bytes = st.session_state.get("_sistema_override_bytes")
                 if _override_bytes:
-                    st.warning(
-                        f"🔍 [DEBUG v5.82] Carregando SANKHYA do OVERRIDE "
-                        f"({len(_override_bytes)} arquivo(s)): "
-                        f"{', '.join(nm for nm, _ in _override_bytes)}"
-                    )
                     import io as _io_ov
                     _lista_sistema = []
                     for _nm, _bts in _override_bytes:
@@ -4657,6 +4639,12 @@ def _render_botao_atualizar_sankhya():
                 st.session_state["_override_versao"] = int(
                     st.session_state.get("_override_versao", 0)
                 ) + 1
+                # v5.83 (chave da correção): volta o fluxo pra "upload" pra que
+                # `tela_upload()` seja executada — é lá que o contador é lido e
+                # a conciliação é disparada. Sem isso, o app ficava em
+                # `tela_resultado()` (que não tem o botão "Executar conciliação")
+                # e nunca reprocessava — os cards ficavam iguais para sempre.
+                st.session_state["fluxo_etapa"] = "upload"
                 st.success("✓ Aplicando novo Sankhya e recalculando…")
                 st.rerun()
 
