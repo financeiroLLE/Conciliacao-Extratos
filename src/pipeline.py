@@ -342,20 +342,27 @@ def _calcular_kpis(
     banco_mov = _eh_movimentado(banco_completo)
     sistema_mov = _eh_movimentado(sistema_completo)
 
-    # v5.26: total movimentado NÃO deve incluir aplicação/resgate/rendimento AUT MAIS.
-    # Aplicações AUT MAIS não são despesa real (dinheiro fica na empresa, só aplicado).
-    # Resgates AUT MAIS não são receita real (mesmo dinheiro retorna pra conta).
-    # Esses lançamentos têm seu próprio card "Investimentos" pra contabilizar.
+    # v5.26 (ajustada v5.75): total movimentado NÃO deve incluir aplicação/resgate.
+    # Aplicações e resgates são movimentação interna banco↔investimento (mesmo
+    # dinheiro que sai e volta pra empresa) — não é operacional real.
+    # RENDIMENTO foi TIRADO do filtro: é receita real (juros ganhos), tem que
+    # contar no total. Antes o filtro era assimétrico: RENTAB.INVEST (banco)
+    # era classificado como "rendimento" e removido; a receita espelho no
+    # Sankhya (histórico "BANCO BRADESCO S/A") era classificada como
+    # "movimentacao" e mantida — gerava falso "Sankhya a mais R$ X,XX" mesmo
+    # com os 17 pares casando no match_exato. Caso real de 20/07/2026: 17
+    # RENTAB × 17 BANCO BRADESCO somando R$ 14,05, o app apontava "R$ 14,05
+    # Sankhya a mais" sem ter linha isolada.
     if "categoria_mov" in banco_mov.columns:
         banco_mov_real = banco_mov[
-            ~banco_mov["categoria_mov"].isin(["aplicacao", "resgate", "rendimento"])
+            ~banco_mov["categoria_mov"].isin(["aplicacao", "resgate"])
         ]
     else:
         banco_mov_real = banco_mov
 
     if "categoria_mov" in sistema_mov.columns:
         sistema_mov_real = sistema_mov[
-            ~sistema_mov["categoria_mov"].isin(["aplicacao", "resgate", "rendimento"])
+            ~sistema_mov["categoria_mov"].isin(["aplicacao", "resgate"])
         ]
     else:
         sistema_mov_real = sistema_mov
