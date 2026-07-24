@@ -259,8 +259,8 @@ def construir_mapa_nomes_da_concb(concb_df: pd.DataFrame) -> dict[str, str]:
                       "TARIFA CONCILIADOR", "CONCILIADOR")
 
     for hist in concb_df["historico"].astype(str):
-        h = hist.strip()
-        if not h:
+        h = hist.strip() if isinstance(hist, str) else ""
+        if not h or h.lower() in ("nan", "none"):
             continue
 
         # 1) Detecta CPF/CNPJ com pontuação flexível
