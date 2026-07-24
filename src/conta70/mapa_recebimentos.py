@@ -246,21 +246,27 @@ def construir_mapa_nomes_da_concb(concb_df: pd.DataFrame) -> dict[str, str]:
     if not tem_col_historico and not tem_col_parceiro:
         return {}
 
-    # Termos "genéricos" ignorados
+    # Termos "genéricos" ignorados — ampliado v5.77.4 após ver falsos positivos
+    # em campo (ex.: "RECEBIDO OUTRA INST", "( SANTANDER 31/03/25 CTA 70 )",
+    # ". RECEBIDO"). Regra: quando na dúvida, DESCARTA — deixa o fallback
+    # mostrar o CPF/CNPJ, é melhor do que mostrar texto errado como nome.
     _lixo_full = {
         "DEP IDENT", "DEP N IDENT", "DEP NAO IDENT", "DEP NÃO IDENT", "DEP",
         "SICREDI", "SANTANDER", "ITAU", "ITAU PISA", "BRADESCO", "CAIXA",
-        "PIX", "PIX RECEBIDO", "PIX ENVIADO", "TED", "DOC", "PARCIAL",
-        "RECEBIDO", "TRANSF PIX", "TRANSF PIX RECEBIDA", "REC",
+        "PIX", "PIX RECEBIDO", "PIX ENVIADO", "PIX TRANSF", "TED", "DOC", "PARCIAL",
+        "RECEBIDO", "RECEBIDO OUTRA INST", "OUTRA INST", "OUTRA INSTITUICAO",
+        "TRANSF PIX", "TRANSF PIX RECEBIDA", "TRANSFERENCIA", "REC",
         "SISPAG FORNECEDORES", "SISPAG SALARIOS", "SISPAG",
         "FORNECEDORES", "SALARIOS", "SALARIO",
         "TARIFA", "TARIFAS", "RENTAB", "RESGATE", "APLICACAO", "APLICAÇÃO",
         "CIELO", "GETNET", "PAGBANK", "PAGSEGURO", "REC LIQ",
         "VENDA CARTAO DE CREDITO", "VENDA CARTAO", "CARTAO", "CREDITO", "DEBITO",
-        "BANCO BRADESCO", "BANCO BRADESCO S/A", "BANCO", "S/A",
+        "BANCO BRADESCO", "BANCO BRADESCO S/A", "BANCO", "S/A", "LTDA",
+        "DIF TIT", "CTA 70", "STAND", "REF",
     }
     _lixo_contains = ("SISPAG", "CARTAO", "BANCO ", "RENDIMENTOS", "RENTAB",
-                      "TARIFA CONCILIADOR", "CONCILIADOR")
+                      "TARIFA CONCILIADOR", "CONCILIADOR", "OUTRA INST",
+                      "DIF TIT", "CTA 70", "CTA 70)")
 
     for _, row in concb_df.iterrows():
         hist = row["historico"] if tem_col_historico else ""
@@ -311,6 +317,12 @@ def construir_mapa_nomes_da_concb(concb_df: pd.DataFrame) -> dict[str, str]:
             p = p.strip().strip(",").strip(".").strip()
             if not p:
                 continue
+            # Descarta se tem parênteses (nomes próprios raramente têm)
+            if "(" in p or ")" in p:
+                continue
+            # Descarta se tem QUALQUER dígito (nomes próprios não têm números)
+            if re.search(r"\d", p):
+                continue
             if re.match(r"^[\d\.,\-/\s]+$", p):
                 continue
             if "R$" in p.upper():
@@ -325,18 +337,31 @@ def construir_mapa_nomes_da_concb(concb_df: pd.DataFrame) -> dict[str, str]:
             if any(k in pu for k in _lixo_contains):
                 continue
             p_clean = re.sub(
-                r"\b(PARCIAL|PIX|TED|DOC|DEP|IDENT|N\s+IDENT|NAO\s+IDENT|NÃO\s+IDENT)\b",
+                r"\b(PARCIAL|PIX|TED|DOC|DEP|IDENT|N\s+IDENT|NAO\s+IDENT|NÃO\s+IDENT|RECEBIDO|OUTRA\s+INST)\b",
                 "", p, flags=re.IGNORECASE
             ).strip()
             if not p_clean or not re.search(r"[A-ZÁÉÍÓÚÂÊÔÃÕÇa-z]{3,}", p_clean):
                 continue
+            # v5.77.4: RIGOR — só aceita se parece nome próprio de verdade:
+            # ≥2 palavras (nome próprio quase sempre tem 2+) OU 1 palavra longa
+            # que não é token genérico
+            palavras = p_clean.split()
+            if len(palavras) < 2:
+                # 1 palavra só — só aceita se for muito longa (>=6 chars) e
+                # não for token comum
+                if len(p_clean) < 6:
+                    continue
             candidatos.append(p_clean)
 
         if not candidatos:
             continue
 
+        # v5.77.4: PRIORIDADE — só considera candidato com ≥2 palavras.
+        # Se só tem 1 palavra, DESCARTA (é melhor mostrar CPF que "STAND" ou similar).
         nomes_multi = [c for c in candidatos if len(c.split()) >= 2]
-        nome = max(nomes_multi, key=len) if nomes_multi else max(candidatos, key=len)
+        if not nomes_multi:
+            continue  # sem nome próprio confiável — deixa fallback (CPF) atuar
+        nome = max(nomes_multi, key=len)
         votos.setdefault(doc, _C())[nome.strip()] += 1  # peso menor (extraído)
 
     return {doc: c.most_common(1)[0][0] for doc, c in votos.items()}
