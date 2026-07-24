@@ -1021,17 +1021,48 @@ def gerar_capa_acumulada(capa_arquivo, detalhado, ultimo_numero: int, confirmado
                     idx_rec = recs_sem_num.index[0]
                     raw.loc[idx_rec, c_num] = num_desse
                     raw.loc[idx_rec, "_cur"] = num_desse
-                elif recs_por_chave.empty:  # nem numerada nem sem número → cria
-                    nova_r = {c: pd.NA for c in cols_orig}
-                    if c_tipo: nova_r[c_tipo] = envio.get("tipo_movimento", "") or "Transferência"
-                    if c_doc: nova_r[c_doc] = envio.get("documento", "") or ""
-                    if c_val: nova_r[c_val] = env_val_abs
-                    if c_conc: nova_r[c_conc] = "Sim"
-                    if c_rd: nova_r[c_rd] = "Receita"
-                    if c_dt: nova_r[c_dt] = _hoje
-                    if c_hist: nova_r[c_hist] = env_hist_rec
-                    nova_r[c_num] = num_desse
-                    novas_env_linhas.append(nova_r)
+                else:
+                    # v5.89: BUSCA CONSERVADORA de par natural — antes de criar
+                    # espelho, procura receita SEM número no MESMO valor +
+                    # MESMA data (ou ±1 dia). Se acha EXATAMENTE UMA candidata,
+                    # usa ela em vez de criar espelho — resolve o problema de
+                    # triplicação (despesa numerada + espelho + receita natural
+                    # solta). 4 critérios têm que bater juntos pra evitar erro.
+                    _acopoulou_natural = False
+                    if env_data is not None and c_dt:
+                        try:
+                            _env_ts = pd.Timestamp(env_data)
+                            _dts_col = pd.to_datetime(raw[c_dt], errors="coerce")
+                            _delta_dias = (_dts_col - _env_ts).dt.days.abs()
+                            _mask_data_prox = _delta_dias <= 1
+                            mask_natural = (
+                                mask_rec
+                                & (raw["_v"] == env_val_abs)
+                                & (raw["_cur"].isna())
+                                & _mask_data_prox.fillna(False)
+                            )
+                            candidatas = raw[mask_natural]
+                            if len(candidatas) == 1:
+                                idx_nat = candidatas.index[0]
+                                raw.loc[idx_nat, c_num] = num_desse
+                                raw.loc[idx_nat, "_cur"] = num_desse
+                                _acopoulou_natural = True
+                        except Exception:
+                            pass
+
+                    if not _acopoulou_natural and recs_por_chave.empty:
+                        # nem numerada nem sem número na chave, nem candidata
+                        # natural única → cria espelho como antes
+                        nova_r = {c: pd.NA for c in cols_orig}
+                        if c_tipo: nova_r[c_tipo] = envio.get("tipo_movimento", "") or "Transferência"
+                        if c_doc: nova_r[c_doc] = envio.get("documento", "") or ""
+                        if c_val: nova_r[c_val] = env_val_abs
+                        if c_conc: nova_r[c_conc] = "Sim"
+                        if c_rd: nova_r[c_rd] = "Receita"
+                        if c_dt: nova_r[c_dt] = _hoje
+                        if c_hist: nova_r[c_hist] = env_hist_rec
+                        nova_r[c_num] = num_desse
+                        novas_env_linhas.append(nova_r)
 
         if novas_env_linhas:
             raw = pd.concat([raw, pd.DataFrame(novas_env_linhas)], ignore_index=True)
