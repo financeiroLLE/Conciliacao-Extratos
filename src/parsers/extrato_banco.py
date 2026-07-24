@@ -47,6 +47,13 @@ def _mapear_colunas(df: pd.DataFrame) -> dict[str, str]:
         "credito": ["credito", "creditor", "creditors", "credit"],
         "debito": ["debito", "debitor", "debitors", "debit"],
         "saldo": ["saldo", "saldor", "saldors"],
+        # v5.79: extratos onde o Valor vem POSITIVO em uma coluna e o SINAL
+        # (C/D) em outra coluna separada. Caso real: Banco do Brasil (coluna
+        # "Inf." tem "C" para crédito ou "D" para débito). Sem detectar essa
+        # coluna, todos os débitos viravam créditos e nada casava com o Sankhya
+        # (histórico "Importação Pucomex" +R$ 78.989,37 no banco batendo com
+        # "KINGLINE INVESTMENT LIMITED" -R$ 78.989,37 no Sankhya).
+        "cd_flag": ["inf", "info", "cd", "informacao", "tipo", "dc", "sinal"],
     }
     encontrados: dict[str, str] = {}
     for col_real in df.columns:
@@ -72,6 +79,8 @@ def _detectar_linha_cabecalho(df: pd.DataFrame, max_linhas: int = 20) -> int | N
         "credito", "creditor", "creditors", "credit",
         "debito", "debitor", "debitors", "debit",
         "saldo", "saldor", "saldors",
+        # v5.79: inclui os candidatos a coluna de sinal (C/D)
+        "inf", "info", "cd", "informacao", "tipo", "dc", "sinal",
     }
     n = min(len(df), max_linhas)
     for i in range(n):
@@ -220,6 +229,8 @@ def carregar_extrato_banco(
     v5.31: detecta o BANCO pelo cabeçalho — Itaú vai pro parser dedicado;
     Sicredi/Bradesco/Caixa (e desconhecidos) vão pro leitor genérico.
     XLS/XLSX seguem o caminho normal.
+    v5.79: quando existe uma coluna de sinal (C/D) separada do valor (caso do
+    Banco do Brasil com coluna "Inf."), aplica o sinal correto (D = negativo).
     """
     if _eh_pdf(arquivo):
         from .extrato_pdf_generico import (
@@ -322,6 +333,22 @@ def carregar_extrato_banco(
         # (crédito soma, débito subtrai) para não depender de como o banco assina.
         if "valor" in mapa:
             out["valor"] = df_aba[mapa["valor"]].apply(_parse_valor_brl)
+            # v5.79: se existe coluna de sinal separada (ex.: "Inf." do BB com
+            # "C"/"D"), aplica o sinal. O valor bruto do BB é POSITIVO — só o
+            # C/D identifica se é crédito ou débito.
+            if "cd_flag" in mapa:
+                _sinal_raw = df_aba[mapa["cd_flag"]].astype(str).str.strip().str.upper()
+                _val_abs = out["valor"].abs()
+                # D = débito (negativo); C ou vazio = mantém como positivo
+                _eh_debito = _sinal_raw == "D"
+                _eh_credito = _sinal_raw == "C"
+                # Só aplica se a coluna tem CONTEÚDO REAL de C/D em pelo menos
+                # algumas linhas — evita virar tudo positivo em extratos que
+                # bateram por acaso em "Inf." (ex.: uma coluna qualquer chamada
+                # "Info" sem C/D).
+                if _eh_debito.any() or _eh_credito.any():
+                    out.loc[_eh_debito, "valor"] = -_val_abs[_eh_debito]
+                    out.loc[_eh_credito, "valor"] = _val_abs[_eh_credito]
         else:
             cred = df_aba[mapa["credito"]].apply(_parse_valor_brl).abs() if "credito" in mapa else 0.0
             deb = df_aba[mapa["debito"]].apply(_parse_valor_brl).abs() if "debito" in mapa else 0.0
