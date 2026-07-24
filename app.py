@@ -3860,21 +3860,15 @@ def tela_upload():
     # botão "▶️ Executar conciliação".
     _forcar_conciliar = st.session_state.pop("_disparar_conciliacao", False)
 
-    # v5.81: mecanismo robusto — se o override tem UM ID (baseado em nome+tamanho
-    # dos arquivos) DIFERENTE do último processado, força rodar. Isso resolve o
-    # problema em que a flag `_disparar_conciliacao` era consumida sem re-rodar
-    # a conciliação (a Débora clicava em Aplicar e os cards não atualizavam).
-    _override_bytes = st.session_state.get("_sistema_override_bytes")
-    _override_id = None
-    if _override_bytes:
-        try:
-            _override_id = "|".join(f"{nm}:{len(bts)}" for nm, bts in _override_bytes)
-        except Exception:
-            _override_id = "override"
-    _override_processado_id = st.session_state.get("_override_processado_id")
-    _precisa_rodar_override = (
-        _override_id is not None and _override_id != _override_processado_id
-    )
+    # v5.82: mecanismo mais robusto — CONTADOR INCREMENTAL que aumenta a cada
+    # clique em "Aplicar e recalcular". A conciliação roda enquanto o
+    # contador atual for maior que o "processado". Vantagens sobre o hash:
+    # (a) sempre dispara, mesmo se re-subir o mesmo arquivo;
+    # (b) simples de auditar (é só um número);
+    # (c) não depende do session_state ser limpo antes.
+    _override_versao = int(st.session_state.get("_override_versao", 0))
+    _override_versao_processada = int(st.session_state.get("_override_versao_processada", -1))
+    _precisa_rodar_override = _override_versao > _override_versao_processada
 
     if st.button(
         "▶️ Executar conciliação",
@@ -3882,12 +3876,9 @@ def tela_upload():
         disabled=not pode_executar,
         use_container_width=True,
     ) or (_forcar_conciliar and pode_executar) or (_precisa_rodar_override and pode_executar):
-        # v5.81: marca o override como processado LOGO ao entrar, pra evitar
-        # loop de re-execução no próximo rerun (o override continua no
-        # session_state; sem essa marca, entraria de novo pela condição
-        # `_precisa_rodar_override`).
-        if _override_id:
-            st.session_state["_override_processado_id"] = _override_id
+        # v5.82: marca a versão como processada LOGO ao entrar, pra evitar
+        # loop de re-execução no próximo rerun.
+        st.session_state["_override_versao_processada"] = _override_versao
         with st.spinner("Processando... isso pode levar alguns segundos."):
             try:
                 dfs_banco = []
@@ -4642,8 +4633,12 @@ def _render_botao_atualizar_sankhya():
                     st.cache_data.clear()
                 except Exception:
                     pass
-                # Dispara a re-execução automaticamente
-                st.session_state["_disparar_conciliacao"] = True
+                # v5.82: incrementa o contador — força a próxima iteração a
+                # ver que _override_versao > _override_versao_processada e
+                # disparar a conciliação. Simples e à prova de flags perdidas.
+                st.session_state["_override_versao"] = int(
+                    st.session_state.get("_override_versao", 0)
+                ) + 1
                 st.success("✓ Aplicando novo Sankhya e recalculando…")
                 st.rerun()
 
