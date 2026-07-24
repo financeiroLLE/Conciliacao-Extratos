@@ -7552,6 +7552,17 @@ def _render_conta70_casamento_numeracao():
 
     # prepara ESTEIRA + filtros (fora do form, pra os filtros reagirem na hora)
     est = esteira.copy()
+
+    # v5.88: linhas JÁ CONFIRMADAS pela usuária somem da esteira até serem
+    # aplicadas na Capa via "Gerar capa atualizada". Pedido da Débora: depois
+    # de marcar+confirmar, aquelas linhas não devem mais aparecer misturadas
+    # com as pendentes — só as "ainda não confirmadas" ficam visíveis.
+    _confirmados_ids = set(st.session_state.get("c70_confirmados_num", {}).keys())
+    if _confirmados_ids and not est.empty:
+        est = est[~est.index.isin(_confirmados_ids)].reset_index(drop=False).rename(columns={"index": "_idx_orig"})
+        # mantém o índice original pra ainda casar com o `d` no confirmar
+        est = est.set_index("_idx_orig")
+
     vis2 = None
     if est.empty:
         st.caption("Esteira: nenhuma pendência aberta no momento. 🎉")
