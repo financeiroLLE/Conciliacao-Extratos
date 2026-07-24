@@ -201,11 +201,127 @@ def _casar_valor(dep_abs: float, notas: list[tuple[str, str, float]]):
 # ---------------------------------------------------------------------------
 def _norm_doc(d: Any) -> str:
     """Normaliza CPF/CNPJ p/ casar Capa (dígitos do histórico) × FIN (vem como
-    float, perde zeros à esquerda). <=11 -> CPF(11); senão -> CNPJ(14)."""
-    s = re.sub(r"\D", "", str(d if d is not None else "").split(".")[0])
+    float, perde zeros à esquerda). <=11 -> CPF(11); senão -> CNPJ(14).
+
+    v5.77 — cuidado: antes o split(".")[0] tratava float-como-string
+    ('12345678000123.0'), mas também quebrava CPF formatado ('036.153.547-37'
+    virava só '036'). Agora usa regex robusta: tira o '.0' de floats sem
+    afetar pontos do meio do CPF/CNPJ.
+    """
+    if d is None:
+        return ""
+    s = str(d).strip()
+    # Se veio como float ('123.0'), tira o '.0' final
+    s = re.sub(r"\.0+$", "", s)
+    # Tira todo caractere não-numérico
+    s = re.sub(r"\D", "", s)
     if not s:
         return ""
     return s.zfill(14) if len(s) > 11 else s.zfill(11)
+
+
+def construir_mapa_nomes_da_concb(concb_df: pd.DataFrame) -> dict[str, str]:
+    """v5.77 — Constrói dicionário {CPF/CNPJ normalizado: nome do parceiro}
+    a partir do histórico da Conciliação Bancária (Movimentação Bancária do
+    Sankhya). Usado pelo Mapa de Recebimentos pra mostrar o NOME do parceiro
+    ao lado do CPF/CNPJ (ex.: "036.153.547-37 · PATRICIO CARVALHO RIBEIRO").
+
+    Estratégia:
+      1. Para cada linha da ConcB, procura CPF (11d) ou CNPJ (14d) no histórico
+      2. Extrai o nome como o bloco alfabético mais "significativo" (múltiplas
+         palavras, sem tokens de banco/valor/data) que não seja o próprio doc
+      3. Agrega — se o mesmo doc aparece com nomes diferentes, escolhe o mais
+         frequente (majority vote)
+
+    Retorna dict vazio se concb_df estiver vazio ou sem coluna "historico".
+    Chaves usam o mesmo normalizador `_norm_doc` (14 dígitos p/ CNPJ, 11 p/ CPF).
+    """
+    if concb_df is None or concb_df.empty or "historico" not in concb_df.columns:
+        return {}
+
+    from collections import Counter as _C
+    votos: dict[str, _C] = {}
+
+    # Termos a ignorar (não são nomes de parceiro real)
+    _lixo_full = {
+        "DEP IDENT", "DEP N IDENT", "DEP NAO IDENT", "DEP NÃO IDENT", "DEP",
+        "SICREDI", "SANTANDER", "ITAU", "ITAU PISA", "BRADESCO", "CAIXA",
+        "PIX", "PIX RECEBIDO", "PIX ENVIADO", "TED", "DOC", "PARCIAL",
+        "RECEBIDO", "TRANSF PIX", "TRANSF PIX RECEBIDA", "REC",
+        "SISPAG FORNECEDORES", "SISPAG SALARIOS", "SISPAG",
+        "FORNECEDORES", "SALARIOS", "SALARIO",
+        "TARIFA", "TARIFAS", "RENTAB", "RESGATE", "APLICACAO", "APLICAÇÃO",
+        "CIELO", "GETNET", "PAGBANK", "PAGSEGURO", "REC LIQ",
+        "VENDA CARTAO DE CREDITO", "VENDA CARTAO", "CARTAO", "CREDITO", "DEBITO",
+        "BANCO BRADESCO", "BANCO BRADESCO S/A", "BANCO", "S/A",
+    }
+    _lixo_contains = ("SISPAG", "CARTAO", "BANCO ", "RENDIMENTOS", "RENTAB",
+                      "TARIFA CONCILIADOR", "CONCILIADOR")
+
+    for hist in concb_df["historico"].astype(str):
+        h = hist.strip()
+        if not h:
+            continue
+
+        # 1) Detecta CPF/CNPJ com pontuação flexível
+        doc_raw = ""
+        m_cnpj = re.search(r"(?<!\d)(\d{2}\.?\d{3}\.?\d{3}[/-]?\d{4}[-]?\d{2})(?!\d)", h)
+        m_cpf = re.search(r"(?<!\d)(\d{3}\.?\d{3}\.?\d{3}[-]?\d{2})(?!\d)", h)
+        if m_cnpj:
+            d = re.sub(r"[^\d]", "", m_cnpj.group(1))
+            if len(d) == 14:
+                doc_raw = d
+        if not doc_raw and m_cpf:
+            d = re.sub(r"[^\d]", "", m_cpf.group(1))
+            if len(d) == 11:
+                doc_raw = d
+        if not doc_raw:
+            continue  # sem doc, não indexamos
+
+        doc = _norm_doc(doc_raw)
+
+        # 2) Limpa histórico e quebra em partes
+        h_clean = h.replace('"', " ").replace("'", " ")
+        h_clean = re.sub(
+            r"\d{2,3}\.?\d{3}\.?\d{3}[/-]?\d{0,4}[-]?\d{0,2}", " ", h_clean
+        )
+        partes = re.split(r"[-\n]+|\s{2,}", h_clean)
+
+        candidatos = []
+        for p in partes:
+            p = p.strip().strip(",").strip(".").strip()
+            if not p:
+                continue
+            if re.match(r"^[\d\.,\-/\s]+$", p):
+                continue
+            if "R$" in p.upper():
+                continue
+            if re.match(r"^\d{1,2}[./]\d{1,2}([./]\d{2,4})?$", p):
+                continue
+            if not re.search(r"[A-ZÁÉÍÓÚÂÊÔÃÕÇa-záéíóúâêôãõç]{3,}", p):
+                continue
+            pu = p.upper().strip()
+            if pu in _lixo_full:
+                continue
+            if any(k in pu for k in _lixo_contains):
+                continue
+            # Remove tokens genéricos que ficaram grudados
+            p_clean = re.sub(
+                r"\b(PARCIAL|PIX|TED|DOC|DEP|IDENT|N\s+IDENT|NAO\s+IDENT|NÃO\s+IDENT)\b",
+                "", p, flags=re.IGNORECASE
+            ).strip()
+            if not p_clean or not re.search(r"[A-ZÁÉÍÓÚÂÊÔÃÕÇa-z]{3,}", p_clean):
+                continue
+            candidatos.append(p_clean)
+
+        if not candidatos:
+            continue
+
+        nomes_multi = [c for c in candidatos if len(c.split()) >= 2]
+        nome = max(nomes_multi, key=len) if nomes_multi else max(candidatos, key=len)
+        votos.setdefault(doc, _C())[nome.strip()] += 1
+
+    return {doc: c.most_common(1)[0][0] for doc, c in votos.items()}
 
 
 def arquivo_eh_parceiros(arquivo: Any) -> bool:
@@ -283,7 +399,20 @@ def construir_mapa(
     _parc = parceiros_cnpj or {}
 
     def _nome(dig, fallback=""):
-        return _parc.get(_norm_doc(dig)) or fallback
+        """v5.77 — Retorna 'CPF/CNPJ · NOME' quando o nome é conhecido (via
+        arquivo FIN de parceiros OU extraído do histórico da ConcB). Se só
+        tem CPF/CNPJ → retorna o fallback (que é o CPF/CNPJ formatado, como
+        antes). Se só tem nome — sem CPF/CNPJ, ex.: 'CLAUDIO SANTIAGO
+        MADUREIRA' no histórico — retorna o próprio nome do fallback.
+        """
+        nome_parc = _parc.get(_norm_doc(dig))
+        if not nome_parc:
+            return fallback  # comportamento antigo
+        # Tem nome. Se fallback é o CPF/CNPJ formatado, junta os dois.
+        fb = str(fallback or "").strip()
+        if fb and fb != nome_parc:
+            return f"{fb} · {nome_parc}"
+        return nome_parc
 
     notas_por_cnpj: dict[str, list[tuple[str, str, float]]] = {}
     if faturamento is not None and not faturamento.empty:
