@@ -5009,18 +5009,51 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
         '<div class="lle-kpi-suffix">lançamentos do ERP que o banco não confirmou</div>',
         classe=cor_div)
 
-    # v5.49: o card decompõe movimentação × investimentos — antes mostrava a
-    # soma total dos pares (com aplicações/resgates) ao lado de um "movimentado"
-    # que exclui investimentos, e parecia que conferiu mais do que movimentou.
-    _conf_mov = float(k.get("total_conciliado_movimentacao", k["total_conciliado"]))
-    _conf_inv = float(k.get("total_conciliado_investimentos", 0.0))
-    _suf_conf = ("movimentação em pares" if _conf_inv < 0.01 else
-                 "movimentação em pares · + " + fmt_brl(_conf_inv) + " de investimentos casados")
+    # v5.76: card CONCILIAÇÃO com desmembramento (Opção C aprovada com Débora).
+    # Antes o card "Total Conciliado" mostrava só o valor par-a-par (movimentação
+    # + investimentos casados 1-a-1 via match_exato), sem contar o que foi
+    # casado em GRUPOS (cartão TOP 1722, boleto TOP 1702, folha, salários N→M,
+    # depósitos abertos 1→N). Resultado enganoso: no Bradesco Pisa 15-22/07
+    # aparecia R$ 139,90 conciliado (só a tarifa) enquanto R$ 284.828,32 de
+    # vendas Cielo ficavam invisíveis nesse card, embora conciliadas via grupo.
+    # Agora mostra o total real + desmembramento (pares × grupos + contagem).
+    _conf_par = float(k.get("total_conciliado", 0.0))
+    _qtd_par = int(k.get("qtd_conciliados", 0))
+    _conf_grp = float(k.get("valor_grupos_casados", 0.0))
+    _qtd_grp = int(k.get("qtd_linhas_grupos_casados", 0))
+    _conf_total = round(_conf_par + _conf_grp, 2)
+
+    # Monta o subtítulo em HTML (2 linhas com valores alinhados à direita)
+    _sub_linhas = ['<div class="lle-kpi-suffix" style="margin-top:6px;">Como conciliou:</div>']
+    if _qtd_par > 0 or _conf_par >= 0.005:
+        _rot_par = "1 par 1-a-1" if _qtd_par == 1 else f"{fmt_int(_qtd_par)} pares 1-a-1"
+        _sub_linhas.append(
+            '<div style="display:flex;justify-content:space-between;'
+            'padding:2px 0;font-size:12px;color:#8BA3C7;">'
+            f'<span>{_rot_par}</span>'
+            f'<b style="color:#cdd9f2;font-weight:600;">{fmt_brl(_conf_par)}</b></div>'
+        )
+    if _qtd_grp > 0 or _conf_grp >= 0.005:
+        _rot_grp = "1 grupo" if _qtd_grp == 1 else f"{fmt_int(_qtd_grp)} linhas em grupos"
+        _sub_linhas.append(
+            '<div style="display:flex;justify-content:space-between;'
+            'padding:2px 0;font-size:12px;color:#8BA3C7;">'
+            f'<span>{_rot_grp}</span>'
+            f'<b style="color:#cdd9f2;font-weight:600;">{fmt_brl(_conf_grp)}</b></div>'
+        )
+    if len(_sub_linhas) == 1:  # nada casado
+        _sub_linhas.append(
+            '<div style="font-size:12px;color:#8BA3C7;padding:2px 0;">nada casado</div>'
+        )
+    _card_conc = card_kpi_html(
+        "Conciliação", fmt_brl(_conf_total),
+        "\n".join(_sub_linhas), classe="destaque-verde"
+    )
+
     cards2 = [
         card_banco_sem_exp,
         card_sankhya_sem_conf,
-        card_kpi("Total Conciliado", fmt_brl(_conf_mov),
-                 _suf_conf, classe="destaque-verde"),
+        _card_conc,
     ]
     render_cards(cards2)
 
