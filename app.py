@@ -7551,29 +7551,14 @@ def _render_conta70_casamento_numeracao():
                         })
 
     # prepara ESTEIRA + filtros (fora do form, pra os filtros reagirem na hora)
-    est_full = esteira.copy()
-
-    # v5.86: separa a esteira principal (despesas sem número, comportamento
-    # esperado) das RECEITAS ÓRFÃS (receitas sem número na Capa, que são
-    # anomalia — a Débora apontou que uma receita na Capa deveria SEMPRE ter
-    # número, sendo par da despesa identificada). Mostramos elas em bloco
-    # dedicado abaixo pra investigar/tratar separadamente.
-    if not est_full.empty:
-        _rd_full = est_full["receita_despesa"].astype(str).str.upper()
-        _mask_desp_full = _rd_full.str.contains("DESPESA", na=False)
-        est = est_full[_mask_desp_full].reset_index(drop=True)
-        est_receitas_orfas = est_full[~_mask_desp_full].reset_index(drop=True)
-    else:
-        est = est_full
-        est_receitas_orfas = est_full.iloc[0:0]
-
+    est = esteira.copy()
     vis2 = None
     if est.empty:
-        st.caption("Esteira: nenhuma despesa pendente no momento. 🎉")
+        st.caption("Esteira: nenhuma pendência aberta no momento. 🎉")
     else:
         contagem = est["diagnostico"].value_counts()
         chips = " &nbsp;·&nbsp; ".join(f"<b>{nome}:</b> {qtd}" for nome, qtd in contagem.items())
-        st.markdown("**Esteira — despesas pendentes de atrelamento.** Valor negativo = saída (débito).")
+        st.markdown("**Esteira — pendências abertas.** Valor negativo = despesa (saída); positivo = receita (entrada).")
         st.markdown(f"<div style='color:#9fb3d6;font-size:13px;margin:2px 0 8px'>{chips}</div>", unsafe_allow_html=True)
         with st.container(key="c70filtros"):
             st.markdown(
@@ -7663,11 +7648,18 @@ def _render_conta70_casamento_numeracao():
         st.caption(f"{len(view)} de {len(est)} pendentes")
         _rdv = view["receita_despesa"].astype(str).str.upper()
         valor_sinal = view["valor"].abs() * _rdv.map(lambda x: -1 if "DESPESA" in x else 1)
+        # v5.87: coluna "Anomalia?" — marca as receitas sem número na Capa,
+        # que são anomalia conceitual (receita na Capa deveria SEMPRE ter
+        # número, sendo par de uma despesa identificada). Facilita ver quais
+        # lançamentos precisam investigação especial no atrelamento.
+        _eh_receita = _rdv.map(lambda x: "DESPESA" not in x)
+        _anomalia = ["⚠️ sem par" if r else "" for r in _eh_receita]
         vis2 = pd.DataFrame({
             "Atrelar": False,
             "Data": pd.to_datetime(view["data"], errors="coerce"),
             "Banco": view["banco"].values,
             "R/D": _rdv.map(lambda x: "Despesa" if "DESPESA" in x else "Receita").values,
+            "Anomalia?": _anomalia,
             "Histórico": view["historico"].astype(str).str.slice(0, 44).values,
             "Valor": [_brl(v) for v in valor_sinal],
             "Dias": view["dias"].values,
@@ -7700,43 +7692,6 @@ def _render_conta70_casamento_numeracao():
                 disabled=[c for c in vis2.columns if c != "Atrelar"],
             )
         submitted = st.form_submit_button("✅ Confirmar selecionados", type="primary")
-
-    # v5.86: bloco de RECEITAS ÓRFÃS — receitas na Capa sem número (anomalia).
-    # Conceito da Débora: uma receita na Capa DEVE ter número (é o par de uma
-    # despesa identificada). Se aparece sem número, é lançamento órfão que
-    # precisa investigação — não deveria ficar misturado com a esteira normal.
-    if not est_receitas_orfas.empty:
-        n_orfas = len(est_receitas_orfas)
-        with st.expander(
-            f"⚠️ {n_orfas} receita(s) sem número — precisa investigar",
-            expanded=False,
-        ):
-            st.caption(
-                "Receita na Capa DEVE ter número (é par da despesa identificada). "
-                "Estas apareceram sem número — pode ser lançamento manual antigo, "
-                "erro no ERP, ou receita que deveria estar atrelada a alguma despesa. "
-                "Confira uma a uma antes de tomar decisão."
-            )
-            _vor = est_receitas_orfas.copy()
-            _vor_val = pd.to_numeric(_vor["valor"], errors="coerce").fillna(0.0).abs()
-            tabela_orfas = pd.DataFrame({
-                "Data": pd.to_datetime(_vor["data"], errors="coerce"),
-                "Banco": _vor["banco"].values,
-                "Histórico": _vor["historico"].astype(str).str.slice(0, 60).values,
-                "Valor": [_brl(v) for v in _vor_val],
-                "Dias": _vor["dias"].values,
-                "Diagnóstico": _vor["diagnostico"].values,
-            })
-            st.dataframe(
-                tabela_orfas,
-                hide_index=True,
-                use_container_width=True,
-                column_config={
-                    "Data": st.column_config.DateColumn("Data", format="DD/MM/YYYY"),
-                    "Dias": st.column_config.NumberColumn("Dias", format="%d"),
-                },
-                height=min(240, 60 + 34 * min(n_orfas, 6)),
-            )
 
     if submitted:
         # coleta os índices marcados (sugeridos + esteira)
