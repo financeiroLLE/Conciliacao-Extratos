@@ -5642,8 +5642,8 @@ def render_tab_pendentes(resultado: ResultadoConciliacao, conta: str):
             st.session_state[chave_sel] = set()  # limpa seleção
             st.success(
                 f"✅ {n_novos} pendência(s) enviada(s) pra Conta 70. Vá em **Conta 70 → Atrelamento e Numeração** "
-                "e clique em **Gerar capa atualizada** — elas vão aparecer na Capa como despesa sem número, "
-                "prontas pra numerar pela esteira."
+                "e clique em **Gerar capa atualizada** — o app vai criar o par (despesa `DEP N IDENT` + receita "
+                "espelho `DEP IDENT` com data de hoje) com número novo da sequência da Capa."
             )
             st.rerun()
 
@@ -7442,21 +7442,15 @@ def _render_conta70_casamento_numeracao():
         # ela). Regra da Débora do PROJETO CONCILIAÇÃO 5: "receita e despesa da
         # mesma operação recebem o mesmo número".
         #
-        # v5.71.2: quando NÃO acha o par em `d` (caso do PIX identificado
-        # manualmente: despesa "DEP N IDENT" na Capa e a receita ainda não
-        # existe em lugar nenhum), o app CRIA uma linha ESPELHO sintética de
-        # receita com:
-        #   • Data = HOJE (data em que a confirmação está sendo feita)
-        #   • Valor = |despesa|, sinal POSITIVO
-        #   • R/D = Receita
-        #   • Histórico = mesmo texto, trocando "DEP N IDENT" por "DEP IDENT"
-        #   • Mesmo número da despesa
-        # Essa linha entra em `d`; o gerar_capa_acumulada depois adiciona ela
-        # na Capa (como já faz com linhas novas).
+        # v5.73: quando NÃO acha o par em `d` (caso do "DEP N IDENT" que a
+        # Débora identificou manualmente sem que a receita ainda esteja em
+        # nenhum arquivo), registra a intenção em session_state persistente —
+        # o gerar_capa_acumulada abaixo processa esses "envios manuais" e cria
+        # o par receita+despesa numerado na Capa, sem depender de `d` (que é
+        # recalculado a cada rerun e perderia a linha se fosse criada só ali).
         import re as _re_hist
         _pares_derivados = 0
         _pares_espelho = 0
-        _hoje = pd.Timestamp.today().normalize()
         for idx in list(conf.keys()):
             ident = str(d.at[idx, "identidade"])
             valor_abs = round(abs(float(d.at[idx, "valor"])), 2)
@@ -7483,35 +7477,24 @@ def _render_conta70_casamento_numeracao():
                     _pares_derivados += 1
                     achou_par = True
 
-            # v5.71.2 — não achou par → cria linha ESPELHO sintética.
-            # Só faz sentido para DESPESA confirmada manualmente (o caso comum:
-            # "essa despesa foi baixada, cria a receita correspondente na
-            # Capa"). Para receita sem par, deixa como está (não força criação
-            # de despesa espelho — cenário raro e mais arriscado).
+            # v5.73 — não achou par em `d` E é despesa → registra envio persistente
+            # (mesmo formato do "Enviar pra Conta 70" da pendência) para o
+            # gerar_capa_acumulada criar a receita espelho no momento certo.
             if not achou_par and lado_atual == "entrada":
                 linha_origem = d.loc[idx]
                 hist_orig = str(linha_origem.get("historico", "") or "")
-                # substitui "DEP N IDENT" (com variações de espaço) por "DEP IDENT"
-                hist_novo = _re_hist.sub(
-                    r'DEP\s*N\s+IDENT', 'DEP IDENT', hist_orig, flags=_re_hist.IGNORECASE
-                )
-                # também variação "DEP NAO IDENT" / "DEP NÃO IDENT"
-                hist_novo = _re_hist.sub(
-                    r'DEP\s+N[AÃ]?O?\s+IDENT', 'DEP IDENT', hist_novo, flags=_re_hist.IGNORECASE
-                )
-                nova_linha = {c: linha_origem.get(c) for c in d.columns}
-                nova_linha["data"] = _hoje
-                nova_linha["valor"] = valor_abs  # positivo
-                nova_linha["receita_despesa"] = "Receita"
-                nova_linha["lado"] = "baixa"
-                nova_linha["historico"] = hist_novo
-                nova_linha["numero_final"] = num_desse
-                nova_linha["situacao"] = "Atrelado (espelho)"
-                nova_linha["motivo"] = "Receita espelho criada na confirmação manual"
-                idx_novo = (d.index.max() + 1) if len(d) else 0
-                d.loc[idx_novo] = nova_linha
-                conf[idx_novo] = num_desse
-                conf_nota[idx_novo] = None
+                envios_manuais = st.session_state.get("c70_envios_pendencias", [])
+                envios_manuais.append({
+                    "origem_confirmacao": "esteira",
+                    "data": linha_origem.get("data"),
+                    "valor_original": abs(float(linha_origem.get("valor", 0))),
+                    "historico_original": hist_orig,
+                    "documento": str(linha_origem.get("num_documento", "") or ""),
+                    "tipo_movimento": str(linha_origem.get("tipo_movimento", "") or ""),
+                    "conta": str(linha_origem.get("conta", "") or ""),
+                    "numero_hint": num_desse,  # o gerar_capa vai preferir esse número
+                })
+                st.session_state["c70_envios_pendencias"] = envios_manuais
                 _pares_espelho += 1
 
         st.session_state["c70_confirmados_num"] = conf
@@ -7617,6 +7600,10 @@ def _render_conta70_casamento_numeracao():
                             ws[f"{_ld}{row}"].number_format = "DD/MM/YYYY"
             st.session_state["c70_capa_bytes"] = buf.getvalue()
             st.session_state["c70_capa_info"] = (len(capa_out), preenchidos, n_novos - preenchidos)
+            # v5.73: envios manuais foram aplicados na Capa gerada — limpa a fila pra
+            # não duplicar em execuções futuras (a Capa gerada agora é a fonte de verdade).
+            if st.session_state.get("c70_envios_pendencias"):
+                st.session_state["c70_envios_pendencias"] = []
         except Exception as e:
             st.error(f"Não consegui montar a capa: {e}")
 
