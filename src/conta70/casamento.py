@@ -207,6 +207,16 @@ def carregar_movimento(arquivo: Any) -> pd.DataFrame:
     c_dt = col("Dt. Lançamento", "Data")
     c_hist = col("Histórico", "Historico")
     c_uni = col("Núm. Único Bancário", "Num. Unico Bancario")
+    # v5.77.3: coluna do parceiro na Conciliação Bancária (Sankhya). O export
+    # do Sankhya inclui essa coluna que traz o Nome do parceiro da baixa —
+    # muito mais confiável que extrair do histórico (que às vezes só tem
+    # "DEP IDENT - CPF - BANCO" sem nome). O mapa_recebimentos.py usa isso
+    # como fonte primária pra o dicionário CPF/CNPJ → nome.
+    c_parc = col(
+        "Nome Parceiro", "Parceiro", "Nome do Parceiro",
+        "Cliente", "Cliente/Fornecedor", "Razão Social", "Razao Social",
+        "Nome do Cliente",
+    )
 
     # A numeração da Capa é uma coluna EXTRA depois do Histórico (cabeçalho vazio,
     # "x" ou "unnamed"). O export do Sankhya também tem colunas depois do Histórico
@@ -242,6 +252,8 @@ def carregar_movimento(arquivo: Any) -> pd.DataFrame:
     # v5.13: numeração como texto (aceita alfanumérico, ex.: "686a") — não perde
     # linhas já numeradas com letra. '' = em aberto.
     out["numero_txt"] = df[c_num].map(_fmt_numero_txt) if c_num else ""
+    # v5.77.3: parceiro (Nome do parceiro da baixa no Sankhya)
+    out["parceiro"] = df[c_parc].astype(str).str.strip() if c_parc else ""
 
     out = out.dropna(subset=["valor"]).reset_index(drop=True)
     out["identidade"] = out["historico"].map(extrair_identidade)
