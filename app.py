@@ -455,6 +455,14 @@ h1, h2, h3, h4, h5, h6, p, span, div, label {{ color: {CORES["branco"]}; }}
     width: 100% !important;
     transition: all 0.18s ease !important;
 }}
+/* v6.0.7: força cor do texto interno dos botões (p, span, div) — sem isso
+   o Streamlit renderiza o texto em cinza/transparente sobre o creme. */
+[data-testid="stSidebar"] .stButton > button p,
+[data-testid="stSidebar"] .stButton > button span,
+[data-testid="stSidebar"] .stButton > button div {{
+    color: {CORES["azul_escuro"]} !important;
+    -webkit-text-fill-color: {CORES["azul_escuro"]} !important;
+}}
 [data-testid="stSidebar"] .stButton > button:hover {{
     background-color: {CORES["azul_escuro"]} !important;
     color: {CORES["amarelo"]} !important;
@@ -1476,6 +1484,10 @@ with st.sidebar:
             """
         )
 
+    # v6.0.7: card do usuário APÓS o institucional (ordem aprovada Débora)
+    from auth import render_sidebar_usuario  # noqa: E402
+    render_sidebar_usuario(_nome_logado or "", _usuario_logado or "")
+
     # v6.0.7: título de seção (padrão aprovado pela Débora)
     st.html("<div class='lle-menu-section'>📊 OPERAÇÃO</div>")
 
@@ -1535,7 +1547,7 @@ with st.sidebar:
     # Restante das páginas principais
     paginas_bot = [
         ("📂 Histórico", "Histórico"),
-        ("🟢 Sobre", "Sobre"),
+        ("ℹ️ Sobre", "Sobre"),
     ]
     for label, key in paginas_bot:
         is_atual = st.session_state.pagina == key
