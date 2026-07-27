@@ -464,41 +464,34 @@ h1, h2, h3, h4, h5, h6, p, span, div, label {{ color: {CORES["branco"]}; }}
     align-items: center !important;
     list-style: none !important;
 }}
-/* v6.0.12: esconder seta padrão do Streamlit (que fica à esquerda) —
-   várias formas possíveis dependendo da versão do Streamlit. */
+/* v6.0.13: em vez de tentar ESCONDER a seta do Streamlit (que insiste em
+   aparecer com nomes diferentes por versão), vou REPOSICIONAR ela pra
+   direita (via flexbox order) e ROTACIONAR pra apontar pra baixo (fechado)
+   ou pra cima (aberto). Assim uso a seta original sem lutar contra ela. */
 [data-testid="stSidebar"] [data-testid="stExpander"] summary {{
     list-style: none !important;
-    list-style-type: none !important;
 }}
 [data-testid="stSidebar"] [data-testid="stExpander"] summary::marker,
 [data-testid="stSidebar"] [data-testid="stExpander"] summary::-webkit-details-marker {{
     display: none !important;
-    content: none !important;
 }}
+/* Move a seta (SVG ou qualquer ícone) pra direita e rotaciona pra baixo */
 [data-testid="stSidebar"] [data-testid="stExpander"] summary svg,
-[data-testid="stSidebar"] [data-testid="stExpander"] summary > svg,
-[data-testid="stSidebar"] [data-testid="stExpander"] summary > *:first-child > svg,
-[data-testid="stSidebar"] [data-testid="stExpanderToggleIcon"],
-[data-testid="stSidebar"] [data-testid="stExpander"] summary [data-testid*="Toggle"],
-[data-testid="stSidebar"] [data-testid="stExpander"] summary [class*="Toggle"],
-[data-testid="stSidebar"] [data-testid="stExpander"] summary [class*="expandIcon"],
-[data-testid="stSidebar"] [data-testid="stExpander"] summary [class*="arrow"] {{
-    display: none !important;
-    width: 0 !important;
-    height: 0 !important;
-    visibility: hidden !important;
-    opacity: 0 !important;
-}}
-/* Adicionar seta customizada à DIREITA */
-[data-testid="stSidebar"] [data-testid="stExpander"] summary::after {{
-    content: "▾" !important;
+[data-testid="stSidebar"] [data-testid="stExpander"] summary > *:first-child:not(div):not(span):not(p),
+[data-testid="stSidebar"] [data-testid="stExpanderToggleIcon"] {{
+    order: 99 !important;
     margin-left: auto !important;
+    margin-right: 0 !important;
+    transform: rotate(90deg) !important;
+    transition: transform 0.2s ease !important;
     color: {CORES["azul_escuro"]} !important;
-    font-size: 14px !important;
-    font-weight: 700 !important;
+    fill: {CORES["azul_escuro"]} !important;
 }}
-[data-testid="stSidebar"] [data-testid="stExpander"] details[open] > summary::after {{
-    content: "▴" !important;
+/* Quando aberto: rotaciona pra cima (aponta pra topo) */
+[data-testid="stSidebar"] [data-testid="stExpander"] details[open] > summary svg,
+[data-testid="stSidebar"] [data-testid="stExpander"] details[open] > summary > *:first-child:not(div):not(span):not(p),
+[data-testid="stSidebar"] [data-testid="stExpander"] details[open] [data-testid="stExpanderToggleIcon"] {{
+    transform: rotate(-90deg) !important;
 }}
 [data-testid="stSidebar"] [data-testid="stExpander"] summary p,
 [data-testid="stSidebar"] [data-testid="stExpander"] summary span,
