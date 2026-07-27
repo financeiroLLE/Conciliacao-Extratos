@@ -191,48 +191,50 @@ _CSS_LOGIN = """
 
 _CSS_SIDEBAR_USER = """
 <style>
-/* Container do bloco de usuário na sidebar */
-.lle-user-block { padding: 8px 0 12px; }
-/* Opção B aprovada: fundo BRANCO + logo mini + faixa amarela lateral */
+/* v6.0.7 — card do usuário: silhueta + nome + botão Sair azul-navy pequeno.
+   Segue exatamente a referência visual aprovada pela Débora. */
+.lle-user-block {
+    padding: 4px 4px 14px;
+    margin-bottom: 6px;
+    border-bottom: 1px solid rgba(4,23,71,0.15);
+}
 .lle-user-header {
     display: flex; align-items: center; gap: 10px;
-    padding: 12px 14px;
-    background: #FFFFFF;
-    border-left: 4px solid #FAC318;
-    border-radius: 8px;
-    box-shadow: 0 2px 8px rgba(10,23,48,0.15);
     margin-bottom: 10px;
 }
-.lle-user-avatar-img {
-    width: 46px; height: auto;
+.lle-user-avatar-circle {
+    width: 34px; height: 34px;
+    background: #E5E5E5;
+    border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
     flex-shrink: 0;
-    display: block;
 }
+.lle-user-avatar-circle svg { display: block; }
 .lle-user-info { flex: 1; min-width: 0; }
 .lle-user-name {
     color: #0A1730; font-size: 13px; font-weight: 700;
-    line-height: 1.2; margin-bottom: 2px;
+    line-height: 1.2;
 }
-.lle-user-email {
-    color: rgba(10,23,48,0.65); font-size: 10px;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-}
-/* Estilizar o botão Sair na sidebar */
-[data-testid="stSidebar"] .stButton > button {
-    width: 100% !important;
+/* Botão Sair (usa container key="lle_sair" no Streamlit).
+   Sobrescreve o botão do streamlit-authenticator só neste container. */
+.st-key-lle_sair .stButton > button,
+.st-key-lle_sair button {
     background: #0A1730 !important;
-    color: #FFCC00 !important;
+    color: #FFFFFF !important;
     border: none !important;
+    padding: 6px 14px !important;
     border-radius: 6px !important;
     font-size: 11px !important;
-    font-weight: 700 !important;
-    padding: 9px 12px !important;
-    letter-spacing: 0.5px !important;
-    cursor: pointer !important;
-    transition: background 0.15s ease;
+    font-weight: 600 !important;
+    width: auto !important;
+    min-width: 80px !important;
+    text-align: center !important;
+    letter-spacing: 0.3px !important;
 }
-[data-testid="stSidebar"] .stButton > button:hover {
+.st-key-lle_sair .stButton > button:hover,
+.st-key-lle_sair button:hover {
     background: #142049 !important;
+    transform: none !important;
 }
 </style>
 """
@@ -357,15 +359,19 @@ def autenticar():
     with st.sidebar:
         st.markdown(_CSS_SIDEBAR_USER, unsafe_allow_html=True)
 
-        # Cabeçalho do usuário: logo real como avatar + nome + email
+        # v6.0.7 — silhueta em vez da logo (a logo já está no card institucional acima).
+        # Sem email pra ficar limpo. Botão Sair fica num container próprio.
         st.markdown(
             f"""
             <div class="lle-user-block">
               <div class="lle-user-header">
-                <img src="data:image/png;base64,{_LOGO_ICON_B64}" alt="LLE" class="lle-user-avatar-img"/>
+                <div class="lle-user-avatar-circle">
+                  <svg width="20" height="20" viewBox="0 0 24 24" fill="#0A1730">
+                    <path d="M12 12c2.7 0 4.9-2.2 4.9-4.9S14.7 2.2 12 2.2 7.1 4.4 7.1 7.1 9.3 12 12 12zm0 2.2c-3.3 0-9.8 1.6-9.8 4.9v2.7h19.6v-2.7c0-3.3-6.5-4.9-9.8-4.9z"/>
+                  </svg>
+                </div>
                 <div class="lle-user-info">
                   <div class="lle-user-name">{nome}</div>
-                  <div class="lle-user-email" title="{_email_logado}">{_email_logado}</div>
                 </div>
               </div>
             </div>
@@ -373,17 +379,17 @@ def autenticar():
             unsafe_allow_html=True,
         )
 
-        # Botão Sair direto (sem expander "Opções")
-        try:
-            autenticador.logout("🚪  SAIR", location="sidebar", key="btn_logout_lle")
-        except Exception:
-            if st.button(
-                "🚪  SAIR",
-                key="btn_logout_manual",
-                use_container_width=True,
-            ):
-                for k in ("authentication_status", "name", "username"):
-                    st.session_state.pop(k, None)
-                st.rerun()
+        # Botão Sair pequeno (container próprio pra escopar o CSS)
+        with st.container(key="lle_sair"):
+            try:
+                autenticador.logout("→  Sair", location="sidebar", key="btn_logout_lle")
+            except Exception:
+                if st.button(
+                    "→  Sair",
+                    key="btn_logout_manual",
+                ):
+                    for k in ("authentication_status", "name", "username"):
+                        st.session_state.pop(k, None)
+                    st.rerun()
 
     return nome, username
