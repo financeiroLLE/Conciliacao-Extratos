@@ -216,7 +216,9 @@ _CSS_SIDEBAR_USER = """
     line-height: 1.2;
 }
 /* Botão Sair (usa container key="lle_sair" no Streamlit).
-   Sobrescreve o botão do streamlit-authenticator só neste container. */
+   Sobrescreve o botão do streamlit-authenticator só neste container.
+   IMPORTANTE: cobrir todos os elementos internos (p, span, div) porque
+   o Streamlit envolve o texto em várias camadas. */
 .st-key-lle_sair .stButton > button,
 .st-key-lle_sair button {
     background: #0A1730 !important;
@@ -230,6 +232,15 @@ _CSS_SIDEBAR_USER = """
     min-width: 80px !important;
     text-align: center !important;
     letter-spacing: 0.3px !important;
+}
+.st-key-lle_sair .stButton > button p,
+.st-key-lle_sair .stButton > button span,
+.st-key-lle_sair .stButton > button div,
+.st-key-lle_sair button p,
+.st-key-lle_sair button span,
+.st-key-lle_sair button div {
+    color: #FFFFFF !important;
+    -webkit-text-fill-color: #FFFFFF !important;
 }
 .st-key-lle_sair .stButton > button:hover,
 .st-key-lle_sair button:hover {
@@ -356,40 +367,50 @@ def autenticar():
     except Exception:
         _email_logado = ""
 
-    with st.sidebar:
-        st.markdown(_CSS_SIDEBAR_USER, unsafe_allow_html=True)
-
-        # v6.0.7 — silhueta em vez da logo (a logo já está no card institucional acima).
-        # Sem email pra ficar limpo. Botão Sair fica num container próprio.
-        st.markdown(
-            f"""
-            <div class="lle-user-block">
-              <div class="lle-user-header">
-                <div class="lle-user-avatar-circle">
-                  <svg width="20" height="20" viewBox="0 0 24 24" fill="#0A1730">
-                    <path d="M12 12c2.7 0 4.9-2.2 4.9-4.9S14.7 2.2 12 2.2 7.1 4.4 7.1 7.1 9.3 12 12 12zm0 2.2c-3.3 0-9.8 1.6-9.8 4.9v2.7h19.6v-2.7c0-3.3-6.5-4.9-9.8-4.9z"/>
-                  </svg>
-                </div>
-                <div class="lle-user-info">
-                  <div class="lle-user-name">{nome}</div>
-                </div>
-              </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        # Botão Sair pequeno (container próprio pra escopar o CSS)
-        with st.container(key="lle_sair"):
-            try:
-                autenticador.logout("→  Sair", location="sidebar", key="btn_logout_lle")
-            except Exception:
-                if st.button(
-                    "→  Sair",
-                    key="btn_logout_manual",
-                ):
-                    for k in ("authentication_status", "name", "username"):
-                        st.session_state.pop(k, None)
-                    st.rerun()
-
+    # Autenticada — retorna nome/username. A renderização do card do usuário
+    # na sidebar é feita separadamente via render_sidebar_usuario() para o
+    # app.py poder controlar a ORDEM dos elementos (card institucional PRIMEIRO,
+    # depois card do usuário, depois menus).
     return nome, username
+
+
+def render_sidebar_usuario(nome: str, username: str = "") -> None:
+    """Renderiza o card do usuário na sidebar (silhueta + nome + botão Sair).
+    Deve ser chamada DENTRO de um bloco `with st.sidebar:` no app.py,
+    logo APÓS o card institucional GRUPO LLE e ANTES dos menus."""
+    st.markdown(_CSS_SIDEBAR_USER, unsafe_allow_html=True)
+
+    st.markdown(
+        f"""
+        <div class="lle-user-block">
+          <div class="lle-user-header">
+            <div class="lle-user-avatar-circle">
+              <svg width="20" height="20" viewBox="0 0 24 24" fill="#0A1730">
+                <path d="M12 12c2.7 0 4.9-2.2 4.9-4.9S14.7 2.2 12 2.2 7.1 4.4 7.1 7.1 9.3 12 12 12zm0 2.2c-3.3 0-9.8 1.6-9.8 4.9v2.7h19.6v-2.7c0-3.3-6.5-4.9-9.8-4.9z"/>
+              </svg>
+            </div>
+            <div class="lle-user-info">
+              <div class="lle-user-name">{nome}</div>
+            </div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # Botão Sair pequeno azul-navy — container próprio pra escopar CSS
+    with st.container(key="lle_sair"):
+        cfg = _config_do_secrets() or {}
+        try:
+            _autenticador = stauth.Authenticate(
+                credentials=cfg.get("credentials", {"usernames": {}}),
+                cookie_name=cfg.get("cookie_name", "conciliacao_lle_auth"),
+                cookie_key=cfg.get("cookie_key", "SEM_CHAVE"),
+                cookie_expiry_days=int(cfg.get("cookie_expiry_days", 1)),
+            )
+            _autenticador.logout("→  Sair", location="sidebar", key="btn_logout_lle")
+        except Exception:
+            if st.button("→  Sair", key="btn_logout_manual"):
+                for k in ("authentication_status", "name", "username"):
+                    st.session_state.pop(k, None)
+                st.rerun()
