@@ -58,12 +58,32 @@ _CSS_LOGIN = """
 
 .lle-login-wrap { max-width: 440px; margin: 0 auto; padding: 20px 0 10px; }
 .lle-login-header { text-align: center; margin-bottom: 24px; }
-.lle-login-header img {
-    max-width: 320px;
+.lle-login-header .lle-login-icon {
+    width: 88px;
     height: auto;
-    filter: drop-shadow(0 8px 24px rgba(255,204,0,0.15));
+    filter: drop-shadow(0 8px 16px rgba(0,0,0,0.4));
+    margin-bottom: 10px;
 }
-.lle-login-sub { color: #9fb3d6; font-size: 11px; margin-top: 12px; }
+.lle-login-brand {
+    display: flex;
+    justify-content: center;
+    align-items: baseline;
+    gap: 8px;
+    margin-top: 4px;
+}
+.lle-login-brand-grupo {
+    color: #9fb3d6;
+    font-size: 14px;
+    font-weight: 500;
+    letter-spacing: 3px;
+}
+.lle-login-brand-lle {
+    color: #FFCC00;
+    font-size: 20px;
+    font-weight: 800;
+    letter-spacing: 2px;
+}
+.lle-login-sub { color: #9fb3d6; font-size: 11px; margin-top: 8px; }
 .lle-login-acesso {
     color: #FFCC00; font-size: 10px; letter-spacing: 2.5px; font-weight: 800;
     text-align: center; margin-bottom: 6px;
@@ -166,15 +186,18 @@ _CSS_SIDEBAR_USER = """
 <style>
 /* Container do bloco de usuário na sidebar */
 .lle-user-block { padding: 8px 0 12px; }
+/* Opção B aprovada: fundo BRANCO + logo mini + faixa amarela lateral */
 .lle-user-header {
     display: flex; align-items: center; gap: 10px;
-    padding: 10px 12px;
-    background: rgba(10,23,48,0.10);
+    padding: 12px 14px;
+    background: #FFFFFF;
+    border-left: 4px solid #FAC318;
     border-radius: 8px;
+    box-shadow: 0 2px 8px rgba(10,23,48,0.15);
     margin-bottom: 10px;
 }
 .lle-user-avatar-img {
-    width: 44px; height: auto;
+    width: 40px; height: auto;
     flex-shrink: 0;
     display: block;
 }
@@ -184,7 +207,7 @@ _CSS_SIDEBAR_USER = """
     line-height: 1.2; margin-bottom: 2px;
 }
 .lle-user-email {
-    color: rgba(10,23,48,0.7); font-size: 10px;
+    color: rgba(10,23,48,0.65); font-size: 10px;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
 /* Estilizar o botão Sair na sidebar */
@@ -263,7 +286,11 @@ def autenticar():
             f"""
             <div class="lle-login-wrap">
               <div class="lle-login-header">
-                <img src="data:image/png;base64,{_LOGO_FULL_B64}" alt="Grupo LLE" />
+                <img src="data:image/png;base64,{_LOGO_ICON_B64}" alt="Grupo LLE" class="lle-login-icon" />
+                <div class="lle-login-brand">
+                  <span class="lle-login-brand-grupo">GRUPO</span>
+                  <span class="lle-login-brand-lle">LLE</span>
+                </div>
                 <div class="lle-login-sub">Conciliação Bancária · v6.0</div>
               </div>
               <div class="lle-login-acesso">◆ ACESSO ◆</div>
