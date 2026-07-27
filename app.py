@@ -460,6 +460,26 @@ h1, h2, h3, h4, h5, h6, p, span, div, label {{ color: {CORES["branco"]}; }}
     font-weight: 500 !important;
     font-size: 14px !important;
     border-radius: 10px !important;
+    display: flex !important;
+    align-items: center !important;
+    list-style: none !important;
+}}
+/* v6.0.11: esconder seta padrão do Streamlit (que fica à esquerda) e
+   adicionar seta customizada à DIREITA — apontando pra baixo quando
+   fechado, pra cima quando aberto. */
+[data-testid="stSidebar"] [data-testid="stExpander"] summary svg,
+[data-testid="stSidebar"] [data-testid="stExpander"] summary::-webkit-details-marker {{
+    display: none !important;
+}}
+[data-testid="stSidebar"] [data-testid="stExpander"] summary::after {{
+    content: "▾" !important;
+    margin-left: auto !important;
+    color: {CORES["azul_escuro"]} !important;
+    font-size: 14px !important;
+    font-weight: 700 !important;
+}}
+[data-testid="stSidebar"] [data-testid="stExpander"] details[open] > summary::after {{
+    content: "▴" !important;
 }}
 [data-testid="stSidebar"] [data-testid="stExpander"] summary p,
 [data-testid="stSidebar"] [data-testid="stExpander"] summary span,
