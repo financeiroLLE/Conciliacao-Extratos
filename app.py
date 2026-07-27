@@ -292,6 +292,16 @@ st.set_page_config(
 
 
 # ============================================================
+# Autenticação (v6.0) — bloqueia o app até login válido
+# ============================================================
+from auth import autenticar  # noqa: E402
+
+_nome_logado, _usuario_logado = autenticar()
+# Daqui em diante o app só roda se a usuária estiver autenticada
+# (autenticar() chama st.stop() nos outros casos).
+
+
+# ============================================================
 # Estado de sessão
 # ============================================================
 if "pagina" not in st.session_state:
