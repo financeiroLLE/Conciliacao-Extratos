@@ -464,13 +464,32 @@ h1, h2, h3, h4, h5, h6, p, span, div, label {{ color: {CORES["branco"]}; }}
     align-items: center !important;
     list-style: none !important;
 }}
-/* v6.0.11: esconder seta padrão do Streamlit (que fica à esquerda) e
-   adicionar seta customizada à DIREITA — apontando pra baixo quando
-   fechado, pra cima quando aberto. */
-[data-testid="stSidebar"] [data-testid="stExpander"] summary svg,
+/* v6.0.12: esconder seta padrão do Streamlit (que fica à esquerda) —
+   várias formas possíveis dependendo da versão do Streamlit. */
+[data-testid="stSidebar"] [data-testid="stExpander"] summary {{
+    list-style: none !important;
+    list-style-type: none !important;
+}}
+[data-testid="stSidebar"] [data-testid="stExpander"] summary::marker,
 [data-testid="stSidebar"] [data-testid="stExpander"] summary::-webkit-details-marker {{
     display: none !important;
+    content: none !important;
 }}
+[data-testid="stSidebar"] [data-testid="stExpander"] summary svg,
+[data-testid="stSidebar"] [data-testid="stExpander"] summary > svg,
+[data-testid="stSidebar"] [data-testid="stExpander"] summary > *:first-child > svg,
+[data-testid="stSidebar"] [data-testid="stExpanderToggleIcon"],
+[data-testid="stSidebar"] [data-testid="stExpander"] summary [data-testid*="Toggle"],
+[data-testid="stSidebar"] [data-testid="stExpander"] summary [class*="Toggle"],
+[data-testid="stSidebar"] [data-testid="stExpander"] summary [class*="expandIcon"],
+[data-testid="stSidebar"] [data-testid="stExpander"] summary [class*="arrow"] {{
+    display: none !important;
+    width: 0 !important;
+    height: 0 !important;
+    visibility: hidden !important;
+    opacity: 0 !important;
+}}
+/* Adicionar seta customizada à DIREITA */
 [data-testid="stSidebar"] [data-testid="stExpander"] summary::after {{
     content: "▾" !important;
     margin-left: auto !important;
