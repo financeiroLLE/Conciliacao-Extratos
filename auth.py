@@ -271,18 +271,128 @@ def autenticar() -> tuple[str | None, str | None]:
 
     nome = st.session_state.get("name") or ""
     username = st.session_state.get("username") or ""
+
+    # Descobre o email da usuária logada (do st.secrets)
+    _email_logado = ""
+    try:
+        _user_data = cfg.get("credentials", {}).get("usernames", {}).get(username, {})
+        _email_logado = _user_data.get("email", "")
+    except Exception:
+        _email_logado = ""
+
+    # CSS pra estilizar o menu de usuário na sidebar (Opção 3 aprovada Débora)
+    _CSS_SIDEBAR_USER = """
+    <style>
+    /* Container do expander do usuário */
+    .lle-user-block { padding: 8px 0 12px; }
+    .lle-user-header {
+        display: flex; align-items: center; gap: 10px;
+        padding: 10px 12px;
+        background: rgba(10,23,48,0.10);
+        border-radius: 8px;
+        margin-bottom: 4px;
+    }
+    .lle-user-avatar {
+        width: 32px; height: 32px;
+        background: linear-gradient(135deg,#0A1730 0%,#1a2d5e 100%);
+        border-radius: 50%;
+        display: flex; align-items: center; justify-content: center;
+        color: #FFCC00; font-size: 13px; font-weight: 800;
+        flex-shrink: 0;
+    }
+    .lle-user-info { flex: 1; min-width: 0; }
+    .lle-user-name {
+        color: #0A1730; font-size: 13px; font-weight: 700;
+        line-height: 1.2; margin-bottom: 2px;
+    }
+    .lle-user-email {
+        color: rgba(10,23,48,0.7); font-size: 10px;
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    /* Div "menu expandido" — botões */
+    .lle-user-menu {
+        background: rgba(10,23,48,0.06);
+        border-radius: 6px;
+        padding: 6px;
+        margin-top: 4px;
+    }
+    /* Ajuste dos botões dentro do menu — mais compactos */
+    [data-testid="stSidebar"] .stButton > button {
+        width: 100% !important;
+        text-align: left !important;
+        justify-content: flex-start !important;
+        background: transparent !important;
+        color: #0A1730 !important;
+        border: none !important;
+        font-size: 11px !important;
+        font-weight: 600 !important;
+        padding: 8px 12px !important;
+        margin: 0 !important;
+    }
+    [data-testid="stSidebar"] .stButton > button:hover {
+        background: rgba(10,23,48,0.08) !important;
+    }
+    [data-testid="stSidebar"] .stButton > button:disabled {
+        color: rgba(10,23,48,0.4) !important;
+        cursor: not-allowed !important;
+    }
+    /* separador antes do Sair */
+    .lle-menu-sep {
+        height: 1px; background: rgba(10,23,48,0.15);
+        margin: 4px 8px;
+    }
+    </style>
+    """
+
     with st.sidebar:
+        st.markdown(_CSS_SIDEBAR_USER, unsafe_allow_html=True)
+
+        # Cabeçalho do usuário (nome + email)
+        _inicial = (nome[:1] or username[:1] or "?").upper()
         st.markdown(
-            f"<div style='padding:8px 0 4px; color:#E6EEF8; font-size:13px;'>"
-            f"👤 <b>{nome}</b></div>",
+            f"""
+            <div class="lle-user-block">
+              <div class="lle-user-header">
+                <div class="lle-user-avatar">{_inicial}</div>
+                <div class="lle-user-info">
+                  <div class="lle-user-name">{nome}</div>
+                  <div class="lle-user-email" title="{_email_logado}">{_email_logado}</div>
+                </div>
+              </div>
+            </div>
+            """,
             unsafe_allow_html=True,
         )
-        try:
-            autenticador.logout("Sair", location="sidebar", key="btn_logout_lle")
-        except Exception:
-            if st.button("Sair", key="btn_logout_manual"):
-                for k in ("authentication_status", "name", "username"):
-                    st.session_state.pop(k, None)
-                st.rerun()
+
+        # Menu expansível de opções
+        with st.expander("⚙️ Opções", expanded=False):
+            # Trocar senha e Gerenciar usuários — placeholders pra próxima sessão
+            st.button(
+                "🔑 Trocar senha",
+                key="btn_menu_troca_senha",
+                disabled=True,
+                help="Recurso em desenvolvimento — próxima sessão",
+                use_container_width=True,
+            )
+            st.button(
+                "⚙️ Gerenciar usuários",
+                key="btn_menu_gerenciar",
+                disabled=True,
+                help="Recurso em desenvolvimento — próxima sessão",
+                use_container_width=True,
+            )
+            st.markdown("<div class='lle-menu-sep'></div>", unsafe_allow_html=True)
+            # Sair — usa logout do stauth, com fallback manual
+            try:
+                autenticador.logout("🚪 Sair", location="sidebar", key="btn_logout_lle")
+            except Exception:
+                if st.button(
+                    "🚪 Sair",
+                    key="btn_logout_manual",
+                    use_container_width=True,
+                ):
+                    for k in ("authentication_status", "name", "username"):
+                        st.session_state.pop(k, None)
+                    st.rerun()
 
     return nome, username
