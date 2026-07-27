@@ -433,13 +433,23 @@ h1, h2, h3, h4, h5, h6, p, span, div, label {{ color: {CORES["branco"]}; }}
 }}
 
 /* Sidebar buttons — TODOS com mesmo tom, ícones verdes ao lado */
+/* v6.0.7: títulos de seção do menu (OPERAÇÃO, MÓDULOS, SISTEMA) */
+.lle-menu-section {{
+    color: rgba(4,23,71,0.60) !important;
+    font-size: 11px !important;
+    font-weight: 700 !important;
+    letter-spacing: 1.5px !important;
+    margin: 14px 4px 8px !important;
+    padding-left: 4px !important;
+}}
+
 [data-testid="stSidebar"] .stButton > button {{
-    background-color: rgba(4,23,71,0.06) !important;
+    background-color: #FFF6C8 !important;
     color: {CORES["azul_escuro"]} !important;
-    border: 1px solid rgba(4,23,71,0.22) !important;
+    border: 1px solid rgba(4,23,71,0.15) !important;
     border-radius: 10px !important;
     padding: 12px 16px !important;
-    font-weight: 600 !important;
+    font-weight: 500 !important;
     font-size: 14px !important;
     text-align: left !important;
     width: 100% !important;
@@ -1466,21 +1476,32 @@ with st.sidebar:
             """
         )
 
-    # Páginas principais (lista simples)
-    paginas_top = [
-        ("📊 Dashboard", "Dashboard"),
-        ("✅ Conciliação", "Conciliação"),
-    ]
-    for label, key in paginas_top:
-        is_atual = st.session_state.pagina == key
-        st.button(
-            label,
-            key=f"nav_{key}",
-            on_click=ir_para,
-            args=(key,),
-            type="primary" if is_atual else "secondary",
-            use_container_width=True,
-        )
+    # v6.0.7: título de seção (padrão aprovado pela Débora)
+    st.html("<div class='lle-menu-section'>📊 OPERAÇÃO</div>")
+
+    # Dashboard (seção OPERAÇÃO)
+    is_atual = st.session_state.pagina == "Dashboard"
+    st.button(
+        "📊 Dashboard",
+        key="nav_Dashboard",
+        on_click=ir_para,
+        args=("Dashboard",),
+        type="primary" if is_atual else "secondary",
+        use_container_width=True,
+    )
+
+    st.html("<div class='lle-menu-section'>🧩 MÓDULOS</div>")
+
+    # Conciliação (seção MÓDULOS)
+    is_atual = st.session_state.pagina == "Conciliação"
+    st.button(
+        "✅ Conciliação",
+        key="nav_Conciliação",
+        on_click=ir_para,
+        args=("Conciliação",),
+        type="primary" if is_atual else "secondary",
+        use_container_width=True,
+    )
 
     # v5.4: Conta 70 logo após Conciliação (antes do CARTÃO)
     conta70_atual = st.session_state.pagina == "Conta 70"
@@ -1493,9 +1514,9 @@ with st.sidebar:
         use_container_width=True,
     )
 
-    # v5.5: Auditoria volta pra dentro do submenu CARTÃO
+    # v5.5: Auditoria volta pra dentro do submenu Cartão
     cartao_atual = st.session_state.pagina in ("Cadastro de Taxas", "Auditoria de Taxas")
-    with st.expander("💳 CARTÃO", expanded=cartao_atual):
+    with st.expander("💳 Cartão", expanded=cartao_atual):
         submenus_cartao = [
             ("🏦 Cadastro de Taxas", "Cadastro de Taxas"),
             ("💳 Auditoria de Cartões", "Auditoria de Taxas"),
@@ -1527,7 +1548,7 @@ with st.sidebar:
             use_container_width=True,
         )
 
-    st.divider()
+    st.html("<div class='lle-menu-section'>⚙️ SISTEMA</div>")
 
     with st.expander("⚙️ Configurações"):
         rodar_fuzzy = st.checkbox(
