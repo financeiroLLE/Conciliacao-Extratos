@@ -7,3 +7,4 @@ xlrd<3
 rapidfuzz<4
 pdfplumber<0.12
 pypdf<6
+streamlit-authenticator>=0.4,<0.5
