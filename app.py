@@ -443,6 +443,37 @@ h1, h2, h3, h4, h5, h6, p, span, div, label {{ color: {CORES["branco"]}; }}
     padding-left: 4px !important;
 }}
 
+/* v6.0.8: st.expander na sidebar (Cartão, Configurações) — mesmo visual
+   dos botões (fundo creme, bordas, texto azul-navy). Sem isso ficam com
+   fundo cinza padrão do Streamlit, destoando dos demais itens. */
+[data-testid="stSidebar"] [data-testid="stExpander"] {{
+    background-color: #FFF6C8 !important;
+    border: 1px solid rgba(4,23,71,0.15) !important;
+    border-radius: 10px !important;
+    margin-bottom: 4px !important;
+}}
+[data-testid="stSidebar"] [data-testid="stExpander"] summary,
+[data-testid="stSidebar"] [data-testid="stExpander"] details > summary {{
+    background-color: #FFF6C8 !important;
+    color: {CORES["azul_escuro"]} !important;
+    padding: 12px 16px !important;
+    font-weight: 500 !important;
+    font-size: 14px !important;
+    border-radius: 10px !important;
+}}
+[data-testid="stSidebar"] [data-testid="stExpander"] summary p,
+[data-testid="stSidebar"] [data-testid="stExpander"] summary span,
+[data-testid="stSidebar"] [data-testid="stExpander"] summary div {{
+    color: {CORES["azul_escuro"]} !important;
+    -webkit-text-fill-color: {CORES["azul_escuro"]} !important;
+}}
+[data-testid="stSidebar"] [data-testid="stExpander"] summary:hover {{
+    background-color: #FFEE99 !important;
+}}
+[data-testid="stSidebar"] [data-testid="stExpander"] details[open] > summary {{
+    border-radius: 10px 10px 0 0 !important;
+}}
+
 [data-testid="stSidebar"] .stButton > button {{
     background-color: #FFF6C8 !important;
     color: {CORES["azul_escuro"]} !important;
@@ -468,6 +499,15 @@ h1, h2, h3, h4, h5, h6, p, span, div, label {{ color: {CORES["branco"]}; }}
     color: {CORES["amarelo"]} !important;
     border-color: {CORES["azul_escuro"]} !important;
     transform: translateX(2px);
+}}
+/* v6.0.10: no hover, os filhos internos (p, span, div) TAMBÉM precisam
+   virar amarelo — senão o azul-navy do estilo padrão sobrepõe e o texto
+   fica invisível sobre o fundo azul-navy do hover. */
+[data-testid="stSidebar"] .stButton > button:hover p,
+[data-testid="stSidebar"] .stButton > button:hover span,
+[data-testid="stSidebar"] .stButton > button:hover div {{
+    color: {CORES["amarelo"]} !important;
+    -webkit-text-fill-color: {CORES["amarelo"]} !important;
 }}
 [data-testid="stSidebar"] .stButton > button[kind="primary"] {{
     background-color: rgba(4,23,71,0.92) !important;
