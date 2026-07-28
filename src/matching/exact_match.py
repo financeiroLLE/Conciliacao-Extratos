@@ -5,7 +5,7 @@ REGRAS (atualizadas conforme briefing de produto):
 - Data: aceita tolerância de ±N dias corridos (default 2 — cobre fim de semana e
   feriados curtos). Quando há múltiplos candidatos dentro da janela, prefere o
   de menor diferença absoluta de dias.
-- Conta: igual.
+- Conta: igual (com normalização de espaços múltiplos e trim — v5.90).
 - Matching é 1-pra-1: cada lançamento do banco casa com no máximo um do sistema.
 """
 
@@ -19,6 +19,32 @@ import pandas as pd
 def _normalizar_valor(v: float) -> int:
     """Converte valor em centavos inteiros para comparação exata sem float drift."""
     return round(float(v) * 100)
+
+
+def _normalizar_conta(v) -> str:
+    """v5.90: normaliza nome da conta para comparação tolerante.
+
+    Colapsa espaços múltiplos em um único (o Sankhya às vezes exporta com
+    espaço duplo — ex.: 'ITAU INOV AG. 0023  C/C 54016-4' — e o usuário
+    digita no upload do banco com um espaço só ou copy/paste com dois. Sem
+    esta normalização, contas idênticas na intenção ficam diferentes na
+    comparação e o match cai a zero).
+
+    - Preserva o valor original nos DataFrames (usado só na chave interna).
+    - Aplica strip para tolerar espaços no início/fim.
+    - Não altera case: mantém sensibilidade a maiúsculas/minúsculas para
+      evitar merge acidental de contas que só diferem por caixa.
+    """
+    if v is None:
+        return ""
+    try:
+        if pd.isna(v):
+            return ""
+    except (TypeError, ValueError):
+        pass
+    # " ".join(str.split()) colapsa qualquer whitespace (espaços, tabs)
+    # em um único espaço e faz strip nas pontas
+    return " ".join(str(v).split())
 
 
 def match_exato(
@@ -72,13 +98,16 @@ def match_exato(
 
     b_idx = banco["_idx"].to_numpy()
     b_cent = banco["_valor_centavos"].to_numpy()
-    b_conta = banco["conta"].to_numpy()
+    # v5.90: normaliza conta antes de comparar (colapsa espaços múltiplos e faz strip).
+    # Sem isso, digitação com espaço duplo/simples diferente do que veio do Sankhya
+    # zerava o match. Ver docstring de _normalizar_conta.
+    b_conta = banco["conta"].apply(_normalizar_conta).to_numpy()
     b_ns = banco["data"].to_numpy(dtype="datetime64[ns]").astype("int64")
     b_nat = banco["data"].isna().to_numpy()
 
     s_idx = sistema["_idx"].to_numpy()
     s_cent = sistema["_valor_centavos"].to_numpy()
-    s_conta = sistema["conta"].to_numpy()
+    s_conta = sistema["conta"].apply(_normalizar_conta).to_numpy()
     s_ns = sistema["data"].to_numpy(dtype="datetime64[ns]").astype("int64")
     s_nat = sistema["data"].isna().to_numpy()
 
