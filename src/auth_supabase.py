@@ -1,20 +1,16 @@
 """
-src/auth_supabase.py
+src/auth_supabase.py — v2 (Magic Link com redirect)
 
-Autenticacao via Supabase Auth com Email OTP (login sem senha).
+Autenticacao via Supabase Auth com Magic Link.
 
 Fluxo:
 1. Usuario digita email na tela de login
-2. Sistema chama send_email_otp(email) -> Supabase envia codigo por email
-3. Usuario recebe codigo de 6 digitos no email
-4. Usuario digita codigo na tela
-5. Sistema chama verify_email_otp(email, codigo)
-6. Se OK, sessao Supabase e criada e guardada no session_state
-
-Filosofia:
-- Nao quebra login antigo (streamlit-authenticator) — coexistem
-- Sessao Supabase fica em st.session_state["supabase_session"]
-- Perfil do usuario (admin/analista/consulta) vem da tabela public.usuarios
+2. Sistema chama send_magic_link(email) -> Supabase envia link por email
+3. Usuario clica no link "Sign in"
+4. Supabase valida e redireciona pra REDIRECT_URL com tokens no fragment (#)
+5. JavaScript no login_supabase.py move tokens de fragment pra query
+6. login_supabase.py chama set_session_from_tokens(access, refresh)
+7. Sessao criada, perfil buscado, usuario logado
 """
 
 from __future__ import annotations
@@ -25,25 +21,23 @@ from src.supabase_client import get_supabase, is_supabase_configured
 
 
 # ============================================================
-# Chaves de sessao
+# Constantes
 # ============================================================
 SESSION_KEY = "supabase_session"
 USER_KEY = "supabase_user"
 PROFILE_KEY = "supabase_profile"
 OTP_SENT_KEY = "supabase_otp_sent_to"
 
+# URL para onde o Supabase redireciona apos o clique no link do email
+REDIRECT_URL = "https://conciliacao-extratos.streamlit.app/?page=login_supabase"
+
 
 # ============================================================
-# Envio e verificacao de OTP
+# Envio de Magic Link
 # ============================================================
 
-def send_email_otp(email: str) -> dict:
-    """Solicita ao Supabase que envie um codigo OTP por email.
-
-    Retorna:
-        {"ok": True} se enviou com sucesso
-        {"ok": False, "erro": "..."} se falhou
-    """
+def send_magic_link(email: str) -> dict:
+    """Solicita ao Supabase que envie um link magico por email."""
     if not is_supabase_configured():
         return {"ok": False, "erro": "Supabase nao esta configurado nos Secrets."}
 
@@ -53,61 +47,41 @@ def send_email_otp(email: str) -> dict:
 
     try:
         sb = get_supabase()
-        # sign_in_with_otp envia codigo por email (nao envia link magico se
-        # a config do provider tiver 'Enable email OTP' ligado, que ja
-        # configuramos na Parte 1.3.A)
-        # should_create_user=False: nao cria novo usuario; so autentica
-        # os que ja existem em auth.users
         sb.auth.sign_in_with_otp({
             "email": email,
             "options": {
                 "should_create_user": False,
+                "email_redirect_to": REDIRECT_URL,
             },
         })
-        # Guarda em session_state pra proxima tela lembrar o email
         st.session_state[OTP_SENT_KEY] = email
         return {"ok": True}
     except Exception as e:
         return {"ok": False, "erro": f"{type(e).__name__}: {e}"}
 
 
-def verify_email_otp(email: str, codigo: str) -> dict:
-    """Verifica o codigo OTP digitado pelo usuario.
+# ============================================================
+# Criacao de sessao a partir de tokens do URL
+# ============================================================
 
-    Se valido, guarda a sessao Supabase em st.session_state.
-
-    Retorna:
-        {"ok": True, "user": {...}, "profile": {...}}
-        {"ok": False, "erro": "..."}
-    """
+def set_session_from_tokens(access_token: str, refresh_token: str) -> dict:
+    """Cria sessao Supabase a partir de tokens vindos do URL de retorno."""
     if not is_supabase_configured():
         return {"ok": False, "erro": "Supabase nao esta configurado."}
 
-    email = (email or "").strip().lower()
-    codigo = (codigo or "").strip()
-
-    if not email or not codigo:
-        return {"ok": False, "erro": "Email e codigo sao obrigatorios."}
-
-    if not codigo.isdigit() or len(codigo) != 6:
-        return {"ok": False, "erro": "Codigo deve ter exatamente 6 digitos."}
+    if not access_token or not refresh_token:
+        return {"ok": False, "erro": "Tokens faltando na URL."}
 
     try:
         sb = get_supabase()
-        resp = sb.auth.verify_otp({
-            "email": email,
-            "token": codigo,
-            "type": "email",
-        })
+        resp = sb.auth.set_session(access_token, refresh_token)
 
-        # Se chegou aqui sem exception, deu certo
         session = resp.session
         user = resp.user
 
         if session is None or user is None:
-            return {"ok": False, "erro": "Falha na autenticacao. Codigo invalido ou expirado."}
+            return {"ok": False, "erro": "Falha ao criar sessao com os tokens."}
 
-        # Guarda sessao no state
         st.session_state[SESSION_KEY] = {
             "access_token": session.access_token,
             "refresh_token": session.refresh_token,
@@ -117,9 +91,7 @@ def verify_email_otp(email: str, codigo: str) -> dict:
             "email": user.email,
         }
 
-        # Busca perfil da tabela public.usuarios
-        # Nota: nesse ponto o cliente esta autenticado, entao o RLS
-        # deixa ler o proprio perfil (policy usuarios_select_self)
+        # Busca perfil na tabela public.usuarios
         try:
             perfil_data = (
                 sb.table("usuarios")
@@ -130,7 +102,6 @@ def verify_email_otp(email: str, codigo: str) -> dict:
             )
             st.session_state[PROFILE_KEY] = perfil_data.data
         except Exception as e_perfil:
-            # Usuario existe em auth.users mas nao em public.usuarios
             st.session_state[PROFILE_KEY] = {
                 "id": user.id,
                 "nome_completo": "(sem perfil)",
@@ -153,7 +124,6 @@ def verify_email_otp(email: str, codigo: str) -> dict:
 # ============================================================
 
 def is_logged_in() -> bool:
-    """Retorna True se o usuario tem sessao Supabase valida."""
     return (
         SESSION_KEY in st.session_state
         and USER_KEY in st.session_state
@@ -162,7 +132,6 @@ def is_logged_in() -> bool:
 
 
 def current_user() -> dict | None:
-    """Retorna dict com dados do usuario logado, ou None."""
     if not is_logged_in():
         return None
     return {
@@ -172,14 +141,12 @@ def current_user() -> dict | None:
 
 
 def is_admin() -> bool:
-    """True se o usuario logado tem perfil admin."""
     if not is_logged_in():
         return False
     return st.session_state.get(PROFILE_KEY, {}).get("perfil") == "admin"
 
 
 def sign_out() -> None:
-    """Encerra a sessao Supabase (limpa state)."""
     try:
         if is_supabase_configured():
             sb = get_supabase()
