@@ -1,5 +1,5 @@
 """
-src/paginas/login_supabase.py — v3 (PKCE)
+src/paginas/login_supabase.py — v4 (colar URL do email)
 """
 
 import streamlit as st
@@ -7,35 +7,13 @@ import streamlit as st
 from src.auth_supabase import (
     OTP_SENT_KEY,
     current_user,
-    exchange_code_for_session,
+    extrair_tokens_da_url,
     is_admin,
     is_logged_in,
     send_magic_link,
+    set_session_from_tokens,
     sign_out,
 )
-
-
-def _tentar_autenticar_via_code() -> None:
-    """Se tem ?code=XXX na URL, troca por sessao e loga."""
-    qp = st.query_params
-    code = qp.get("code")
-
-    if not code or is_logged_in():
-        return
-
-    with st.spinner("Autenticando..."):
-        r = exchange_code_for_session(code)
-
-    # Limpar code da URL apos usar
-    try:
-        del st.query_params["code"]
-    except Exception:
-        pass
-
-    if r["ok"]:
-        st.rerun()
-    else:
-        st.error(f"Falha ao autenticar: {r['erro']}")
 
 
 def _render_ja_logado():
@@ -59,6 +37,7 @@ def _render_ja_logado():
 def _render_form_login():
     email_enviado = st.session_state.get(OTP_SENT_KEY, "")
 
+    # Passo 1
     with st.container(border=True):
         st.subheader("Passo 1 — Digite seu email")
         email = st.text_input(
@@ -77,31 +56,57 @@ def _render_form_login():
             else:
                 st.error(f"Falha ao enviar: {r['erro']}")
 
+    # Passo 2 — Instrucao
     if email_enviado:
         with st.container(border=True):
-            st.subheader("Passo 2 — Verifique seu email")
+            st.subheader("Passo 2 — Abra seu email e clique no link 'Sign in'")
             st.info(
-                f"Enviamos um link de acesso para **{email_enviado}**. "
-                f"Abra seu email e clique no botao **'Sign in'**. "
-                f"Voce sera redirecionado para o app ja autenticado."
+                f"Enviamos um link para **{email_enviado}**. "
+                f"Clique no email. Voce sera redirecionado para uma pagina. "
+                f"Copie a URL COMPLETA da barra de enderecos dessa pagina "
+                f"e cole no passo 3 abaixo."
             )
-            st.caption("O link expira em 1 hora e so pode ser usado uma vez.")
 
-            if st.button("Reenviar link"):
-                with st.spinner("Reenviando..."):
-                    r = send_magic_link(email_enviado)
-                if r["ok"]:
-                    st.success("Novo link enviado.")
+        # Passo 3 — Colar URL
+        with st.container(border=True):
+            st.subheader("Passo 3 — Cole aqui a URL da pagina de retorno")
+            st.caption(
+                "Depois de clicar no link do email, uma pagina abre. "
+                "Selecione a URL COMPLETA na barra de enderecos (Ctrl+L, "
+                "depois Ctrl+A, Ctrl+C) e cole abaixo."
+            )
+
+            url_colada = st.text_area(
+                "URL da pagina de retorno",
+                placeholder="https://conciliacao-extratos.streamlit.app/?page=login_supabase#access_token=...",
+                height=100,
+                key="login_url_colada",
+            )
+
+            if st.button("Autenticar com essa URL", type="primary"):
+                if not url_colada.strip():
+                    st.error("Cole a URL primeiro.")
                 else:
-                    st.error(r["erro"])
+                    with st.spinner("Extraindo tokens..."):
+                        r_ext = extrair_tokens_da_url(url_colada)
+                    if not r_ext["ok"]:
+                        st.error(r_ext["erro"])
+                    else:
+                        with st.spinner("Criando sessao..."):
+                            r_ses = set_session_from_tokens(
+                                r_ext["access_token"],
+                                r_ext["refresh_token"],
+                            )
+                        if r_ses["ok"]:
+                            st.success("Login com sucesso!")
+                            st.rerun()
+                        else:
+                            st.error(f"Falha: {r_ses['erro']}")
 
 
 def render():
-    # PRIMEIRA COISA: se tem ?code= na URL, troca por sessao
-    _tentar_autenticar_via_code()
-
     st.title("Login Supabase (teste)")
-    st.caption("Parte 1.3.B da Fase 1 — MVP-A. Login por Magic Link (PKCE).")
+    st.caption("Parte 1.3.B da Fase 1 — MVP-A. Login por Magic Link (com URL colada).")
 
     st.divider()
 
