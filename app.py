@@ -292,6 +292,17 @@ st.set_page_config(
 
 
 # ============================================================
+# Rota temporaria — pagina de login Supabase (Parte 1.3.B)
+# Acessivel via URL: ?page=login_supabase
+# ============================================================
+_params = st.query_params
+if _params.get("page") == "login_supabase":
+    from src.paginas.login_supabase import render as _render_login_sb
+    _render_login_sb()
+    st.stop()
+
+
+# ============================================================
 # Autenticação (v6.0) — bloqueia o app até login válido
 # ============================================================
 from auth import autenticar  # noqa: E402
