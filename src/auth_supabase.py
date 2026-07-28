@@ -1,16 +1,15 @@
 """
-src/auth_supabase.py — v2 (Magic Link com redirect)
+src/auth_supabase.py — v3 (PKCE)
 
-Autenticacao via Supabase Auth com Magic Link.
-
-Fluxo:
-1. Usuario digita email na tela de login
-2. Sistema chama send_magic_link(email) -> Supabase envia link por email
-3. Usuario clica no link "Sign in"
-4. Supabase valida e redireciona pra REDIRECT_URL com tokens no fragment (#)
-5. JavaScript no login_supabase.py move tokens de fragment pra query
-6. login_supabase.py chama set_session_from_tokens(access, refresh)
-7. Sessao criada, perfil buscado, usuario logado
+Fluxo PKCE:
+1. Usuario digita email na tela
+2. sign_in_with_otp com email_redirect_to
+3. Supabase manda link
+4. Usuario clica no link
+5. Supabase redireciona pra REDIRECT_URL?code=XXX (query param, nao fragment!)
+6. login_supabase.py detecta code em st.query_params
+7. Chama exchange_code_for_session(code)
+8. Sessao criada
 """
 
 from __future__ import annotations
@@ -20,26 +19,17 @@ import streamlit as st
 from src.supabase_client import get_supabase, is_supabase_configured
 
 
-# ============================================================
-# Constantes
-# ============================================================
 SESSION_KEY = "supabase_session"
 USER_KEY = "supabase_user"
 PROFILE_KEY = "supabase_profile"
 OTP_SENT_KEY = "supabase_otp_sent_to"
 
-# URL para onde o Supabase redireciona apos o clique no link do email
 REDIRECT_URL = "https://conciliacao-extratos.streamlit.app/?page=login_supabase"
 
 
-# ============================================================
-# Envio de Magic Link
-# ============================================================
-
 def send_magic_link(email: str) -> dict:
-    """Solicita ao Supabase que envie um link magico por email."""
     if not is_supabase_configured():
-        return {"ok": False, "erro": "Supabase nao esta configurado nos Secrets."}
+        return {"ok": False, "erro": "Supabase nao configurado."}
 
     email = (email or "").strip().lower()
     if not email or "@" not in email:
@@ -60,27 +50,22 @@ def send_magic_link(email: str) -> dict:
         return {"ok": False, "erro": f"{type(e).__name__}: {e}"}
 
 
-# ============================================================
-# Criacao de sessao a partir de tokens do URL
-# ============================================================
-
-def set_session_from_tokens(access_token: str, refresh_token: str) -> dict:
-    """Cria sessao Supabase a partir de tokens vindos do URL de retorno."""
+def exchange_code_for_session(code: str) -> dict:
+    """Troca o 'code' do URL de retorno por uma sessao ativa (PKCE)."""
     if not is_supabase_configured():
-        return {"ok": False, "erro": "Supabase nao esta configurado."}
-
-    if not access_token or not refresh_token:
-        return {"ok": False, "erro": "Tokens faltando na URL."}
+        return {"ok": False, "erro": "Supabase nao configurado."}
+    if not code:
+        return {"ok": False, "erro": "Code faltando."}
 
     try:
         sb = get_supabase()
-        resp = sb.auth.set_session(access_token, refresh_token)
+        resp = sb.auth.exchange_code_for_session({"auth_code": code})
 
         session = resp.session
         user = resp.user
 
         if session is None or user is None:
-            return {"ok": False, "erro": "Falha ao criar sessao com os tokens."}
+            return {"ok": False, "erro": "Falha na troca de code por sessao."}
 
         st.session_state[SESSION_KEY] = {
             "access_token": session.access_token,
@@ -91,7 +76,6 @@ def set_session_from_tokens(access_token: str, refresh_token: str) -> dict:
             "email": user.email,
         }
 
-        # Busca perfil na tabela public.usuarios
         try:
             perfil_data = (
                 sb.table("usuarios")
@@ -110,18 +94,10 @@ def set_session_from_tokens(access_token: str, refresh_token: str) -> dict:
                 "_erro_perfil": str(e_perfil),
             }
 
-        return {
-            "ok": True,
-            "user": st.session_state[USER_KEY],
-            "profile": st.session_state[PROFILE_KEY],
-        }
+        return {"ok": True}
     except Exception as e:
         return {"ok": False, "erro": f"{type(e).__name__}: {e}"}
 
-
-# ============================================================
-# Sessao — helpers
-# ============================================================
 
 def is_logged_in() -> bool:
     return (
@@ -134,10 +110,7 @@ def is_logged_in() -> bool:
 def current_user() -> dict | None:
     if not is_logged_in():
         return None
-    return {
-        **st.session_state[USER_KEY],
-        **st.session_state[PROFILE_KEY],
-    }
+    return {**st.session_state[USER_KEY], **st.session_state[PROFILE_KEY]}
 
 
 def is_admin() -> bool:
@@ -153,7 +126,6 @@ def sign_out() -> None:
             sb.auth.sign_out()
     except Exception:
         pass
-
     for k in (SESSION_KEY, USER_KEY, PROFILE_KEY, OTP_SENT_KEY):
         if k in st.session_state:
             del st.session_state[k]
