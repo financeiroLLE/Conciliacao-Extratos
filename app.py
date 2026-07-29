@@ -290,26 +290,20 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
+# ============================================================
+# Autenticacao Supabase (v7.0) — bloqueia o app ate login valido
+# ============================================================
+from src.auth_supabase import is_logged_in, current_user  # noqa: E402
 
-# ============================================================
-# Rota temporaria — pagina de login Supabase (Parte 1.3.B)
-# Acessivel via URL: ?page=login_supabase
-# ============================================================
-_params = st.query_params
-if _params.get("page") == "login_supabase":
+if not is_logged_in():
     from src.paginas.login_supabase import render as _render_login_sb
     _render_login_sb()
     st.stop()
 
-
-# ============================================================
-# Autenticação (v6.0) — bloqueia o app até login válido
-# ============================================================
-from auth import autenticar  # noqa: E402
-
-_nome_logado, _usuario_logado = autenticar()
-# Daqui em diante o app só roda se a usuária estiver autenticada
-# (autenticar() chama st.stop() nos outros casos).
+# Compatibilidade com codigo antigo que usa _nome_logado e _usuario_logado
+_user_sb = current_user()
+_nome_logado = _user_sb.get("nome_completo", "-") if _user_sb else "-"
+_usuario_logado = _user_sb.get("email", "-") if _user_sb else "-"
 
 
 # ============================================================
