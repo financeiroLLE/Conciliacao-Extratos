@@ -449,6 +449,28 @@ h1, h2, h3, h4, h5, h6, p, span, div, label {{ color: {CORES["branco"]}; }}
     padding-left: 4px !important;
 }}
 
+/* v7.0: itens "em breve" na sidebar (PIX, Aplicacoes, Auditoria de Tarifas) */
+.lle-menu-item-soon {{
+    background-color: #FFF6C8 !important;
+    color: {CORES["azul_escuro"]} !important;
+    opacity: 0.45 !important;
+    padding: 10px 14px !important;
+    border-radius: 10px !important;
+    margin-bottom: 4px !important;
+    font-size: 14px !important;
+    font-weight: 500 !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    cursor: not-allowed !important;
+}}
+.lle-badge-soon {{
+    font-size: 10px !important;
+    font-style: italic !important;
+    color: {CORES["azul_escuro"]} !important;
+    opacity: 0.8 !important;
+}}
+
 /* v6.0.8: st.expander na sidebar (Cartão, Configurações) — mesmo visual
    dos botões (fundo creme, bordas, texto azul-navy). Sem isso ficam com
    fundo cinza padrão do Streamlit, destoando dos demais itens. */
@@ -1562,14 +1584,15 @@ with st.sidebar:
             """
         )
 
-    # v6.0.7: card do usuário APÓS o institucional (ordem aprovada Débora)
+    # Card usuario (mantido igual)
     from auth import render_sidebar_usuario  # noqa: E402
     render_sidebar_usuario(_nome_logado or "", _usuario_logado or "")
 
-    # v6.0.7: título de seção (padrão aprovado pela Débora)
-    st.html("<div class='lle-menu-section'>📊 OPERAÇÃO</div>")
+    # ============================================================
+    # VISÃO GERAL
+    # ============================================================
+    st.html("<div class='lle-menu-section'>📊 VISÃO GERAL</div>")
 
-    # Dashboard (seção OPERAÇÃO)
     is_atual = st.session_state.pagina == "Dashboard"
     st.button(
         "📊 Dashboard",
@@ -1580,12 +1603,15 @@ with st.sidebar:
         use_container_width=True,
     )
 
-    st.html("<div class='lle-menu-section'>🧩 MÓDULOS</div>")
+    # ============================================================
+    # OPERAÇÃO
+    # ============================================================
+    st.html("<div class='lle-menu-section'>🔧 OPERAÇÃO</div>")
 
-    # Conciliação (seção MÓDULOS)
+    # Conciliacao Bancaria
     is_atual = st.session_state.pagina == "Conciliação"
     st.button(
-        "✅ Conciliação",
+        "✅ Conciliação Bancária",
         key="nav_Conciliação",
         on_click=ir_para,
         args=("Conciliação",),
@@ -1593,53 +1619,85 @@ with st.sidebar:
         use_container_width=True,
     )
 
-    # v5.4: Conta 70 logo após Conciliação (antes do CARTÃO)
-    conta70_atual = st.session_state.pagina == "Conta 70"
+    # Conta 70
+    is_atual = st.session_state.pagina == "Conta 70"
     st.button(
         "📒 Conta 70",
         key="nav_Conta 70",
         on_click=ir_para,
         args=("Conta 70",),
-        type="primary" if conta70_atual else "secondary",
+        type="primary" if is_atual else "secondary",
         use_container_width=True,
     )
 
-    # v5.5: Auditoria volta pra dentro do submenu Cartão
-    cartao_atual = st.session_state.pagina in ("Cadastro de Taxas", "Auditoria de Taxas")
-    with st.expander("💳 Cartão", expanded=cartao_atual):
-        submenus_cartao = [
-            ("🏦 Cadastro de Taxas", "Cadastro de Taxas"),
-            ("💳 Auditoria de Cartões", "Auditoria de Taxas"),
-        ]
-        for label, key in submenus_cartao:
-            is_atual = st.session_state.pagina == key
-            st.button(
-                label,
-                key=f"nav_{key}",
-                on_click=ir_para,
-                args=(key,),
-                type="primary" if is_atual else "secondary",
-                use_container_width=True,
-            )
+    # Conciliacao de Vendas (NOVO)
+    is_atual = st.session_state.pagina == "Conciliação de Vendas"
+    st.button(
+        "🛒 Conciliação de Vendas",
+        key="nav_Conciliação de Vendas",
+        on_click=ir_para,
+        args=("Conciliação de Vendas",),
+        type="primary" if is_atual else "secondary",
+        use_container_width=True,
+    )
 
-    # Restante das páginas principais
-    paginas_bot = [
-        ("📂 Histórico", "Histórico"),
-        ("ℹ️ Sobre", "Sobre"),
-    ]
-    for label, key in paginas_bot:
-        is_atual = st.session_state.pagina == key
-        st.button(
-            label,
-            key=f"nav_{key}",
-            on_click=ir_para,
-            args=(key,),
-            type="primary" if is_atual else "secondary",
-            use_container_width=True,
-        )
+    # Em breve — Conciliacao de PIX
+    st.html(
+        "<div class='lle-menu-item-soon'>"
+        "<span>🔄 Conciliação de PIX</span>"
+        "<span class='lle-badge-soon'>em breve</span>"
+        "</div>"
+    )
 
+    # Em breve — Aplicacoes e Resgates
+    st.html(
+        "<div class='lle-menu-item-soon'>"
+        "<span>💰 Aplicações e Resgates</span>"
+        "<span class='lle-badge-soon'>em breve</span>"
+        "</div>"
+    )
+
+    # ============================================================
+    # AUDITORIA
+    # ============================================================
+    st.html("<div class='lle-menu-section'>🛡️ AUDITORIA</div>")
+
+    # Auditoria de Cartoes
+    is_atual = st.session_state.pagina == "Auditoria de Taxas"
+    st.button(
+        "💳 Auditoria de Cartões",
+        key="nav_Auditoria de Taxas",
+        on_click=ir_para,
+        args=("Auditoria de Taxas",),
+        type="primary" if is_atual else "secondary",
+        use_container_width=True,
+    )
+
+    # Em breve — Auditoria de Tarifas
+    st.html(
+        "<div class='lle-menu-item-soon'>"
+        "<span>📋 Auditoria de Tarifas</span>"
+        "<span class='lle-badge-soon'>em breve</span>"
+        "</div>"
+    )
+
+    # ============================================================
+    # SISTEMA
+    # ============================================================
     st.html("<div class='lle-menu-section'>⚙️ SISTEMA</div>")
 
+    # Historico
+    is_atual = st.session_state.pagina == "Histórico"
+    st.button(
+        "📂 Histórico",
+        key="nav_Histórico",
+        on_click=ir_para,
+        args=("Histórico",),
+        type="primary" if is_atual else "secondary",
+        use_container_width=True,
+    )
+
+    # Configuracoes (expander)
     with st.expander("⚙️ Configurações"):
         rodar_fuzzy = st.checkbox(
             "Gerar sugestões fuzzy",
@@ -1651,6 +1709,28 @@ with st.sidebar:
             min_value=0, max_value=10, value=2, step=1,
             help="Aceita diferença de até N dias entre o lançamento no banco e no sistema (fim de semana / feriado).",
         )
+        st.divider()
+        st.caption("Cadastros administrativos (versão nova vem com o módulo de Configurações completo)")
+        is_atual = st.session_state.pagina == "Cadastro de Taxas"
+        st.button(
+            "🏦 Cadastro de Taxas (legado)",
+            key="nav_Cadastro de Taxas",
+            on_click=ir_para,
+            args=("Cadastro de Taxas",),
+            type="primary" if is_atual else "secondary",
+            use_container_width=True,
+        )
+
+    # Sobre
+    is_atual = st.session_state.pagina == "Sobre"
+    st.button(
+        "ℹ️ Sobre",
+        key="nav_Sobre",
+        on_click=ir_para,
+        args=("Sobre",),
+        type="primary" if is_atual else "secondary",
+        use_container_width=True,
+    )
 
 
 # ============================================================
