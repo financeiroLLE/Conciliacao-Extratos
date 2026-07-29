@@ -38,6 +38,7 @@ from src.reports import (
     gerar_relatorio_excel,
     gerar_relatorio_excel_de_conta,
 )
+from src.paginas.conciliacao_vendas import render_conciliacao_vendas
 
 
 # ============================================================
@@ -1556,7 +1557,7 @@ with st.sidebar:
             f"""
             <div class="lle-sidebar-logo">
                 <img src="{LOGO_URI}" alt="Grupo LLE" />
-                <div class="lle-sidebar-tagline">CONCILIAÇÃO BANCÁRIA</div>
+                <div class="lle-sidebar-tagline">CONCILIAÇÃO FINANCEIRA</div>
             </div>
             """
         )
@@ -8385,9 +8386,10 @@ pagina = st.session_state.pagina
 _PAGINAS = {
     "Dashboard": pagina_dashboard,
     "Conciliação": pagina_conciliacao,
+    "Conta 70": pagina_conta70,
+    "Conciliação de Vendas": render_conciliacao_vendas,
     "Cadastro de Taxas": pagina_cadastro_taxas,
     "Auditoria de Taxas": pagina_auditoria_taxas,
-    "Conta 70": pagina_conta70,
     "Histórico": pagina_historico,
     "Sobre": pagina_sobre,
 }
