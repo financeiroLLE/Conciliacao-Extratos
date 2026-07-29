@@ -89,9 +89,9 @@ _CSS = f"""
     margin-top: 2px;
 }}
 
-/* Aviso de privacidade */
+/* Aviso de privacidade — texto navy escuro sobre fundo creme */
 .cv-aviso {{
-    background: {CREME};
+    background: {CREME} !important;
     border-left: 4px solid {AZUL_NAVY};
     border-radius: 12px;
     padding: 14px 20px;
@@ -99,23 +99,27 @@ _CSS = f"""
     display: flex;
     gap: 10px;
     align-items: center;
-    font-size: 13px;
-    color: {AZUL_NAVY};
+    font-size: 14px;
+    font-weight: 500;
+    color: {AZUL_NAVY} !important;
+}}
+.cv-aviso, .cv-aviso * {{
+    color: {AZUL_NAVY} !important;
 }}
 
-/* Seção header (ex: "FILA DE ARQUIVOS") */
+/* Seção header — texto AMARELO sobre fundo escuro do app (era navy sobre navy = invisível) */
 .cv-secao-titulo {{
-    font-size: 11px;
-    font-weight: 600;
-    letter-spacing: 1px;
-    color: {AZUL_NAVY};
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    color: {AMARELO} !important;
     text-transform: uppercase;
-    margin: 8px 0 12px 0;
+    margin: 20px 0 12px 0;
 }}
 
 /* Card de arquivo na fila */
 .cv-fila-card {{
-    background: #ffffff;
+    background: #ffffff !important;
     border-radius: 8px;
     padding: 12px 14px;
     margin-bottom: 8px;
@@ -131,7 +135,7 @@ _CSS = f"""
 .cv-fila-nome {{
     font-size: 13px;
     font-weight: 500;
-    color: {AZUL_NAVY};
+    color: {AZUL_NAVY} !important;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -139,17 +143,17 @@ _CSS = f"""
 }}
 .cv-fila-detalhe {{
     font-size: 11px;
-    color: {AZUL_NAVY};
-    opacity: 0.65;
+    color: {AZUL_NAVY} !important;
+    opacity: 0.75;
     margin-top: 2px;
 }}
 .cv-fila-detalhe-fail {{
-    color: {VERMELHO};
+    color: {VERMELHO} !important;
     opacity: 1;
 }}
 .cv-badge-ok {{
-    background: {AZUL_NAVY};
-    color: {AMARELO};
+    background: {AZUL_NAVY} !important;
+    color: {AMARELO} !important;
     font-size: 10px;
     font-weight: 600;
     padding: 4px 10px;
@@ -158,8 +162,8 @@ _CSS = f"""
     letter-spacing: 0.5px;
 }}
 .cv-badge-fail {{
-    background: {VERMELHO_FUNDO};
-    color: {VERMELHO};
+    background: {VERMELHO_FUNDO} !important;
+    color: {VERMELHO} !important;
     font-size: 10px;
     font-weight: 600;
     padding: 4px 10px;
@@ -170,7 +174,7 @@ _CSS = f"""
 
 /* Contadores KPI */
 .cv-kpi {{
-    background: {CREME};
+    background: {CREME} !important;
     border-radius: 10px;
     padding: 14px 12px;
     text-align: center;
@@ -178,7 +182,7 @@ _CSS = f"""
 .cv-kpi-label {{
     font-size: 10px;
     letter-spacing: 0.5px;
-    color: {AZUL_NAVY};
+    color: {AZUL_NAVY} !important;
     text-transform: uppercase;
     opacity: 0.7;
     margin-bottom: 6px;
@@ -186,12 +190,12 @@ _CSS = f"""
 .cv-kpi-valor {{
     font-size: 22px;
     font-weight: 600;
-    color: {AZUL_NAVY};
+    color: {AZUL_NAVY} !important;
     line-height: 1.1;
 }}
 .cv-kpi-secundario {{
     font-size: 10px;
-    color: {AZUL_NAVY};
+    color: {AZUL_NAVY} !important;
     opacity: 0.6;
     margin-top: 4px;
 }}
@@ -228,7 +232,7 @@ def _render_header():
             <div class="cv-header-icon">🛒</div>
             <div>
                 <div class="cv-header-titulo">Conciliação de Vendas</div>
-                <div class="cv-header-sub">MVP-A · Importação de arquivos · PISA + KING</div>
+                <div class="cv-header-sub">MVP-A · Importação de arquivos · PISA · KING · TRIO</div>
             </div>
         </div>
         """,
