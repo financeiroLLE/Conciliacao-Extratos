@@ -375,10 +375,11 @@ _SESSION_KEYS_IMPORTACAO = [
 ]
 
 _SESSION_KEYS_MOTOR = [
-    "cv_motor_resultado", "cv_pill_ativa",
+    "cv_motor_resultado", "cv_df_sankhya_classificado", "cv_pill_ativa",
     "cv_confirmadas_manual", "cv_desfazer_pendente", "cv_ligacoes_desfeitas",
     "cv_historico", "cv_tolerancia_dias",
     "cv_busca_auto", "cv_max_cards_a_analisar",
+    "cv_busca_aberta", "cv_busca_texto",
 ]
 
 
@@ -392,7 +393,10 @@ def _garantir_estado_inicial():
     st.session_state.setdefault("cv_resumo", {})
     st.session_state.setdefault("cv_uploader_nonce", 0)
     st.session_state.setdefault("cv_motor_resultado", None)
+    st.session_state.setdefault("cv_df_sankhya_classificado", None)
     st.session_state.setdefault("cv_pill_ativa", "a_analisar")
+    st.session_state.setdefault("cv_busca_aberta", {})
+    st.session_state.setdefault("cv_busca_texto", {})
     st.session_state.setdefault("cv_confirmadas_manual", {})
     st.session_state.setdefault("cv_desfazer_pendente", None)
     st.session_state.setdefault("cv_ligacoes_desfeitas", set())
@@ -430,6 +434,7 @@ def _limpar_estado_completo():
 
 def _limpar_estado_motor():
     st.session_state["cv_motor_resultado"] = None
+    st.session_state["cv_df_sankhya_classificado"] = None
     st.session_state["cv_pill_ativa"] = "a_analisar"
     st.session_state["cv_confirmadas_manual"] = {}
     st.session_state["cv_desfazer_pendente"] = None
@@ -437,6 +442,8 @@ def _limpar_estado_motor():
     st.session_state["cv_historico"] = []
     st.session_state["cv_busca_auto"] = ""
     st.session_state["cv_max_cards_a_analisar"] = 20
+    st.session_state["cv_busca_aberta"] = {}
+    st.session_state["cv_busca_texto"] = {}
 
 
 # ==============================================================================
@@ -602,10 +609,163 @@ def _rodar_motor():
         )
     except Exception as e:
         st.session_state["cv_motor_resultado"] = None
+        st.session_state["cv_df_sankhya_classificado"] = None
         return f"Erro ao rodar motor: {e}"
 
     st.session_state["cv_motor_resultado"] = resultado
+    st.session_state["cv_df_sankhya_classificado"] = df_sk_classificado
     return None
+
+
+# ==============================================================================
+# HELPERS DE BUSCA MANUAL
+# ==============================================================================
+
+def _get_series(row: pd.Series, col: str, default=None):
+    """Retorna valor da coluna se existir e não for NaN; senão default."""
+    if col not in row.index:
+        return default
+    v = row[col]
+    try:
+        if pd.isna(v):
+            return default
+    except (TypeError, ValueError):
+        pass
+    return v
+
+
+def _puxar_valores_originais(venda: pd.Series) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+    """
+    Puxa (bruto, taxa_pct, liquido) do DataFrame original (Cielo ou Getnet).
+    Retorna (None, None, None) se não encontrar.
+
+    Tenta múltiplos nomes de coluna comuns dos parsers.
+    """
+    tipo = venda.get("origem_tipo")
+    idx = venda.get("origem_venda")
+
+    if tipo == "cielo":
+        df = st.session_state.get("cv_df_cielo")
+    elif tipo == "getnet":
+        df = st.session_state.get("cv_df_getnet_vendas")
+    else:
+        return (None, None, None)
+
+    if df is None or idx is None:
+        return (None, None, None)
+
+    try:
+        row = df.loc[idx]
+    except (KeyError, IndexError):
+        return (None, None, None)
+
+    # Bruto: tenta várias colunas
+    bruto = None
+    for col in ("valor_bruto", "valor_parcela_bruto", "vlr_bruto"):
+        v = _get_series(row, col)
+        if v is not None:
+            bruto = float(v)
+            break
+
+    # Líquido
+    liquido = None
+    for col in ("valor_liquido", "valor_parcela_liquido", "vlr_liquido", "valor_liq"):
+        v = _get_series(row, col)
+        if v is not None:
+            liquido = float(v)
+            break
+
+    # Taxa em % (procurar campo pct)
+    taxa_pct = None
+    for col in ("taxa_pct", "percentual_taxa", "pct_taxa", "taxa_percentual"):
+        v = _get_series(row, col)
+        if v is not None:
+            try:
+                taxa_pct = float(v)
+                break
+            except (ValueError, TypeError):
+                continue
+
+    # Se não achou taxa%, tenta calcular a partir de bruto/líquido
+    if taxa_pct is None and bruto and liquido and bruto > 0:
+        diff = bruto - liquido
+        if 0 <= diff <= bruto * 0.15:  # taxa razoável até 15%
+            taxa_pct = (diff / bruto) * 100
+
+    return (bruto, taxa_pct, liquido)
+
+
+def _buscar_titulos_em_aberto(texto_busca: str, valor_venda: Optional[float] = None,
+                              limite: int = 15) -> List[Dict[str, Any]]:
+    """
+    Busca títulos do Sankhya EM ABERTO por texto (parceiro/NF/valor).
+
+    Se texto_busca vazio E valor_venda dado, retorna os com valor mais próximo.
+    Se texto_busca dado, filtra por match textual.
+    """
+    df = st.session_state.get("cv_df_sankhya_classificado")
+    if df is None or df.empty:
+        return []
+
+    df_abertos = df[df["situacao"] == "em_aberto"].copy()
+    if df_abertos.empty:
+        return []
+
+    texto = (texto_busca or "").strip().lower()
+
+    if texto:
+        # Match textual em parceiro, NF, valor
+        mask = pd.Series(False, index=df_abertos.index)
+
+        # Parceiro
+        if "nome_parceiro" in df_abertos.columns:
+            mask = mask | df_abertos["nome_parceiro"].astype(str).str.lower().str.contains(texto, na=False)
+
+        # NF
+        if "nro_nota" in df_abertos.columns:
+            mask = mask | df_abertos["nro_nota"].astype(str).str.lower().str.contains(texto, na=False)
+
+        # Valor: tenta parsear texto como número
+        try:
+            texto_num = float(texto.replace(",", ".").replace("r$", "").replace(" ", ""))
+            if "vlr_desdobramento" in df_abertos.columns:
+                mask = mask | (df_abertos["vlr_desdobramento"].round(2) == round(texto_num, 2))
+        except ValueError:
+            pass
+
+        # NF referenciada (adiantamento)
+        if "nro_nota_referenciada" in df_abertos.columns:
+            mask = mask | df_abertos["nro_nota_referenciada"].astype(str).str.lower().str.contains(texto, na=False)
+
+        df_filt = df_abertos[mask]
+    else:
+        df_filt = df_abertos
+
+    # Se tem valor de referência, ordena por proximidade
+    if valor_venda is not None and "vlr_desdobramento" in df_filt.columns:
+        df_filt = df_filt.copy()
+        df_filt["_dist"] = (df_filt["vlr_desdobramento"] - valor_venda).abs()
+        df_filt = df_filt.sort_values("_dist").head(limite)
+        df_filt = df_filt.drop(columns=["_dist"])
+    else:
+        df_filt = df_filt.head(limite)
+
+    # Retorna como lista de dicts
+    resultados = []
+    for _, row in df_filt.iterrows():
+        resultados.append({
+            "sk_idx": row.name,
+            "sk_nro_nota": row.get("nro_nota"),
+            "sk_nro_unico": row.get("nro_unico"),
+            "sk_classe": row.get("classe"),
+            "sk_nome_parceiro": row.get("nome_parceiro"),
+            "sk_empresa_nome": row.get("empresa_nome"),
+            "sk_vlr_desdobramento": row.get("vlr_desdobramento"),
+            "sk_dt_vencimento": row.get("dt_vencimento"),
+            "sk_ref_nf": row.get("nro_nota_referenciada"),
+            "sk_historico": row.get("historico"),
+        })
+    return resultados
 
 
 # ==============================================================================
@@ -754,9 +914,32 @@ def _calcular_contadores_pills(resultado, ligacoes_desfeitas: set) -> Dict[str, 
             if _chave_venda_original(row) in ligacoes_desfeitas:
                 n_g1_desfeitas += 1
 
+    # Contar confirmações manuais separando as que vieram de ambíguos vs. sem-título
+    confirmadas = st.session_state.get("cv_confirmadas_manual", {})
+    n_manuais_de_amb = 0
+    n_manuais_de_vst = 0
+
+    chaves_amb = set()
+    if resultado.a_analisar_ambiguos is not None and not resultado.a_analisar_ambiguos.empty:
+        for _, row in resultado.a_analisar_ambiguos.iterrows():
+            chaves_amb.add("|".join(str(x) for x in _chave_venda_original(row)))
+
+    chaves_vst = set()
+    if resultado.a_analisar_venda_sem_titulo is not None and not resultado.a_analisar_venda_sem_titulo.empty:
+        for _, row in resultado.a_analisar_venda_sem_titulo.iterrows():
+            chaves_vst.add("|".join(str(x) for x in _chave_venda_original(row)))
+
+    for chave_str in confirmadas.keys():
+        if chave_str in chaves_amb:
+            n_manuais_de_amb += 1
+        elif chave_str in chaves_vst:
+            n_manuais_de_vst += 1
+
+    n_confirmadas_total = len(confirmadas)
+
     return {
-        "a_analisar": n_amb + n_vst + n_tsv + n_desf,
-        "auto_conciliadas": n_g1_parcelas - n_g1_desfeitas,
+        "a_analisar": (n_amb - n_manuais_de_amb) + (n_vst - n_manuais_de_vst) + n_tsv + n_desf,
+        "auto_conciliadas": n_g1_parcelas - n_g1_desfeitas + n_confirmadas_total,
         "compensadas": len(resultado.grupo_2_ja_baixadas) if resultado.grupo_2_ja_baixadas is not None else 0,
         "aguardando": len(resultado.grupo_3_aguardando) if resultado.grupo_3_aguardando is not None else 0,
         "devolucoes": len(resultado.grupo_4_devolucoes) if resultado.grupo_4_devolucoes is not None else 0,
@@ -1026,6 +1209,35 @@ def _render_timeline_html(dt_venda, dt_previsto, dt_baixado=None) -> str:
     )
 
 
+def _bloco_valores_direita_html(valor: Any, bruto: Optional[float], taxa_pct: Optional[float],
+                                liquido: Optional[float]) -> str:
+    """Bloco direito do card com valor grande + linha bruto/taxa/líq."""
+    # Usa o bruto se disponível, senão cai no valor_match
+    v_grande = bruto if bruto is not None else valor
+    partes = []
+    if bruto is not None:
+        partes.append(f"bruto {_fmt_moeda(bruto)}")
+    if taxa_pct is not None:
+        try:
+            partes.append(f"taxa {float(taxa_pct):.2f}%".replace(".", ","))
+        except (ValueError, TypeError):
+            pass
+    if liquido is not None:
+        partes.append(f"líq {_fmt_moeda(liquido)}")
+
+    if partes:
+        linha_extra = f'<div class="cv-valor-sub">{_escape(" · ".join(partes))}</div>'
+    else:
+        linha_extra = f'<div class="cv-valor-sub">bruto</div>'
+
+    return (
+        f'<div class="cv-valor-dir">'
+        f'<div class="cv-valor-grande">{_fmt_moeda(v_grande)}</div>'
+        f'{linha_extra}'
+        f'</div>'
+    )
+
+
 def _render_card_ambiguo(venda: pd.Series, idx_card: int):
     """Card branco com faixa amarela. Múltiplas candidatas."""
     adq = _label_adquirente(venda.get("adquirente"))
@@ -1046,7 +1258,9 @@ def _render_card_ambiguo(venda: pd.Series, idx_card: int):
     valor = venda.get("valor_match")
     data_venda = venda.get("data_prev_pagamento")
 
-    # Tags
+    # Puxar bruto/taxa/liq do df original
+    bruto, taxa_pct, liquido = _puxar_valores_originais(venda)
+
     tags = [
         '<span class="cv-tag cv-tag-amarelo">Múltiplas candidatas</span>',
         f'<span class="cv-tag cv-tag-adq">{_escape(adq)}</span>',
@@ -1057,15 +1271,14 @@ def _render_card_ambiguo(venda: pd.Series, idx_card: int):
     if nsu:
         tags.append(f'<span class="cv-tag">Nº {_escape(nsu)}</span>')
 
-    # Candidatas
     candidatas = venda.get("candidatos") or []
-    linhas_cand = ['<div class="cv-candidatas-header">Motor não escolhe · você decide qual é o par correto</div>']
+    linhas_cand = [f'<div class="cv-candidatas-header">{len(candidatas)} candidatas em aberto no Sankhya · motor não escolhe, você decide</div>']
     for i, cand in enumerate(candidatas):
         classe = cand.get("classe")
         if classe == "adiantamento":
             tag_html = '<span class="cv-candidata-tag-adi">Adiantamento</span>'
             ref_nf = cand.get("nro_nota_referenciada")
-            info = f"TOP_OP 1654 · REF NF {ref_nf}" if ref_nf else "TOP_OP 1654 · sem REF NF"
+            info = f"REF NF {ref_nf}" if ref_nf else "sem REF NF"
         else:
             tag_html = '<span class="cv-candidata-tag-nf">Nota fiscal</span>'
             nro = cand.get("nro_nota")
@@ -1083,6 +1296,7 @@ def _render_card_ambiguo(venda: pd.Series, idx_card: int):
         )
 
     timeline_html = _render_timeline_html(data_venda, data_venda, None)
+    valores_dir = _bloco_valores_direita_html(valor, bruto, taxa_pct, liquido)
 
     card_html = (
         f'<div class="cv-card">'
@@ -1092,10 +1306,7 @@ def _render_card_ambiguo(venda: pd.Series, idx_card: int):
         f'<div class="cv-card-titulo">{_fmt_moeda(valor)}</div>'
         f'<div class="cv-card-sub">Vendido em {_fmt_data_br(data_venda)}</div>'
         f'</div>'
-        f'<div class="cv-valor-dir">'
-        f'<div class="cv-valor-sub">bruto</div>'
-        f'<div class="cv-valor-grande">{_fmt_moeda(valor)}</div>'
-        f'</div>'
+        f'{valores_dir}'
         f'</div>'
         f'{timeline_html}'
         f'<div class="cv-candidatas-wrapper">'
@@ -1105,10 +1316,10 @@ def _render_card_ambiguo(venda: pd.Series, idx_card: int):
     )
     st.markdown(card_html, unsafe_allow_html=True)
 
-    # Botões abaixo do card
     if candidatas:
         chave_venda = _chave_venda_original(venda)
         chave_str = "|".join(str(x) for x in chave_venda)
+        venda_dict = venda.to_dict() if hasattr(venda, "to_dict") else dict(venda)
         cols = st.columns(len(candidatas) + 1)
         for i, cand in enumerate(candidatas):
             with cols[i]:
@@ -1118,35 +1329,53 @@ def _render_card_ambiguo(venda: pd.Series, idx_card: int):
                 else:
                     label = "Escolher Adiantamento"
                 if st.button(label, key=f"cv_esc_{idx_card}_{i}", use_container_width=True):
-                    _acao_escolher_candidata(chave_str, cand)
+                    _acao_escolher_candidata(chave_str, cand, venda_dict=venda_dict)
                     st.rerun()
         st.markdown('<div style="margin-bottom:6px;"></div>', unsafe_allow_html=True)
 
 
-def _render_card_venda_sem_titulo(venda: pd.Series, hoje: date):
-    """Card branco. Divergência real (laranja) vs aguardando faturamento (cinza)."""
+def _render_card_venda_sem_titulo(venda: pd.Series, idx_card: int, hoje: date):
+    """Card branco. Layout rico + botão 'Buscar par no Sankhya' que expande busca."""
     status_key, status_label = _classificar_venda_sem_titulo(venda, hoje)
 
     adq = _label_adquirente(venda.get("adquirente"))
     ban = _label_bandeira(venda.get("bandeira"))
     mod = _label_modalidade(venda.get("modalidade"), venda.get("parcelas_total"))
+    parc_atual = venda.get("parcela_atual")
+    parc_total = venda.get("parcelas_total")
+    parc_txt = ""
+    try:
+        pa = int(parc_atual) if parc_atual is not None else None
+        pt = int(parc_total) if parc_total is not None else None
+        if pa and pt and pt > 1:
+            parc_txt = f"Parcela {pa}/{pt}"
+    except (ValueError, TypeError):
+        pass
+
+    nsu = venda.get("nsu") or ""
     valor = venda.get("valor_match")
     data_venda = venda.get("data_prev_pagamento")
+    bruto, taxa_pct, liquido = _puxar_valores_originais(venda)
 
     if status_key == "divergencia_real":
         card_class = "cv-card cv-card-divergencia"
         tag_status = f'<span class="cv-tag cv-tag-laranja">{_escape(status_label)}</span>'
-        subtitulo = "Sem par no Sankhya · pode ser Cielo link (CREDITO A DISTANCIA) ou faturamento pendente"
     else:
         card_class = "cv-card cv-card-info"
         tag_status = f'<span class="cv-tag">{_escape(status_label)}</span>'
-        subtitulo = "Situação normal · a nota é faturada automaticamente pelo Sankhya"
 
     tags = [
         tag_status,
         f'<span class="cv-tag cv-tag-adq">{_escape(adq)}</span>',
         f'<span class="cv-tag">{_escape(mod)} · {_escape(ban)}</span>',
     ]
+    if parc_txt:
+        tags.append(f'<span class="cv-tag">{_escape(parc_txt)}</span>')
+    if nsu:
+        tags.append(f'<span class="cv-tag">Nº {_escape(nsu)}</span>')
+
+    timeline_html = _render_timeline_html(data_venda, data_venda, None)
+    valores_dir = _bloco_valores_direita_html(valor, bruto, taxa_pct, liquido)
 
     card_html = (
         f'<div class="{card_class}">'
@@ -1154,16 +1383,113 @@ def _render_card_venda_sem_titulo(venda: pd.Series, hoje: date):
         f'<div style="flex:1; min-width:0;">'
         f'<div class="cv-tag-linha">{"".join(tags)}</div>'
         f'<div class="cv-card-titulo">{_fmt_moeda(valor)}</div>'
-        f'<div class="cv-card-sub">Vendido em {_fmt_data_br(data_venda)} · {_escape(subtitulo)}</div>'
+        f'<div class="cv-card-sub">Vendido em {_fmt_data_br(data_venda)} · sem par no Sankhya</div>'
         f'</div>'
-        f'<div class="cv-valor-dir">'
-        f'<div class="cv-valor-sub">bruto</div>'
-        f'<div class="cv-valor-grande">{_fmt_moeda(valor)}</div>'
+        f'{valores_dir}'
         f'</div>'
-        f'</div>'
+        f'{timeline_html}'
         f'</div>'
     )
     st.markdown(card_html, unsafe_allow_html=True)
+
+    # Botão de busca + área expandida
+    chave_venda = _chave_venda_original(venda)
+    chave_str = "|".join(str(x) for x in chave_venda)
+    aberta = st.session_state.get("cv_busca_aberta", {}).get(chave_str, False)
+
+    col_btn, col_esp = st.columns([2, 3])
+    with col_btn:
+        label_btn = "✕  Fechar busca" if aberta else "🔍  Buscar par no Sankhya"
+        if st.button(label_btn, key=f"cv_toggle_busca_{idx_card}", use_container_width=True):
+            _acao_toggle_busca(chave_str)
+            st.rerun()
+
+    if aberta:
+        _render_busca_inline(venda, chave_str, idx_card)
+
+    st.markdown('<div style="margin-bottom:6px;"></div>', unsafe_allow_html=True)
+
+
+def _render_busca_inline(venda: pd.Series, chave_str: str, idx_card: int):
+    """Renderiza o input de busca + resultados dentro do card sem par."""
+    valor_venda = venda.get("valor_match")
+    try:
+        valor_venda = float(valor_venda) if valor_venda is not None else None
+    except (ValueError, TypeError):
+        valor_venda = None
+
+    # Container visual da busca
+    st.markdown(
+        f'<div style="background:{CINZA_CLARO}; border-radius:6px; padding:12px; margin-top:-4px;">'
+        f'<div style="font-size:10px; color:{TEXTO_MUTED}; text-transform:uppercase; letter-spacing:0.8px; font-weight:700; margin-bottom:8px;">'
+        f'Buscar par no Sankhya · digite parceiro, número da NF ou valor'
+        f'</div></div>',
+        unsafe_allow_html=True,
+    )
+
+    texto_atual = st.session_state.get("cv_busca_texto", {}).get(chave_str, "")
+    col_input, col_help = st.columns([3, 1])
+    with col_input:
+        novo = st.text_input(
+            "Buscar",
+            value=texto_atual,
+            key=f"cv_busca_txt_{idx_card}",
+            placeholder="Ex: Terra Ltda · 8214 · 304,31",
+            label_visibility="collapsed",
+        )
+        st.session_state["cv_busca_texto"][chave_str] = novo
+    with col_help:
+        st.caption("Vazio = por valor")
+
+    resultados = _buscar_titulos_em_aberto(novo, valor_venda=valor_venda, limite=15)
+
+    if not resultados:
+        st.caption("Nenhum título em aberto encontrado.")
+        return
+
+    st.caption(f"{len(resultados)} título(s) em aberto — clique em 'Ligar aqui' pra confirmar")
+
+    venda_dict = venda.to_dict() if hasattr(venda, "to_dict") else dict(venda)
+
+    for i, tit in enumerate(resultados):
+        classe = tit.get("sk_classe")
+        if classe == "adiantamento":
+            tag_html = '<span class="cv-candidata-tag-adi">Adiant.</span>'
+            ref_nf = tit.get("sk_ref_nf")
+            id_txt = f"REF NF {ref_nf}" if ref_nf else "sem REF NF"
+        else:
+            tag_html = '<span class="cv-candidata-tag-nf">NF</span>'
+            id_txt = f"NF {tit.get('sk_nro_nota')}" if tit.get("sk_nro_nota") else "sem número"
+
+        parceiro = tit.get("sk_nome_parceiro") or "—"
+        vlr = tit.get("sk_vlr_desdobramento")
+        venc = tit.get("sk_dt_vencimento")
+
+        # Diferença ao valor da venda
+        dif_txt = ""
+        if valor_venda is not None and vlr is not None:
+            try:
+                dif = float(vlr) - valor_venda
+                if abs(dif) < 0.01:
+                    dif_txt = f' <span style="color:{VERDE}; font-weight:600;">· ao centavo</span>'
+                else:
+                    dif_txt = f' <span style="color:{LARANJA};">· dif {_fmt_moeda(abs(dif))}</span>'
+            except (ValueError, TypeError):
+                pass
+
+        col_info, col_btn = st.columns([4, 1])
+        with col_info:
+            st.markdown(
+                f'<div style="background:{BRANCO}; border-radius:4px; padding:6px 10px; font-size:12px; color:{AZUL_NAVY}; margin-bottom:4px;">'
+                f'{tag_html} '
+                f'<span>{_escape(id_txt)} · {_escape(parceiro)} · venc {_fmt_data_br(venc)} · {_fmt_moeda(vlr)}{dif_txt}</span>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+        with col_btn:
+            if st.button("Ligar aqui", key=f"cv_ligar_{idx_card}_{i}", type="primary", use_container_width=True):
+                _acao_ligar_manualmente(chave_str, tit, venda_dict=venda_dict)
+                st.rerun()
 
 
 def _render_pill_a_analisar(resultado):
@@ -1171,13 +1497,27 @@ def _render_pill_a_analisar(resultado):
     ambiguos = resultado.a_analisar_ambiguos
     venda_st = resultado.a_analisar_venda_sem_titulo
     ligacoes_desf = st.session_state.get("cv_ligacoes_desfeitas", set())
+    confirmadas = st.session_state.get("cv_confirmadas_manual", {})
 
-    total = 0
-    if ambiguos is not None:
-        total += len(ambiguos)
-    if venda_st is not None:
-        total += len(venda_st)
-    total += len(ligacoes_desf)
+    def _foi_confirmada(venda_row) -> bool:
+        chave = _chave_venda_original(venda_row)
+        chave_str = "|".join(str(x) for x in chave)
+        return chave_str in confirmadas
+
+    # Filtrar vendas que já foram confirmadas manualmente
+    ambiguos_pendentes = []
+    if ambiguos is not None and not ambiguos.empty:
+        for _, venda in ambiguos.iterrows():
+            if not _foi_confirmada(venda):
+                ambiguos_pendentes.append(venda)
+
+    vst_pendentes = []
+    if venda_st is not None and not venda_st.empty:
+        for _, venda in venda_st.iterrows():
+            if not _foi_confirmada(venda):
+                vst_pendentes.append(venda)
+
+    total = len(ambiguos_pendentes) + len(vst_pendentes) + len(ligacoes_desf)
 
     if total == 0:
         st.markdown(
@@ -1190,35 +1530,37 @@ def _render_pill_a_analisar(resultado):
     renderizados = 0
     idx = 0
 
-    if ambiguos is not None and not ambiguos.empty:
-        for _, venda in ambiguos.iterrows():
-            if renderizados >= max_cards:
-                break
-            _render_card_ambiguo(venda, idx)
-            renderizados += 1
-            idx += 1
+    # 1. Ambíguos (mais urgentes)
+    for venda in ambiguos_pendentes:
+        if renderizados >= max_cards:
+            break
+        _render_card_ambiguo(venda, idx)
+        renderizados += 1
+        idx += 1
 
-    if venda_st is not None and not venda_st.empty:
-        divergencias = []
-        aguardando = []
-        for _, venda in venda_st.iterrows():
-            status_key, _ = _classificar_venda_sem_titulo(venda, hoje)
-            if status_key == "divergencia_real":
-                divergencias.append(venda)
-            else:
-                aguardando.append(venda)
+    # 2. Divergências reais e depois aguardando faturamento
+    divergencias = []
+    aguardando = []
+    for venda in vst_pendentes:
+        status_key, _ = _classificar_venda_sem_titulo(venda, hoje)
+        if status_key == "divergencia_real":
+            divergencias.append(venda)
+        else:
+            aguardando.append(venda)
 
-        for venda in divergencias:
-            if renderizados >= max_cards:
-                break
-            _render_card_venda_sem_titulo(venda, hoje)
-            renderizados += 1
+    for venda in divergencias:
+        if renderizados >= max_cards:
+            break
+        _render_card_venda_sem_titulo(venda, idx, hoje)
+        renderizados += 1
+        idx += 1
 
-        for venda in aguardando:
-            if renderizados >= max_cards:
-                break
-            _render_card_venda_sem_titulo(venda, hoje)
-            renderizados += 1
+    for venda in aguardando:
+        if renderizados >= max_cards:
+            break
+        _render_card_venda_sem_titulo(venda, idx, hoje)
+        renderizados += 1
+        idx += 1
 
     if renderizados < total:
         col1, col2 = st.columns([3, 1])
@@ -1325,9 +1667,73 @@ def _render_card_conciliada(grupo: Dict[str, Any], idx_card: int, mostrar_desfaz
         st.markdown('<div style="margin-bottom:8px;"></div>', unsafe_allow_html=True)
 
 
+def _render_card_confirmacao_manual(chave_str: str, dados: Dict[str, Any], idx_card: int):
+    """Card branco com faixa verde. Confirmação manual (via candidata ou busca)."""
+    fonte = dados.get("fonte", "?")
+    fonte_label = "Escolhida entre candidatas" if fonte == "ambiguo" else "Ligada via busca manual"
+
+    adq = _label_adquirente(dados.get("venda_adquirente"))
+    ban = _label_bandeira(dados.get("venda_bandeira"))
+    mod = _label_modalidade(dados.get("venda_modalidade"))
+    parceiro = dados.get("sk_nome_parceiro") or "—"
+    valor = dados.get("venda_valor") or dados.get("sk_vlr_desdobramento")
+    data_venda = dados.get("venda_data")
+    classe_sk = dados.get("sk_classe")
+    nro_nota = dados.get("sk_nro_nota")
+    venc = dados.get("sk_dt_vencimento")
+
+    if classe_sk == "adiantamento":
+        ref_nf = dados.get("sk_ref_nf")
+        titulo_txt = f"Adiantamento · REF NF {ref_nf}" if ref_nf else "Adiantamento"
+    else:
+        titulo_txt = f"NF {nro_nota}" if nro_nota else "Nota fiscal"
+
+    tags = [
+        f'<span class="cv-tag cv-tag-verde">✓ {_escape(fonte_label)}</span>',
+        f'<span class="cv-tag cv-tag-adq">{_escape(adq)}</span>',
+        f'<span class="cv-tag">{_escape(mod)} · {_escape(ban)}</span>',
+    ]
+
+    card_html = (
+        f'<div class="cv-card cv-card-sucesso">'
+        f'<div class="cv-card-topo">'
+        f'<div style="flex:1; min-width:0;">'
+        f'<div class="cv-tag-linha">{"".join(tags)}</div>'
+        f'<div class="cv-card-titulo">{_escape(parceiro)}</div>'
+        f'<div class="cv-card-sub">'
+        f'Vendido em {_fmt_data_br(data_venda)} → {_escape(titulo_txt)} · venc {_fmt_data_br(venc)}'
+        f'</div>'
+        f'</div>'
+        f'<div class="cv-valor-dir">'
+        f'<div class="cv-valor-grande">{_fmt_moeda(valor)}</div>'
+        f'<div class="cv-valor-sub">valor da venda</div>'
+        f'</div>'
+        f'</div>'
+        f'</div>'
+    )
+    st.markdown(card_html, unsafe_allow_html=True)
+
+    col_esp, col_btn = st.columns([5, 1])
+    with col_btn:
+        if st.button(
+            "↺ Desfazer",
+            key=f"cv_desf_man_{idx_card}_{chave_str[:40]}",
+            help="Desfazer esta ligação manual — a venda voltará a 'A analisar'",
+            use_container_width=True,
+        ):
+            _acao_desfazer_confirmacao_manual(chave_str)
+            st.rerun()
+    st.markdown('<div style="margin-bottom:8px;"></div>', unsafe_allow_html=True)
+
+
 def _render_pill_auto_conciliadas(resultado):
     df_g1 = resultado.grupo_1_conciliadas
-    if df_g1 is None or df_g1.empty:
+    confirmadas = st.session_state.get("cv_confirmadas_manual", {})
+
+    tem_g1 = df_g1 is not None and not df_g1.empty
+    tem_manuais = bool(confirmadas)
+
+    if not tem_g1 and not tem_manuais:
         st.markdown(
             '<div class="cv-empty-state">Nenhuma venda auto-conciliada nesta rodada.</div>',
             unsafe_allow_html=True,
@@ -1335,20 +1741,36 @@ def _render_pill_auto_conciliadas(resultado):
         return
 
     ligacoes_desf = st.session_state.get("cv_ligacoes_desfeitas", set())
-    grupos = _agrupar_conciliadas_por_venda(df_g1, ligacoes_desf)
+    grupos = _agrupar_conciliadas_por_venda(df_g1, ligacoes_desf) if tem_g1 else []
 
-    if not grupos:
+    # BLOCO 1: Confirmadas manualmente (aparece primeiro, se houver)
+    if tem_manuais:
         st.markdown(
-            '<div class="cv-empty-state">Todas as auto-conciliações foram desfeitas manualmente.</div>',
+            f'<div class="cv-secao-wrapper">'
+            f'<div class="cv-secao-header">'
+            f'<div class="cv-secao-header-titulo">'
+            f'{len(confirmadas)} confirmadas manualmente · você ligou nesta rodada'
+            f'</div>'
+            f'</div>'
+            f'</div>',
             unsafe_allow_html=True,
         )
+        for i, (chave_str, dados) in enumerate(confirmadas.items()):
+            _render_card_confirmacao_manual(chave_str, dados, i)
+
+    if not grupos:
+        if not tem_manuais:
+            st.markdown(
+                '<div class="cv-empty-state">Todas as auto-conciliações foram desfeitas manualmente.</div>',
+                unsafe_allow_html=True,
+            )
         return
 
-    # Header + busca
+    # BLOCO 2: Auto-conciliadas pelo motor
     header_html = (
         f'<div class="cv-secao-wrapper">'
         f'<div class="cv-secao-header">'
-        f'<div class="cv-secao-header-titulo">{len(grupos)} vendas · agrupadas por venda</div>'
+        f'<div class="cv-secao-header-titulo">{len(grupos)} auto-conciliadas pelo motor · agrupadas por venda</div>'
         f'</div>'
         f'</div>'
     )
@@ -1540,22 +1962,85 @@ def _render_pill_devolucoes(resultado):
 # AÇÕES
 # ==============================================================================
 
-def _acao_escolher_candidata(chave_venda_str: str, candidato_dict: Dict[str, Any]):
+def _acao_escolher_candidata(chave_venda_str: str, candidato_dict: Dict[str, Any],
+                             venda_dict: Optional[Dict[str, Any]] = None):
     st.session_state["cv_confirmadas_manual"][chave_venda_str] = {
-        "sk_idx": candidato_dict.get("idx_sankhya"),
-        "sk_nro_nota": candidato_dict.get("nro_nota"),
-        "sk_classe": candidato_dict.get("classe"),
-        "sk_nome_parceiro": candidato_dict.get("nome_parceiro"),
-        "sk_vlr_desdobramento": candidato_dict.get("vlr_desdobramento"),
-        "sk_dt_vencimento": candidato_dict.get("dt_vencimento"),
+        "fonte": "ambiguo",
+        "sk_idx": candidato_dict.get("idx_sankhya") or candidato_dict.get("sk_idx"),
+        "sk_nro_nota": candidato_dict.get("nro_nota") or candidato_dict.get("sk_nro_nota"),
+        "sk_classe": candidato_dict.get("classe") or candidato_dict.get("sk_classe"),
+        "sk_nome_parceiro": candidato_dict.get("nome_parceiro") or candidato_dict.get("sk_nome_parceiro"),
+        "sk_vlr_desdobramento": candidato_dict.get("vlr_desdobramento") or candidato_dict.get("sk_vlr_desdobramento"),
+        "sk_dt_vencimento": candidato_dict.get("dt_vencimento") or candidato_dict.get("sk_dt_vencimento"),
+        "sk_ref_nf": candidato_dict.get("nro_nota_referenciada") or candidato_dict.get("sk_ref_nf"),
+        "venda_adquirente": (venda_dict or {}).get("adquirente"),
+        "venda_bandeira": (venda_dict or {}).get("bandeira"),
+        "venda_modalidade": (venda_dict or {}).get("modalidade"),
+        "venda_valor": (venda_dict or {}).get("valor_match"),
+        "venda_data": (venda_dict or {}).get("data_prev_pagamento"),
+        "venda_nsu": (venda_dict or {}).get("nsu"),
     }
     st.session_state["cv_historico"].append({
         "acao": "escolher_candidata",
         "chave_venda": chave_venda_str,
-        "sk_nro_nota": candidato_dict.get("nro_nota"),
-        "sk_classe": candidato_dict.get("classe"),
+        "sk_nro_nota": candidato_dict.get("nro_nota") or candidato_dict.get("sk_nro_nota"),
+        "sk_classe": candidato_dict.get("classe") or candidato_dict.get("sk_classe"),
         "quando": datetime.now().isoformat(timespec="seconds"),
     })
+
+
+def _acao_toggle_busca(chave_venda_str: str):
+    aberta = st.session_state.get("cv_busca_aberta", {})
+    aberta[chave_venda_str] = not aberta.get(chave_venda_str, False)
+    st.session_state["cv_busca_aberta"] = aberta
+
+
+def _acao_ligar_manualmente(chave_venda_str: str, titulo_dict: Dict[str, Any],
+                            venda_dict: Optional[Dict[str, Any]] = None):
+    """Registra ligação manual a partir da busca. Fecha a busca do card."""
+    st.session_state["cv_confirmadas_manual"][chave_venda_str] = {
+        "fonte": "busca_manual",
+        "sk_idx": titulo_dict.get("sk_idx"),
+        "sk_nro_nota": titulo_dict.get("sk_nro_nota"),
+        "sk_classe": titulo_dict.get("sk_classe"),
+        "sk_nome_parceiro": titulo_dict.get("sk_nome_parceiro"),
+        "sk_vlr_desdobramento": titulo_dict.get("sk_vlr_desdobramento"),
+        "sk_dt_vencimento": titulo_dict.get("sk_dt_vencimento"),
+        "sk_ref_nf": titulo_dict.get("sk_ref_nf"),
+        "venda_adquirente": (venda_dict or {}).get("adquirente"),
+        "venda_bandeira": (venda_dict or {}).get("bandeira"),
+        "venda_modalidade": (venda_dict or {}).get("modalidade"),
+        "venda_valor": (venda_dict or {}).get("valor_match"),
+        "venda_data": (venda_dict or {}).get("data_prev_pagamento"),
+        "venda_nsu": (venda_dict or {}).get("nsu"),
+    }
+    st.session_state["cv_historico"].append({
+        "acao": "ligar_manualmente",
+        "chave_venda": chave_venda_str,
+        "sk_nro_nota": titulo_dict.get("sk_nro_nota"),
+        "sk_classe": titulo_dict.get("sk_classe"),
+        "sk_nome_parceiro": titulo_dict.get("sk_nome_parceiro"),
+        "quando": datetime.now().isoformat(timespec="seconds"),
+    })
+    # Fecha a busca do card
+    aberta = st.session_state.get("cv_busca_aberta", {})
+    aberta[chave_venda_str] = False
+    st.session_state["cv_busca_aberta"] = aberta
+
+
+def _acao_desfazer_confirmacao_manual(chave_venda_str: str):
+    """Remove uma confirmação manual (ambíguo ou busca_manual)."""
+    confirmadas = st.session_state.get("cv_confirmadas_manual", {})
+    dados = confirmadas.pop(chave_venda_str, None)
+    st.session_state["cv_confirmadas_manual"] = confirmadas
+    if dados:
+        st.session_state["cv_historico"].append({
+            "acao": "desfazer_manual",
+            "chave_venda": chave_venda_str,
+            "fonte_original": dados.get("fonte"),
+            "sk_nro_nota": dados.get("sk_nro_nota"),
+            "quando": datetime.now().isoformat(timespec="seconds"),
+        })
 
 
 def _acao_pedir_desfazer(grupo: Dict[str, Any]):
