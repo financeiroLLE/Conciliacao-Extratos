@@ -277,6 +277,55 @@ _CSS = f"""
 .cv-confirmacao-titulo {{ font-size: 14px; color: {AZUL_NAVY} !important; font-weight: 700; margin-bottom: 4px; }}
 .cv-confirmacao-descr  {{ font-size: 13px; color: {AZUL_NAVY} !important; margin-bottom: 10px; }}
 
+/* -------- BOTÕES PADRONIZADOS LLE — sobrescreve o azul do Streamlit -------- */
+/* Primário = amarelo LLE (ações de confirmar/rodar/exportar/escolher) */
+div[data-testid="stButton"] > button[kind="primary"],
+div[data-testid="stDownloadButton"] > button[kind="primary"],
+div[data-testid="stFormSubmitButton"] > button[kind="primary"] {{
+    background-color: {AMARELO} !important;
+    color: {AZUL_NAVY} !important;
+    border: none !important;
+    font-weight: 500 !important;
+}}
+div[data-testid="stButton"] > button[kind="primary"]:hover,
+div[data-testid="stDownloadButton"] > button[kind="primary"]:hover,
+div[data-testid="stFormSubmitButton"] > button[kind="primary"]:hover {{
+    background-color: {AMARELO_ESCURO} !important;
+    color: {AZUL_NAVY} !important;
+    border: none !important;
+}}
+div[data-testid="stButton"] > button[kind="primary"]:active,
+div[data-testid="stButton"] > button[kind="primary"]:focus:not(:active),
+div[data-testid="stDownloadButton"] > button[kind="primary"]:active,
+div[data-testid="stDownloadButton"] > button[kind="primary"]:focus:not(:active) {{
+    background-color: {AMARELO_ESCURO} !important;
+    color: {AZUL_NAVY} !important;
+    box-shadow: none !important;
+    border: none !important;
+}}
+
+/* Secundário = creme com borda amarela (ações de fechar/cancelar/desfazer/navegar) */
+div[data-testid="stButton"] > button[kind="secondary"],
+div[data-testid="stDownloadButton"] > button[kind="secondary"] {{
+    background-color: {CREME} !important;
+    color: {AZUL_NAVY} !important;
+    border: 1px solid {AMARELO_ESCURO} !important;
+    font-weight: 500 !important;
+}}
+div[data-testid="stButton"] > button[kind="secondary"]:hover,
+div[data-testid="stDownloadButton"] > button[kind="secondary"]:hover {{
+    background-color: {CREME_ESCURO} !important;
+    color: {AZUL_NAVY} !important;
+    border: 1px solid {AMARELO_ESCURO} !important;
+}}
+div[data-testid="stButton"] > button[kind="secondary"]:active,
+div[data-testid="stButton"] > button[kind="secondary"]:focus:not(:active) {{
+    background-color: {CREME_ESCURO} !important;
+    color: {AZUL_NAVY} !important;
+    box-shadow: none !important;
+    border: 1px solid {AMARELO_ESCURO} !important;
+}}
+
 /* -------- BOTÃO DE BUSCA COLADO AO CARD -------- */
 /* O div wrapper .cv-btn-busca-wrapper marca o próximo st.button como botão-busca */
 .cv-btn-busca-wrapper {{ height: 0; margin: 0; padding: 0; }}
@@ -285,17 +334,10 @@ _CSS = f"""
     margin-bottom: 0 !important;
 }}
 .cv-btn-busca-wrapper + div[data-testid="stButton"] > button {{
-    background: {CREME} !important;
-    color: {AZUL_NAVY} !important;
-    border: 1px solid {AMARELO_ESCURO} !important;
     border-top: none !important;
     border-radius: 0 0 8px 8px !important;
     font-size: 12px !important;
-    font-weight: 500 !important;
     height: 36px !important;
-}}
-.cv-btn-busca-wrapper + div[data-testid="stButton"] > button:hover {{
-    background: {CREME_ESCURO} !important;
 }}
 
 /* -------- RODAPÉ -------- */
@@ -1394,7 +1436,8 @@ def _render_card_ambiguo(venda: pd.Series, idx_card: int):
                     label = f"Escolher NF {cand.get('nro_nota')}"
                 else:
                     label = "Escolher Adiantamento"
-                if st.button(label, key=f"cv_esc_{idx_card}_{i}", use_container_width=True):
+                if st.button(label, key=f"cv_esc_{idx_card}_{i}",
+                             type="primary", use_container_width=True):
                     _acao_escolher_candidata(chave_str, cand, venda_dict=venda_dict)
                     st.rerun()
         st.markdown('<div style="margin-bottom:6px;"></div>', unsafe_allow_html=True)
