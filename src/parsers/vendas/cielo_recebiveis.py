@@ -1,214 +1,79 @@
 # -*- coding: utf-8 -*-
 """
-Leitor do relatório Cielo "Recebíveis Detalhado - Lançamentos".
+Leitor Cielo — suporta AMBOS os formatos:
 
-Formato esperado:
-- Arquivo .xls binário (D0CF11E0)
-- Uma única aba
-- Linhas 0-8: metadados (título, filtros, totalizador)
-- Linha 9 (índice 9): cabeçalho (59 colunas)
-- Linha 10+: dados
+  Formato ANTIGO ("Recebíveis Detalhado - Lançamentos"):
+    - 59 colunas, cabeçalho L9
+    - Uma linha por parcela
 
-Contexto MVP-A:
-- Todas as vendas Cielo do Grupo LLE são "Link de pagamento" (não há POS)
-- Estabelecimento único: 1116384474
+  Formato NOVO ("Detalhado de vendas Cielo"):
+    - 44 colunas, cabeçalho L9
+    - Uma linha por venda (parcelas expandidas virtualmente pelo leitor)
+    - Traz VALOR BRUTO TOTAL da venda — dividimos por N parcelas p/ bater com Sankhya
 """
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from typing import Optional
 
 import pandas as pd
 import xlrd
 
 
-# ==============================================================================
-# CONSTANTES
-# ==============================================================================
-
-# Colunas críticas do cabeçalho de 59 colunas (Cielo)
-COL_DATA_PAGAMENTO = 0
-COL_DATA_LANCAMENTO = 1
-COL_ESTABELECIMENTO = 2
-COL_TIPO_LANCAMENTO = 3          # "Venda crédito", "Venda parcelada", etc.
-COL_FORMA_PAGAMENTO = 4          # "Crédito à vista", "Crédito parcelado loja", "Débito"
-COL_BANDEIRA = 5
-COL_VALOR_BRUTO = 6
-COL_TAXA_TARIFA = 7              # negativo (desconto)
-COL_VALOR_LIQUIDO = 8
-COL_STATUS_PAGAMENTO = 9
-COL_DESCRICAO = 10
-COL_DATA_VENDA = 11
-COL_HORA_VENDA = 12
-COL_DATA_PREV_PAGAMENTO = 13
-COL_AUTORIZACAO = 15
-COL_NSU_DOC = 16
-COL_CODIGO_VENDA = 17            # chave única mais confiável no Cielo
-COL_TID = 18
-COL_NUMERO_PEDIDO = 24
-COL_PARCELA_NUM = 27             # "01"
-COL_PARCELAS_TOTAL = 28          # "02"
-COL_MODALIDADE = 30              # "Link de pagamento", "Presencial", etc.
-COL_TAXA_TOTAL_PCT = 36
-COL_TAXA_MDR_PCT = 37
-COL_TAXA_PRAZO_PCT = 38
-COL_VALOR_TAXA_MDR = 39
-COL_VALOR_TAXA_PRAZO = 40
-
-# Colunas de saída padronizadas para o motor
 COLUNAS_SAIDA = [
-    "adquirente",
-    "estabelecimento",
-    "data_venda",
-    "data_pagamento",
-    "data_prev_pagamento",
-    "valor_bruto",
-    "valor_taxa",
-    "valor_liquido",
-    "bandeira",
-    "modalidade",                # "credito_avista" | "credito_parcelado" | "debito" | "pix"
-    "canal",                     # "link_pagamento" | "presencial" | "ecommerce" | "outro"
-    "parcela_atual",             # int, 1 quando à vista
-    "parcelas_total",            # int, 1 quando à vista
-    "autorizacao",
-    "nsu",
-    "codigo_venda",
-    "tid",
-    "numero_pedido",
-    "tipo_lancamento",
-    "forma_pagamento_original",  # texto original da Cielo
-    "modalidade_original",       # texto original da Cielo
-    "taxa_mdr_pct",
-    "taxa_prazo_pct",
-    "status_pagamento",
+    "adquirente", "estabelecimento",
+    "data_venda", "data_pagamento", "data_prev_pagamento",
+    "valor_bruto", "valor_bruto_venda_total", "valor_taxa", "valor_liquido",
+    "bandeira", "modalidade", "canal",
+    "parcela_atual", "parcelas_total",
+    "autorizacao", "nsu", "codigo_venda", "tid",
+    "numero_pedido", "nota_fiscal",
+    "forma_pagamento_original", "taxa_mdr_pct", "status_pagamento",
+    "formato",
 ]
 
 
-# ==============================================================================
-# HELPERS
-# ==============================================================================
-
-def _detectar_signature(dados: bytes) -> str:
+def _abrir_xls(dados: bytes):
     head = dados[:8]
-    if head.startswith(b"\xD0\xCF\x11\xE0"):
-        return "xls"
-    if head.startswith(b"PK\x03\x04"):
-        return "xlsx"
-    return "outro"
-
-
-def _abrir_workbook(dados: bytes):
-    sig = _detectar_signature(dados)
-    if sig == "xls":
-        return xlrd.open_workbook(file_contents=dados)
-    raise ValueError(
-        f"Cielo Recebíveis Detalhe deve vir como .xls binário. "
-        f"Byte signature recebido: {dados[:8]!r}"
-    )
-
-
-# ==============================================================================
-# VALIDAÇÃO DE CABEÇALHO
-# ==============================================================================
-
-MARCADORES_CABECALHO_CIELO = [
-    "data de pagamento",
-    "data do lançamento",
-    "estabelecimento",
-    "tipo de lançamento",
-    "forma de pagamento",
-    "bandeira",
-]
-
-
-def eh_cielo_recebiveis(dados: bytes) -> bool:
-    """Detecta se o arquivo é o Cielo Recebíveis Detalhe."""
-    try:
-        wb = _abrir_workbook(dados)
-    except Exception:
-        return False
-    if wb.nsheets < 1:
-        return False
-    sh = wb.sheet_by_index(0)
-    if sh.nrows < 12 or sh.ncols < 40:
-        return False
-
-    # Procurar linha de cabeçalho nas primeiras 15 linhas
-    idx_cab = _achar_cabecalho(sh)
-    return idx_cab is not None
-
-
-def _achar_cabecalho(sh) -> Optional[int]:
-    """
-    Localiza a linha de cabeçalho.
-
-    A linha 3 do arquivo Cielo contém um bloco "Filtros:\\nData de pagamento: ...\\n
-    Estabelecimento: ...\\n..." dentro de UMA SÓ célula — que tem todas as palavras-chave
-    e pode confundir um detector ingênuo. Portanto: exigimos que cada marcador esteja
-    numa CÉLULA DIFERENTE (igualdade exata, ou pelo menos comece com o marcador).
-    """
-    limite = min(15, sh.nrows)
-    for r in range(limite):
-        vals = [str(sh.cell_value(r, c)).strip().lower() for c in range(min(10, sh.ncols))]
-        # Contar quantas células BATEM (uma célula = um marcador no máximo)
-        celulas_marcadas = 0
-        for v in vals:
-            # Exigimos que a célula seja EXATAMENTE o marcador ou comece com ele
-            # (não seja um bloco longo que contém o marcador como substring)
-            if len(v) > 50:
-                continue
-            for m in MARCADORES_CABECALHO_CIELO:
-                if v == m or v.startswith(m):
-                    celulas_marcadas += 1
-                    break
-        if celulas_marcadas >= 5:
-            return r
-    return None
-
-
-# ==============================================================================
-# CONVERSÕES
-# ==============================================================================
-
-def _to_int(v) -> Optional[int]:
-    if v is None or v == "":
-        return None
-    try:
-        return int(float(v))
-    except (ValueError, TypeError):
-        # Cielo põe parcelas como "01", "02" — string com zero à esquerda
-        try:
-            s = str(v).strip()
-            return int(s) if s else None
-        except Exception:
-            return None
+    if not head.startswith(b"\xD0\xCF\x11\xE0"):
+        raise ValueError(f"Cielo deve vir como .xls binário. Byte signature: {head!r}")
+    return xlrd.open_workbook(file_contents=dados)
 
 
 def _to_float(v) -> float:
-    if v is None or v == "":
+    if v is None or v == "" or v == "-":
         return 0.0
     try:
         return float(v)
     except (ValueError, TypeError):
-        # às vezes vem "R$ 1.234,56"
-        s = str(v).strip()
-        s = re.sub(r"[^\d,\-]", "", s).replace(",", ".")
+        s = re.sub(r"[^\d,\.\-]", "", str(v)).replace(",", ".")
         try:
             return float(s) if s else 0.0
         except ValueError:
             return 0.0
 
 
+def _to_int(v, default: int = 1) -> int:
+    if v is None or v == "" or v == "-":
+        return default
+    try:
+        return int(float(v))
+    except (ValueError, TypeError):
+        try:
+            s = str(v).strip()
+            return int(s) if s else default
+        except Exception:
+            return default
+
+
 def _to_date(v, datemode: int) -> Optional[date]:
-    if v is None or v == "":
+    if v is None or v == "" or v == "-":
         return None
     if isinstance(v, str):
-        s = v.strip()
-        if not s:
-            return None
+        s = v.strip().split()[0] if v.strip() else ""
         for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d/%m/%y"):
             try:
                 return datetime.strptime(s, fmt).date()
@@ -225,41 +90,86 @@ def _to_date(v, datemode: int) -> Optional[date]:
         return None
 
 
-# ==============================================================================
-# CLASSIFICAÇÃO DE MODALIDADE E CANAL
-# ==============================================================================
+_MARCADORES_CIELO = ["estabelecimento", "bandeira", "valor bruto", "valor líquido", "data"]
 
-def _classificar_modalidade(forma_pagamento: str, tipo_lancamento: str) -> str:
-    """Mapeia o texto da Cielo para um código curto."""
-    fp = (forma_pagamento or "").lower()
-    tl = (tipo_lancamento or "").lower()
 
-    if "débito" in fp or "debito" in fp:
-        return "debito"
-    if "parcel" in fp or "parcel" in tl:
-        return "credito_parcelado"
-    if "crédito" in fp or "credito" in fp or "vista" in fp:
-        return "credito_avista"
-    if "pix" in fp or "pix" in tl:
+def _localizar_cabecalho(sh, limite: int = 15) -> Optional[int]:
+    for r in range(min(limite, sh.nrows)):
+        vals = [str(sh.cell_value(r, c)).strip().lower() for c in range(min(20, sh.ncols))]
+        celulas_ok = 0
+        for v in vals:
+            if len(v) > 60:
+                continue
+            for kw in _MARCADORES_CIELO:
+                if kw in v:
+                    celulas_ok += 1
+                    break
+        if celulas_ok >= 4:
+            return r
+    return None
+
+
+def _mapa_colunas(sh, idx_cab: int) -> dict:
+    header = [str(sh.cell_value(idx_cab, c)).strip().lower() for c in range(sh.ncols)]
+    return {h: i for i, h in enumerate(header) if h}
+
+
+def _col(mapa: dict, *aliases: str) -> Optional[int]:
+    for alias in aliases:
+        a = alias.lower()
+        if a in mapa:
+            return mapa[a]
+        for nome, idx in mapa.items():
+            if a in nome:
+                return idx
+    return None
+
+
+def eh_cielo(dados: bytes) -> bool:
+    try:
+        wb = _abrir_xls(dados)
+    except Exception:
+        return False
+    if wb.nsheets < 1:
+        return False
+    sh = wb.sheet_by_index(0)
+    return _localizar_cabecalho(sh) is not None
+
+
+def eh_cielo_recebiveis(dados: bytes) -> bool:
+    return eh_cielo(dados)
+
+
+_RE_DEBITO = re.compile(r"\bd[eé]bito\b", re.IGNORECASE)
+_RE_PARCEL = re.compile(r"\bparcel", re.IGNORECASE)
+_RE_AVISTA = re.compile(r"\b(à|a)\s*vista\b|\bavista\b", re.IGNORECASE)
+_RE_PIX = re.compile(r"\bpix\b", re.IGNORECASE)
+
+
+def _classificar_modalidade(forma_pgto: str, parcelas: int) -> str:
+    fp = (forma_pgto or "").lower()
+    if _RE_PIX.search(fp):
         return "pix"
+    if _RE_DEBITO.search(fp):
+        return "debito"
+    if _RE_PARCEL.search(fp) or parcelas > 1:
+        return "credito_parcelado"
+    if _RE_AVISTA.search(fp) or "credito" in fp or "crédito" in fp:
+        return "credito_avista"
     return "outro"
 
 
-def _classificar_canal(modalidade_txt: str) -> str:
-    """Classifica o canal (link/presencial/etc.)."""
-    m = (modalidade_txt or "").lower()
-    if "link" in m:
-        return "link_pagamento"
-    if "presencial" in m or "pos" in m:
-        return "presencial"
-    if "e-commerce" in m or "ecommerce" in m or "e commerce" in m:
-        return "ecommerce"
+def _classificar_canal(modalidade_txt: str, canal_venda: str) -> str:
+    for src in (canal_venda, modalidade_txt):
+        s = (src or "").lower()
+        if "link" in s:
+            return "link_pagamento"
+        if "e-commerce" in s or "ecommerce" in s or "e commerce" in s:
+            return "ecommerce"
+        if "presencial" in s or "pos" in s:
+            return "presencial"
     return "outro"
 
-
-# ==============================================================================
-# FUNÇÃO PRINCIPAL
-# ==============================================================================
 
 @dataclass
 class ResultadoLeituraCielo:
@@ -270,75 +180,144 @@ class ResultadoLeituraCielo:
     total_bruto: float
     total_taxa: float
     total_liquido: float
+    formato_detectado: str
+
+
+def _get(row, col_idx, default=""):
+    if col_idx is None:
+        return default
+    v = row[col_idx]
+    return v if v not in (None, "") else default
 
 
 def ler(dados: bytes) -> ResultadoLeituraCielo:
-    """Lê o Cielo Recebíveis Detalhe e retorna DataFrame normalizado."""
-    if not eh_cielo_recebiveis(dados):
-        raise ValueError("Arquivo não é o Cielo Recebíveis Detalhe (cabeçalho não bate).")
+    if not eh_cielo(dados):
+        raise ValueError("Arquivo não é o Cielo.")
 
-    wb = _abrir_workbook(dados)
+    wb = _abrir_xls(dados)
     sh = wb.sheet_by_index(0)
     datemode = wb.datemode
+    idx_cab = _localizar_cabecalho(sh)
+    mapa = _mapa_colunas(sh, idx_cab)
 
-    idx_cab = _achar_cabecalho(sh)
-    if idx_cab is None:
-        raise ValueError("Cabeçalho Cielo não localizado.")
+    col_data_venda = _col(mapa, "data da venda")
+    col_data_pgto = _col(mapa, "data de pagamento")
+    col_data_prev = _col(mapa, "data prevista do pagamento", "data prevista de pagamento", "data de pagamento")
+    col_estab = _col(mapa, "estabelecimento")
+    col_forma_pgto = _col(mapa, "forma de pagamento")
+    col_bandeira = _col(mapa, "bandeira")
+    col_valor_bruto = _col(mapa, "valor bruto")
+    col_valor_taxa = _col(mapa, "taxa/tarifa", "total de taxas", "taxa")
+    col_valor_liq = _col(mapa, "valor líquido", "valor liquido")
+    col_status = _col(mapa, "status da venda", "status do pagamento", "status")
+    col_autoriza = _col(mapa, "código de autorização", "codigo de autorizacao", "autorização")
+    col_nsu = _col(mapa, "nsu", "nsu/doc")
+    col_cod_venda = _col(mapa, "código da venda", "codigo da venda")
+    col_tid = _col(mapa, "tid")
+    col_nro_pedido = _col(mapa, "número do pedido", "numero do pedido")
+    col_nota_fiscal = _col(mapa, "nota fiscal")
+    col_parc_total = _col(mapa, "quantidade total de parcelas")
+    col_parc_num = _col(mapa, "número da parcela", "numero da parcela")
+    col_modalidade = _col(mapa, "modalidade")
+    col_canal = _col(mapa, "canal da venda", "canal")
+    col_taxa_mdr = _col(mapa, "taxa administrativa (mdr)", "taxa mdr")
+
+    # Formato NOVO: tem "quantidade total de parcelas" mas NÃO tem "número da parcela"
+    is_novo = col_parc_total is not None and col_parc_num is None
+    formato = "novo" if is_novo else "antigo"
 
     linhas = []
     ignoradas = 0
-    estabs_set = set()
+    estabs = set()
 
     for r in range(idx_cab + 1, sh.nrows):
         row = sh.row_values(r)
-
         if not any(str(v).strip() for v in row):
             ignoradas += 1
             continue
 
-        tipo_lanc = str(row[COL_TIPO_LANCAMENTO]).strip()
-        forma_pgto = str(row[COL_FORMA_PAGAMENTO]).strip()
-
-        # Filtrar apenas linhas de venda (Cielo não repete "Saldo Anterior" no detalhe)
-        if not tipo_lanc:
+        estab = str(_get(row, col_estab, "")).strip()
+        if not estab:
             ignoradas += 1
             continue
 
-        estab = str(row[COL_ESTABELECIMENTO]).strip()
-        if estab:
-            estabs_set.add(estab)
+        valor_bruto_raw = _to_float(_get(row, col_valor_bruto, 0))
+        if valor_bruto_raw == 0:
+            ignoradas += 1
+            continue
 
-        parc_atual = _to_int(row[COL_PARCELA_NUM]) or 1
-        parc_total = _to_int(row[COL_PARCELAS_TOTAL]) or 1
+        estabs.add(estab)
 
-        modalidade_txt = str(row[COL_MODALIDADE]).strip()
+        forma_pgto = str(_get(row, col_forma_pgto, "")).strip()
+        bandeira = str(_get(row, col_bandeira, "")).strip()
+        modalidade_txt = str(_get(row, col_modalidade, "")).strip()
+        canal_txt = str(_get(row, col_canal, "")).strip()
 
-        linhas.append({
-            "adquirente": "cielo",
-            "estabelecimento": estab,
-            "data_venda": _to_date(row[COL_DATA_VENDA], datemode),
-            "data_pagamento": _to_date(row[COL_DATA_PAGAMENTO], datemode),
-            "data_prev_pagamento": _to_date(row[COL_DATA_PREV_PAGAMENTO], datemode),
-            "valor_bruto": _to_float(row[COL_VALOR_BRUTO]),
-            "valor_taxa": abs(_to_float(row[COL_TAXA_TARIFA])),  # armazenar positivo
-            "valor_liquido": _to_float(row[COL_VALOR_LIQUIDO]),
-            "bandeira": str(row[COL_BANDEIRA]).strip(),
-            "modalidade": _classificar_modalidade(forma_pgto, tipo_lanc),
-            "canal": _classificar_canal(modalidade_txt),
-            "parcela_atual": parc_atual,
-            "parcelas_total": parc_total,
-            "autorizacao": str(row[COL_AUTORIZACAO]).strip(),
-            "nsu": str(row[COL_NSU_DOC]).strip(),
-            "codigo_venda": str(row[COL_CODIGO_VENDA]).strip(),
-            "tid": str(row[COL_TID]).strip(),
-            "numero_pedido": str(row[COL_NUMERO_PEDIDO]).strip(),
-            "tipo_lancamento": tipo_lanc,
-            "forma_pagamento_original": forma_pgto,
-            "modalidade_original": modalidade_txt,
-            "taxa_mdr_pct": _to_float(row[COL_TAXA_MDR_PCT]),
-            "taxa_prazo_pct": _to_float(row[COL_TAXA_PRAZO_PCT]),
-            "status_pagamento": str(row[COL_STATUS_PAGAMENTO]).strip(),
-        })
+        parc_total = _to_int(_get(row, col_parc_total, 1), 1) or 1
+        parc_num_raw = _to_int(_get(row, col_parc_num, 1), 1) or 1
+        valor_parcela = round(valor_bruto_raw / parc_total, 2) if parc_total > 0 else valor_bruto_raw
+
+        data_venda = _to_date(_get(row, col_data_venda), datemode)
+        data_prev = _to_date(_get(row, col_data_prev), datemode)
+        data_pgto = _to_date(_get(row, col_data_pgto), datemode)
+
+        modalidade = _classificar_modalidade(forma_pgto, parc_total)
+        canal = _classificar_canal(modalidade_txt, canal_txt)
+
+        valor_taxa_row = _to_float(_get(row, col_valor_taxa, 0))
+        valor_liq_row = _to_float(_get(row, col_valor_liq, 0))
+        taxa_mdr = _to_float(_get(row, col_taxa_mdr, 0))
+        status = str(_get(row, col_status, "")).strip()
+
+        # No formato novo, taxa e líquido também são totais da venda — dividir por N
+        if is_novo and parc_total > 1:
+            valor_taxa_parcela = round(valor_taxa_row / parc_total, 2)
+            valor_liq_parcela = round(valor_liq_row / parc_total, 2)
+        else:
+            valor_taxa_parcela = valor_taxa_row
+            valor_liq_parcela = valor_liq_row
+
+        base = dict(
+            adquirente="cielo",
+            estabelecimento=estab,
+            data_venda=data_venda,
+            data_pagamento=data_pgto,
+            valor_bruto_venda_total=valor_bruto_raw,
+            valor_taxa=abs(valor_taxa_parcela),
+            valor_liquido=valor_liq_parcela,
+            bandeira=bandeira,
+            modalidade=modalidade,
+            canal=canal,
+            parcelas_total=parc_total,
+            autorizacao=str(_get(row, col_autoriza, "")).strip(),
+            nsu=str(_get(row, col_nsu, "")).strip(),
+            codigo_venda=str(_get(row, col_cod_venda, "")).strip(),
+            tid=str(_get(row, col_tid, "")).strip(),
+            numero_pedido=str(_get(row, col_nro_pedido, "")).strip(),
+            nota_fiscal=str(_get(row, col_nota_fiscal, "")).strip(),
+            forma_pagamento_original=forma_pgto,
+            taxa_mdr_pct=taxa_mdr,
+            status_pagamento=status,
+            formato=formato,
+        )
+
+        if is_novo and parc_total > 1:
+            # Explode em N parcelas com datas D+30, D+60, ...
+            for n in range(1, parc_total + 1):
+                dt_prev_n = data_prev
+                if data_prev is not None and n > 1:
+                    dt_prev_n = data_prev + timedelta(days=30 * (n - 1))
+                linhas.append({**base,
+                    "data_prev_pagamento": dt_prev_n,
+                    "valor_bruto": valor_parcela,
+                    "parcela_atual": n,
+                })
+        else:
+            linhas.append({**base,
+                "data_prev_pagamento": data_prev,
+                "valor_bruto": valor_parcela,
+                "parcela_atual": parc_num_raw,
+            })
 
     df = pd.DataFrame(linhas, columns=COLUNAS_SAIDA)
 
@@ -346,8 +325,9 @@ def ler(dados: bytes) -> ResultadoLeituraCielo:
         df=df,
         total_linhas=len(linhas),
         linhas_ignoradas=ignoradas,
-        estabelecimentos=sorted(estabs_set),
+        estabelecimentos=sorted(estabs),
         total_bruto=float(df["valor_bruto"].sum()) if not df.empty else 0.0,
         total_taxa=float(df["valor_taxa"].sum()) if not df.empty else 0.0,
         total_liquido=float(df["valor_liquido"].sum()) if not df.empty else 0.0,
+        formato_detectado=formato,
     )
