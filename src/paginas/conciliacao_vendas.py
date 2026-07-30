@@ -60,7 +60,7 @@ from src.motor_vendas import classificador_sankhya
 
 # Exportação Excel (Fase 7 antecipada)
 try:
-    from src.relatorios import vendas_excel
+    from src.reports import vendas_excel
     _EXCEL_DISPONIVEL = True
 except ImportError:
     _EXCEL_DISPONIVEL = False
