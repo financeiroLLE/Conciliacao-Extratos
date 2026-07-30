@@ -196,6 +196,11 @@ _CSS = f"""
 .cv-card-divergencia {{ border-left-color: {LARANJA}; }}
 .cv-card-info       {{ border-left-color: {CINZA_INFO}; }}
 .cv-card-sucesso    {{ border-left-color: {VERDE}; }}
+/* Quando o card é seguido de wrapper de botão-busca, cantos inferiores retos e sem margem */
+.cv-card-com-busca {{
+    border-radius: 10px 10px 0 0 !important;
+    margin-bottom: 0 !important;
+}}
 
 .cv-card-topo {{ display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 8px; gap: 10px; }}
 
@@ -272,6 +277,27 @@ _CSS = f"""
 .cv-confirmacao-titulo {{ font-size: 14px; color: {AZUL_NAVY} !important; font-weight: 700; margin-bottom: 4px; }}
 .cv-confirmacao-descr  {{ font-size: 13px; color: {AZUL_NAVY} !important; margin-bottom: 10px; }}
 
+/* -------- BOTÃO DE BUSCA COLADO AO CARD -------- */
+/* O div wrapper .cv-btn-busca-wrapper marca o próximo st.button como botão-busca */
+.cv-btn-busca-wrapper {{ height: 0; margin: 0; padding: 0; }}
+.cv-btn-busca-wrapper + div[data-testid="stButton"] {{
+    margin-top: -10px !important;
+    margin-bottom: 0 !important;
+}}
+.cv-btn-busca-wrapper + div[data-testid="stButton"] > button {{
+    background: {CREME} !important;
+    color: {AZUL_NAVY} !important;
+    border: 1px solid {AMARELO_ESCURO} !important;
+    border-top: none !important;
+    border-radius: 0 0 8px 8px !important;
+    font-size: 12px !important;
+    font-weight: 500 !important;
+    height: 36px !important;
+}}
+.cv-btn-busca-wrapper + div[data-testid="stButton"] > button:hover {{
+    background: {CREME_ESCURO} !important;
+}}
+
 /* -------- RODAPÉ -------- */
 .cv-rodape-info {{
     font-size: 11px; color: {CREME}; opacity: 0.75;
@@ -319,6 +345,46 @@ def _escape(s: Any) -> str:
     if s is None:
         return ""
     return str(s).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _safe_str(v: Any, default: str = "") -> str:
+    """Converte valor para string, tratando None, NaN e strings vazias.
+
+    NaN de pandas/numpy é truthy em booleano — precisa checar explicitamente.
+    """
+    if v is None:
+        return default
+    try:
+        if pd.isna(v):
+            return default
+    except (TypeError, ValueError):
+        pass
+    s = str(v).strip()
+    if not s or s.lower() == "nan" or s.lower() == "none":
+        return default
+    return s
+
+
+def _safe_int_str(v: Any, default: str = "") -> str:
+    """Converte número para string sem '.0' de float. Trata NaN."""
+    if v is None:
+        return default
+    try:
+        if pd.isna(v):
+            return default
+    except (TypeError, ValueError):
+        pass
+    try:
+        # Se for número, remove .0
+        f = float(v)
+        if f == int(f):
+            return str(int(f))
+        return str(f)
+    except (ValueError, TypeError):
+        s = str(v).strip()
+        if not s or s.lower() in ("nan", "none"):
+            return default
+        return s
 
 
 def _label_bandeira(b: Any) -> str:
@@ -1358,10 +1424,10 @@ def _render_card_venda_sem_titulo(venda: pd.Series, idx_card: int, hoje: date):
     bruto, taxa_pct, liquido = _puxar_valores_originais(venda)
 
     if status_key == "divergencia_real":
-        card_class = "cv-card cv-card-divergencia"
+        card_class = "cv-card cv-card-divergencia cv-card-com-busca"
         tag_status = f'<span class="cv-tag cv-tag-laranja">{_escape(status_label)}</span>'
     else:
-        card_class = "cv-card cv-card-info"
+        card_class = "cv-card cv-card-info cv-card-com-busca"
         tag_status = f'<span class="cv-tag">{_escape(status_label)}</span>'
 
     tags = [
@@ -1392,102 +1458,138 @@ def _render_card_venda_sem_titulo(venda: pd.Series, idx_card: int, hoje: date):
     )
     st.markdown(card_html, unsafe_allow_html=True)
 
-    # Botão de busca + área expandida
+    # Botão de busca "colado" visualmente ao card
     chave_venda = _chave_venda_original(venda)
     chave_str = "|".join(str(x) for x in chave_venda)
     aberta = st.session_state.get("cv_busca_aberta", {}).get(chave_str, False)
 
-    col_btn, col_esp = st.columns([2, 3])
-    with col_btn:
-        label_btn = "✕  Fechar busca" if aberta else "🔍  Buscar par no Sankhya"
-        if st.button(label_btn, key=f"cv_toggle_busca_{idx_card}", use_container_width=True):
-            _acao_toggle_busca(chave_str)
-            st.rerun()
+    # Wrapper invisível apenas para permitir CSS específico via class-based sibling
+    st.markdown('<div class="cv-btn-busca-wrapper"></div>', unsafe_allow_html=True)
+
+    if aberta:
+        label_btn = "✕  Fechar busca"
+    else:
+        label_btn = "🔍  Buscar par no Sankhya"
+
+    if st.button(label_btn, key=f"cv_toggle_busca_{idx_card}", use_container_width=True):
+        # Ao ABRIR pela primeira vez, pré-preenche o texto com o valor bruto da venda
+        if not aberta:
+            bruto_pre, _, _ = _puxar_valores_originais(venda)
+            valor_pre = bruto_pre if bruto_pre is not None else venda.get("valor_match")
+            if valor_pre is not None:
+                # Formato brasileiro: 304,31
+                try:
+                    texto_pre = f"{float(valor_pre):.2f}".replace(".", ",")
+                except (ValueError, TypeError):
+                    texto_pre = ""
+                busca_txt = st.session_state.get("cv_busca_texto", {})
+                busca_txt[chave_str] = texto_pre
+                st.session_state["cv_busca_texto"] = busca_txt
+        _acao_toggle_busca(chave_str)
+        st.rerun()
 
     if aberta:
         _render_busca_inline(venda, chave_str, idx_card)
 
-    st.markdown('<div style="margin-bottom:6px;"></div>', unsafe_allow_html=True)
+    st.markdown('<div style="margin-bottom:10px;"></div>', unsafe_allow_html=True)
 
 
 def _render_busca_inline(venda: pd.Series, chave_str: str, idx_card: int):
     """Renderiza o input de busca + resultados dentro do card sem par."""
-    valor_venda = venda.get("valor_match")
+    # Valor de referência = valor bruto da venda (pra ordenar por proximidade)
+    bruto_ref, _, _ = _puxar_valores_originais(venda)
+    if bruto_ref is None:
+        bruto_ref = venda.get("valor_match")
     try:
-        valor_venda = float(valor_venda) if valor_venda is not None else None
+        valor_ref = float(bruto_ref) if bruto_ref is not None else None
     except (ValueError, TypeError):
-        valor_venda = None
+        valor_ref = None
 
-    # Container visual da busca
+    # Header explicativo
     st.markdown(
-        f'<div style="background:{CINZA_CLARO}; border-radius:6px; padding:12px; margin-top:-4px;">'
-        f'<div style="font-size:10px; color:{TEXTO_MUTED}; text-transform:uppercase; letter-spacing:0.8px; font-weight:700; margin-bottom:8px;">'
-        f'Buscar par no Sankhya · digite parceiro, número da NF ou valor'
+        f'<div style="background:{CINZA_CLARO}; border-radius:6px 6px 0 0; padding:10px 12px; margin-top:-6px;">'
+        f'<div style="font-size:10px; color:{TEXTO_MUTED}; text-transform:uppercase; letter-spacing:0.8px; font-weight:700;">'
+        f'Buscar par no Sankhya · valor bruto pré-preenchido · edite pra buscar por parceiro ou NF'
         f'</div></div>',
         unsafe_allow_html=True,
     )
 
+    # Input
     texto_atual = st.session_state.get("cv_busca_texto", {}).get(chave_str, "")
-    col_input, col_help = st.columns([3, 1])
-    with col_input:
-        novo = st.text_input(
-            "Buscar",
-            value=texto_atual,
-            key=f"cv_busca_txt_{idx_card}",
-            placeholder="Ex: Terra Ltda · 8214 · 304,31",
-            label_visibility="collapsed",
-        )
-        st.session_state["cv_busca_texto"][chave_str] = novo
-    with col_help:
-        st.caption("Vazio = por valor")
+    if not texto_atual and valor_ref is not None:
+        # Fallback: se não tiver texto salvo, usar o valor
+        try:
+            texto_atual = f"{valor_ref:.2f}".replace(".", ",")
+        except (ValueError, TypeError):
+            pass
 
-    resultados = _buscar_titulos_em_aberto(novo, valor_venda=valor_venda, limite=15)
+    novo = st.text_input(
+        "Buscar",
+        value=texto_atual,
+        key=f"cv_busca_txt_{idx_card}",
+        placeholder="Ex: Terra Ltda · 8214 · 304,31",
+        label_visibility="collapsed",
+    )
+    busca_txt = st.session_state.get("cv_busca_texto", {})
+    busca_txt[chave_str] = novo
+    st.session_state["cv_busca_texto"] = busca_txt
+
+    resultados = _buscar_titulos_em_aberto(novo, valor_venda=valor_ref, limite=10)
 
     if not resultados:
-        st.caption("Nenhum título em aberto encontrado.")
+        st.caption("Nenhum título em aberto encontrado. Tente outro termo.")
         return
 
-    st.caption(f"{len(resultados)} título(s) em aberto — clique em 'Ligar aqui' pra confirmar")
+    st.caption(f"{len(resultados)} título(s) — mais próximos do valor primeiro. Clique em 'Ligar aqui' pra confirmar.")
 
     venda_dict = venda.to_dict() if hasattr(venda, "to_dict") else dict(venda)
 
     for i, tit in enumerate(resultados):
-        classe = tit.get("sk_classe")
+        classe = _safe_str(tit.get("sk_classe"))
+
+        # Tag e identificador
         if classe == "adiantamento":
-            tag_html = '<span class="cv-candidata-tag-adi">Adiant.</span>'
-            ref_nf = tit.get("sk_ref_nf")
+            tag_html = '<span style="background:#FFF0E0;color:#D97706;font-size:9px;padding:2px 6px;border-radius:3px;margin-right:6px;font-weight:600;text-transform:uppercase;letter-spacing:0.4px;">Adiant.</span>'
+            ref_nf = _safe_int_str(tit.get("sk_ref_nf"))
             id_txt = f"REF NF {ref_nf}" if ref_nf else "sem REF NF"
         else:
-            tag_html = '<span class="cv-candidata-tag-nf">NF</span>'
-            id_txt = f"NF {tit.get('sk_nro_nota')}" if tit.get("sk_nro_nota") else "sem número"
+            tag_html = '<span style="background:#E8F5EC;color:#2E7D4F;font-size:9px;padding:2px 6px;border-radius:3px;margin-right:6px;font-weight:600;text-transform:uppercase;letter-spacing:0.4px;">NF</span>'
+            nro_nota = _safe_int_str(tit.get("sk_nro_nota"))
+            id_txt = f"NF {nro_nota}" if nro_nota else "sem número"
 
-        parceiro = tit.get("sk_nome_parceiro") or "—"
+        parceiro = _safe_str(tit.get("sk_nome_parceiro"), default="sem parceiro")
         vlr = tit.get("sk_vlr_desdobramento")
         venc = tit.get("sk_dt_vencimento")
 
         # Diferença ao valor da venda
         dif_txt = ""
-        if valor_venda is not None and vlr is not None:
-            try:
-                dif = float(vlr) - valor_venda
+        try:
+            if valor_ref is not None and vlr is not None and not pd.isna(vlr):
+                dif = float(vlr) - valor_ref
                 if abs(dif) < 0.01:
                     dif_txt = f' <span style="color:{VERDE}; font-weight:600;">· ao centavo</span>'
                 else:
                     dif_txt = f' <span style="color:{LARANJA};">· dif {_fmt_moeda(abs(dif))}</span>'
-            except (ValueError, TypeError):
-                pass
+        except (ValueError, TypeError):
+            pass
 
-        col_info, col_btn = st.columns([4, 1])
+        # Renderiza linha com todos os campos blindados
+        col_info, col_btn = st.columns([5, 1])
         with col_info:
-            st.markdown(
-                f'<div style="background:{BRANCO}; border-radius:4px; padding:6px 10px; font-size:12px; color:{AZUL_NAVY}; margin-bottom:4px;">'
-                f'{tag_html} '
-                f'<span>{_escape(id_txt)} · {_escape(parceiro)} · venc {_fmt_data_br(venc)} · {_fmt_moeda(vlr)}{dif_txt}</span>'
-                f'</div>',
-                unsafe_allow_html=True,
+            linha_html = (
+                f'<div style="background:{BRANCO}; border-radius:4px; padding:8px 10px; '
+                f'font-size:12px; color:{AZUL_NAVY}; margin-bottom:4px; min-height:32px;">'
+                f'{tag_html}'
+                f'<span style="color:{AZUL_NAVY};">'
+                f'{_escape(id_txt)} · <b>{_escape(parceiro)}</b> · '
+                f'venc {_fmt_data_br(venc)} · <b>{_fmt_moeda(vlr)}</b>{dif_txt}'
+                f'</span>'
+                f'</div>'
             )
+            st.markdown(linha_html, unsafe_allow_html=True)
         with col_btn:
-            if st.button("Ligar aqui", key=f"cv_ligar_{idx_card}_{i}", type="primary", use_container_width=True):
+            if st.button("Ligar aqui", key=f"cv_ligar_{idx_card}_{i}",
+                         type="primary", use_container_width=True):
                 _acao_ligar_manualmente(chave_str, tit, venda_dict=venda_dict)
                 st.rerun()
 
