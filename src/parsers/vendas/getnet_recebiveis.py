@@ -1,32 +1,23 @@
 # -*- coding: utf-8 -*-
 """
-Leitor do relatório Getnet "Recebíveis Completos".
+Leitor Getnet — suporta AMBOS os formatos:
 
-Formato esperado:
-- Arquivo .xls binário (D0CF11E0)
-- Três abas: 'Resumo', 'Sintético por Grupo', 'Detalhado'
-- Este leitor consome APENAS a aba 'Detalhado'
-- Cabeçalho na linha 8 (índice 7)
-- 26 colunas
-- A aba mistura 4 tipos de linha (coluna [5] "TIPO DE LANÇAMENTO"):
-  - "Saldo Anterior"       -> técnica, valor 0 -> IGNORAR
-  - "Vendas"               -> venda individual -> ENTRA COMO VENDA
-  - "Pagamento Realizado"  -> contra-partida negativa que fecha o dia -> ENTRA COMO REPASSE
-  - "Cancelamento/Chargeback" -> ENTRA COMO CANCELAMENTO
+  Formato ANTIGO ("Recebíveis Completos"):
+    - 3 abas: Resumo, Sintético por Grupo, Detalhado
+    - Cabeçalho na linha 8 da aba Detalhado (26 colunas)
+    - Mistura vendas + pagamentos realizados + saldos
 
-Contexto MVP-A:
-- KING está consolidada embaixo do CNPJ da PISA (05.953.543/0001-47)
-- Separação por empresa vem do lado do Sankhya, não daqui
-- Nesta fase entregamos DUAS visões:
-  - df_vendas: só as linhas de venda + cancelamento
-  - df_repasses: só as linhas de pagamento realizado por dia/bandeira
+  Formato NOVO ("Extrato de Vendas Cartões - Detalhado"):
+    - Múltiplas abas por tipo: CARTÕES, PIX, RECARGA, VAN, VOUCHER
+    - Aba CARTÕES: cabeçalho na linha 8 (23 colunas), só vendas
+    - Traz VALOR BRUTO TOTAL da venda — motor divide por N parcelas
 """
 
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
-from datetime import date, datetime
+from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta
 from typing import Optional
 
 import pandas as pd
@@ -34,151 +25,31 @@ import xlrd
 
 
 NOME_ABA_DETALHADO = "Detalhado"
-
-# Colunas críticas da aba Detalhado (26 colunas)
-COL_EC_CENTRALIZADOR = 0
-COL_ESTABELECIMENTO = 1
-COL_CNPJ = 2
-COL_DATA_VENCIMENTO = 3
-COL_BANDEIRA_MODALIDADE = 4
-COL_TIPO_LANCAMENTO = 5          # "Vendas" | "Saldo Anterior" | "Pagamento Realizado" | "Cancelamento/Chargeback"
-COL_LANCAMENTO = 6               # detalhe: "Venda Crédito A Vista", etc
-COL_VALOR_LIQUIDO = 7
-COL_VALOR_LIQUIDADO = 8
-COL_NUMERO_CARTAO = 9
-COL_AUTORIZACAO = 10
-COL_NSU = 11
-COL_TERMINAL = 12
-COL_DATA_VENDA = 13
-COL_HORA_VENDA = 14
-COL_VALOR_VENDA = 15             # valor bruto da venda
-COL_PARCELAS_TXT = 16            # "1 de 1", "3 de 3"
-COL_VALOR_PARCELA = 17
-COL_DESCONTOS = 18               # negativo
-COL_VALOR_LIQUIDO_PARCELA = 19
+NOME_ABA_CARTOES = "CARTÕES"
 
 
-# Colunas de saída — VENDAS
 COLUNAS_VENDAS = [
-    "adquirente",
-    "estabelecimento",
-    "ec_centralizador",
-    "cnpj_estabelecimento",
-    "data_venda",
-    "data_prev_pagamento",       # aqui = DATA_VENCIMENTO da parcela
-    "hora_venda",
-    "valor_venda_bruto",
-    "valor_parcela_bruto",
-    "valor_taxa",
-    "valor_liquido",
-    "bandeira",
-    "modalidade",                # "credito_avista" | "credito_parcelado" | "debito" | "outro"
-    "parcela_atual",
-    "parcelas_total",
-    "autorizacao",
-    "nsu",
-    "numero_cartao_mascarado",
-    "terminal",
-    "lancamento_original",
-    "tipo_registro",             # "venda" | "cancelamento"
+    "adquirente", "estabelecimento", "ec_centralizador", "cnpj_estabelecimento",
+    "data_venda", "data_prev_pagamento", "hora_venda",
+    "valor_venda_bruto", "valor_parcela_bruto", "valor_taxa", "valor_liquido",
+    "bandeira", "modalidade",
+    "parcela_atual", "parcelas_total",
+    "autorizacao", "nsu", "numero_cartao_mascarado", "terminal",
+    "lancamento_original", "tipo_registro",
+    "formato",
 ]
 
-# Colunas de saída — REPASSES (Pagamento Realizado)
 COLUNAS_REPASSES = [
-    "adquirente",
-    "estabelecimento",
-    "ec_centralizador",
-    "cnpj_estabelecimento",
-    "data_pagamento",
-    "bandeira",
-    "modalidade",
-    "valor_repasse",             # positivo (invertemos o sinal)
+    "adquirente", "estabelecimento", "ec_centralizador", "cnpj_estabelecimento",
+    "data_pagamento", "bandeira", "modalidade", "valor_repasse",
 ]
 
 
-# ==============================================================================
-# ABERTURA
-# ==============================================================================
-
-def _detectar_signature(dados: bytes) -> str:
+def _abrir_xls(dados: bytes):
     head = dados[:8]
-    if head.startswith(b"\xD0\xCF\x11\xE0"):
-        return "xls"
-    if head.startswith(b"PK\x03\x04"):
-        return "xlsx"
-    return "outro"
-
-
-def _abrir_workbook(dados: bytes):
-    sig = _detectar_signature(dados)
-    if sig == "xls":
-        return xlrd.open_workbook(file_contents=dados)
-    raise ValueError(
-        f"Getnet Recebíveis Completos deve vir como .xls binário. "
-        f"Byte signature recebido: {dados[:8]!r}"
-    )
-
-
-# ==============================================================================
-# VALIDAÇÃO
-# ==============================================================================
-
-MARCADORES_CABECALHO_GETNET = [
-    "ec centralizador",
-    "estabelecimento comercial",
-    "cpf / cnpj",
-    "data de vencimento",
-    "bandeira / modalidade",
-    "tipo de lançamento",
-    "autorização",
-]
-
-
-def eh_getnet_recebiveis(dados: bytes) -> bool:
-    """Detecta se é o Getnet Recebíveis Completos."""
-    try:
-        wb = _abrir_workbook(dados)
-    except Exception:
-        return False
-    # Aba 'Detalhado' precisa existir
-    if NOME_ABA_DETALHADO not in wb.sheet_names():
-        return False
-    sh = wb.sheet_by_name(NOME_ABA_DETALHADO)
-    if sh.nrows < 10 or sh.ncols < 20:
-        return False
-    idx = _achar_cabecalho(sh)
-    return idx is not None
-
-
-def _achar_cabecalho(sh) -> Optional[int]:
-    """Localiza a linha de cabeçalho procurando pelos marcadores."""
-    limite = min(15, sh.nrows)
-    for r in range(limite):
-        vals = [str(sh.cell_value(r, c)).strip().lower() for c in range(min(10, sh.ncols))]
-        hits = 0
-        for m in MARCADORES_CABECALHO_GETNET:
-            if any(m in v for v in vals):
-                hits += 1
-        if hits >= 5:
-            return r
-    return None
-
-
-# ==============================================================================
-# CONVERSÕES
-# ==============================================================================
-
-def _to_int(v) -> Optional[int]:
-    if v is None or v == "" or v == "-":
-        return None
-    try:
-        return int(float(v))
-    except (ValueError, TypeError):
-        try:
-            s = str(v).strip()
-            return int(s) if s else None
-        except Exception:
-            return None
+    if not head.startswith(b"\xD0\xCF\x11\xE0"):
+        raise ValueError(f"Getnet deve vir como .xls binário. Byte signature: {head!r}")
+    return xlrd.open_workbook(file_contents=dados)
 
 
 def _to_float(v) -> float:
@@ -187,21 +58,31 @@ def _to_float(v) -> float:
     try:
         return float(v)
     except (ValueError, TypeError):
-        s = str(v).strip()
-        s = re.sub(r"[^\d,\.\-]", "", s).replace(",", ".")
+        s = re.sub(r"[^\d,\.\-]", "", str(v)).replace(",", ".")
         try:
             return float(s) if s else 0.0
         except ValueError:
             return 0.0
 
 
+def _to_int(v, default: int = 1) -> int:
+    if v is None or v == "" or v == "-":
+        return default
+    try:
+        return int(float(v))
+    except (ValueError, TypeError):
+        try:
+            s = str(v).strip()
+            return int(s) if s else default
+        except Exception:
+            return default
+
+
 def _to_date(v, datemode: int) -> Optional[date]:
     if v is None or v == "" or v == "-":
         return None
     if isinstance(v, str):
-        s = v.strip()
-        if not s or s == "-":
-            return None
+        s = v.strip().split()[0] if v.strip() else ""
         for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d/%m/%y"):
             try:
                 return datetime.strptime(s, fmt).date()
@@ -218,141 +99,191 @@ def _to_date(v, datemode: int) -> Optional[date]:
         return None
 
 
-# ==============================================================================
-# PARSER "X de Y"
-# ==============================================================================
+def _localizar_cabecalho(sh, palavras_chave: list, limite: int = 15) -> Optional[int]:
+    for r in range(min(limite, sh.nrows)):
+        vals = [str(sh.cell_value(r, c)).strip().lower() for c in range(min(15, sh.ncols))]
+        ok = 0
+        for v in vals:
+            if len(v) > 60:
+                continue
+            for kw in palavras_chave:
+                if kw in v:
+                    ok += 1
+                    break
+        if ok >= 4:
+            return r
+    return None
 
-_RE_PARCELAS = re.compile(r"(\d+)\s*de\s*(\d+)", re.IGNORECASE)
+
+def _mapa_colunas(sh, idx_cab: int) -> dict:
+    header = [str(sh.cell_value(idx_cab, c)).strip().lower() for c in range(sh.ncols)]
+    return {h: i for i, h in enumerate(header) if h}
 
 
-def _parsear_parcelas(txt: str) -> tuple[int, int]:
-    """Extrai (atual, total) da string 'X de Y'. Default (1, 1)."""
+def _col(mapa: dict, *aliases: str) -> Optional[int]:
+    for alias in aliases:
+        a = alias.lower()
+        if a in mapa:
+            return mapa[a]
+        for nome, idx in mapa.items():
+            if a in nome:
+                return idx
+    return None
+
+
+def eh_getnet_recebiveis(dados: bytes) -> bool:
+    """Reconhece AMBOS formatos: Recebíveis Completos + Extrato de Vendas Cartões."""
+    try:
+        wb = _abrir_xls(dados)
+    except Exception:
+        return False
+    abas = wb.sheet_names()
+    return NOME_ABA_DETALHADO in abas or NOME_ABA_CARTOES in abas
+
+
+_MARCADORES_ANTIGO = [
+    "ec centralizador", "estabelecimento", "cpf / cnpj",
+    "bandeira / modalidade", "tipo de lançamento", "autorização",
+]
+
+_MARCADORES_NOVO = [
+    "estabelecimento comercial", "cpf / cnpj",
+    "bandeira", "modalidade", "forma de pagamento",
+    "data/hora da venda", "número de autorização",
+]
+
+
+_RE_PARCELAS_XdeY = re.compile(r"(\d+)\s*de\s*(\d+)", re.IGNORECASE)
+
+
+def _parsear_parcelas_XdeY(txt: str) -> tuple:
     if not txt or txt == "-":
         return (1, 1)
-    m = _RE_PARCELAS.search(str(txt))
+    m = _RE_PARCELAS_XdeY.search(str(txt))
     if m:
         return (int(m.group(1)), int(m.group(2)))
     return (1, 1)
 
 
-# ==============================================================================
-# CLASSIFICADORES
-# ==============================================================================
-
-def _extrair_bandeira_modalidade(txt: str) -> tuple[str, str]:
+def _extrair_bandeira_e_modalidade(band_txt: str, forma_pgto: str = "", modalidade_txt: str = "") -> tuple:
     """
-    Getnet combina em uma coluna só, ex: 'Elo Crédito', 'Visa Débito', 'Mastercard Crédito'.
-    Retorna (bandeira, modalidade_codigo).
-    """
-    if not txt:
-        return ("", "outro")
-    t = txt.strip()
-    tl = t.lower()
+    Retorna (bandeira_str, modalidade_codigo).
 
-    if "débito" in tl or "debito" in tl:
+    Bandeira: primeira palavra ('Elo', 'Mastercard', 'Visa')
+    Modalidade codigo: debito, credito_avista, credito_parcelado, outro
+    """
+    src = " ".join([band_txt or "", forma_pgto or "", modalidade_txt or ""]).lower()
+    if "débito" in src or "debito" in src:
         modalidade = "debito"
-    elif "crédito" in tl or "credito" in tl:
-        modalidade = "credito"     # será refinada abaixo com o lançamento
+    elif "parcel" in src:
+        modalidade = "credito_parcelado"
+    elif "vista" in src or "à vista" in src or "a vista" in src:
+        modalidade = "credito_avista"
+    elif "crédito" in src or "credito" in src:
+        modalidade = "credito_avista"
     else:
         modalidade = "outro"
 
-    # Bandeira é a primeira palavra
-    bandeira = t.split()[0] if t.split() else ""
-    return (bandeira, modalidade)
+    # bandeira = primeira palavra do campo bandeira/modalidade original
+    if band_txt:
+        primeira = band_txt.strip().split()[0] if band_txt.strip() else ""
+        return (primeira, modalidade)
+    return ("", modalidade)
 
-
-def _refinar_modalidade(modalidade_base: str, lancamento: str) -> str:
-    """Refina crédito -> à vista vs parcelado usando o campo LANÇAMENTO."""
-    if modalidade_base == "debito":
-        return "debito"
-    lanc = (lancamento or "").lower()
-    if "parcel" in lanc:
-        return "credito_parcelado"
-    if "vista" in lanc or "a vista" in lanc:
-        return "credito_avista"
-    if modalidade_base == "credito":
-        return "credito_avista"    # fallback
-    return "outro"
-
-
-# ==============================================================================
-# FUNÇÃO PRINCIPAL
-# ==============================================================================
 
 @dataclass
 class ResultadoLeituraGetnet:
-    df_vendas: pd.DataFrame
-    df_repasses: pd.DataFrame
-    total_vendas: int
-    total_cancelamentos: int
-    total_repasses: int
-    linhas_saldo_anterior_ignoradas: int
-    linhas_vazias_ignoradas: int
-    estabelecimentos: list
-    total_bruto_vendas: float
-    total_liquido_vendas: float
-    total_taxa_vendas: float
-    total_repassado: float
+    df_vendas: pd.DataFrame = field(default_factory=pd.DataFrame)
+    df_repasses: pd.DataFrame = field(default_factory=pd.DataFrame)
+    total_vendas: int = 0
+    total_cancelamentos: int = 0
+    total_repasses: int = 0
+    linhas_saldo_anterior_ignoradas: int = 0
+    linhas_vazias_ignoradas: int = 0
+    estabelecimentos: list = field(default_factory=list)
+    total_bruto_vendas: float = 0.0
+    total_liquido_vendas: float = 0.0
+    total_taxa_vendas: float = 0.0
+    total_repassado: float = 0.0
+    formato_detectado: str = ""
 
 
-def ler(dados: bytes) -> ResultadoLeituraGetnet:
-    """Lê o Getnet Recebíveis Completos, retornando visões separadas de vendas e repasses."""
-    if not eh_getnet_recebiveis(dados):
-        raise ValueError("Arquivo não é o Getnet Recebíveis Completos (aba 'Detalhado' inválida).")
+# ==============================================================================
+# LEITURA - FORMATO ANTIGO (Recebíveis Completos)
+# ==============================================================================
 
-    wb = _abrir_workbook(dados)
+def _ler_formato_antigo(wb) -> ResultadoLeituraGetnet:
     sh = wb.sheet_by_name(NOME_ABA_DETALHADO)
     datemode = wb.datemode
-
-    idx_cab = _achar_cabecalho(sh)
+    idx_cab = _localizar_cabecalho(sh, _MARCADORES_ANTIGO)
     if idx_cab is None:
-        raise ValueError("Cabeçalho Getnet não localizado na aba Detalhado.")
+        raise ValueError("Cabeçalho Getnet Recebíveis Completos não localizado.")
+    mapa = _mapa_colunas(sh, idx_cab)
+
+    col_ec = _col(mapa, "ec centralizador")
+    col_estab = _col(mapa, "estabelecimento comercial")
+    col_cnpj = _col(mapa, "cpf / cnpj")
+    col_venc = _col(mapa, "data de vencimento")
+    col_bmod = _col(mapa, "bandeira / modalidade")
+    col_tipo_lanc = _col(mapa, "tipo de lançamento")
+    col_lanc = _col(mapa, "lançamento")
+    col_vlr_liquido = _col(mapa, "valor líquido")
+    col_num_cartao = _col(mapa, "número do cartão")
+    col_autoriza = _col(mapa, "autorização")
+    col_nsu = _col(mapa, "nsu", "número comprovante")
+    col_terminal = _col(mapa, "terminal")
+    col_data_venda = _col(mapa, "data da venda")
+    col_hora_venda = _col(mapa, "hora da venda")
+    col_vlr_venda = _col(mapa, "valor da venda")
+    col_parcelas = _col(mapa, "parcelas")
+    col_vlr_parcela = _col(mapa, "valor da parcela")
+    col_descontos = _col(mapa, "descontos")
+    col_vlr_liq_parc = _col(mapa, "valor liquido da parcela", "valor líquido da parcela")
 
     linhas_vendas = []
     linhas_repasses = []
-    n_saldo = 0
-    n_vazias = 0
-    n_cancel = 0
-    estabs_set = set()
+    n_saldo, n_vazias, n_cancel = 0, 0, 0
+    estabs = set()
+
+    def _get(row, ci, dv=""):
+        return row[ci] if ci is not None else dv
 
     for r in range(idx_cab + 1, sh.nrows):
         row = sh.row_values(r)
-
         if not any(str(v).strip() for v in row):
             n_vazias += 1
             continue
 
-        tipo = str(row[COL_TIPO_LANCAMENTO]).strip()
-        lanc = str(row[COL_LANCAMENTO]).strip()
+        tipo = str(_get(row, col_tipo_lanc, "")).strip()
+        lanc = str(_get(row, col_lanc, "")).strip()
 
         if not tipo:
             n_vazias += 1
             continue
 
-        estab = str(row[COL_ESTABELECIMENTO]).strip()
+        estab = str(_get(row, col_estab, "")).strip()
         if estab:
-            estabs_set.add(estab)
+            estabs.add(estab)
+        cnpj = str(_get(row, col_cnpj, "")).strip()
+        ec = str(_get(row, col_ec, "")).strip()
 
-        cnpj = str(row[COL_CNPJ]).strip()
-        ec_centr = str(row[COL_EC_CENTRALIZADOR]).strip()
-        bandeira_txt = str(row[COL_BANDEIRA_MODALIDADE]).strip()
-        bandeira, modalidade_base = _extrair_bandeira_modalidade(bandeira_txt)
+        band_txt = str(_get(row, col_bmod, "")).strip()
+        bandeira, modalidade = _extrair_bandeira_e_modalidade(band_txt, forma_pgto=lanc)
 
         if tipo == "Saldo Anterior":
             n_saldo += 1
             continue
 
         if tipo == "Pagamento Realizado":
-            # É o repasse do dia (valor negativo no arquivo -> invertemos)
             linhas_repasses.append({
                 "adquirente": "getnet",
                 "estabelecimento": estab,
-                "ec_centralizador": ec_centr,
+                "ec_centralizador": ec,
                 "cnpj_estabelecimento": cnpj,
-                "data_pagamento": _to_date(row[COL_DATA_VENCIMENTO], datemode),
+                "data_pagamento": _to_date(_get(row, col_venc), datemode),
                 "bandeira": bandeira,
-                "modalidade": modalidade_base,
-                "valor_repasse": abs(_to_float(row[COL_VALOR_LIQUIDO])),
+                "modalidade": modalidade,
+                "valor_repasse": abs(_to_float(_get(row, col_vlr_liquido, 0))),
             })
             continue
 
@@ -360,56 +291,186 @@ def ler(dados: bytes) -> ResultadoLeituraGetnet:
             tipo_reg = "venda" if tipo == "Vendas" else "cancelamento"
             if tipo_reg == "cancelamento":
                 n_cancel += 1
-
-            parc_atual, parc_total = _parsear_parcelas(str(row[COL_PARCELAS_TXT]))
-            modalidade = _refinar_modalidade(modalidade_base, lanc)
-
-            valor_bruto_parc = _to_float(row[COL_VALOR_PARCELA])
-            desconto = _to_float(row[COL_DESCONTOS])       # já é negativo
-            valor_liq = _to_float(row[COL_VALOR_LIQUIDO_PARCELA])
+            parc_atual, parc_total = _parsear_parcelas_XdeY(str(_get(row, col_parcelas, "")))
+            vlr_parc_bruto = _to_float(_get(row, col_vlr_parcela, 0))
+            desconto = _to_float(_get(row, col_descontos, 0))
+            vlr_liq = _to_float(_get(row, col_vlr_liq_parc, 0))
 
             linhas_vendas.append({
                 "adquirente": "getnet",
                 "estabelecimento": estab,
-                "ec_centralizador": ec_centr,
+                "ec_centralizador": ec,
                 "cnpj_estabelecimento": cnpj,
-                "data_venda": _to_date(row[COL_DATA_VENDA], datemode),
-                "data_prev_pagamento": _to_date(row[COL_DATA_VENCIMENTO], datemode),
-                "hora_venda": str(row[COL_HORA_VENDA]).strip(),
-                "valor_venda_bruto": _to_float(row[COL_VALOR_VENDA]),
-                "valor_parcela_bruto": valor_bruto_parc,
+                "data_venda": _to_date(_get(row, col_data_venda), datemode),
+                "data_prev_pagamento": _to_date(_get(row, col_venc), datemode),
+                "hora_venda": str(_get(row, col_hora_venda, "")).strip(),
+                "valor_venda_bruto": _to_float(_get(row, col_vlr_venda, 0)),
+                "valor_parcela_bruto": vlr_parc_bruto,
                 "valor_taxa": abs(desconto),
-                "valor_liquido": valor_liq,
+                "valor_liquido": vlr_liq,
                 "bandeira": bandeira,
                 "modalidade": modalidade,
                 "parcela_atual": parc_atual,
                 "parcelas_total": parc_total,
-                "autorizacao": str(row[COL_AUTORIZACAO]).strip(),
-                "nsu": str(row[COL_NSU]).strip(),
-                "numero_cartao_mascarado": str(row[COL_NUMERO_CARTAO]).strip(),
-                "terminal": str(row[COL_TERMINAL]).strip(),
+                "autorizacao": str(_get(row, col_autoriza, "")).strip(),
+                "nsu": str(_get(row, col_nsu, "")).strip(),
+                "numero_cartao_mascarado": str(_get(row, col_num_cartao, "")).strip(),
+                "terminal": str(_get(row, col_terminal, "")).strip(),
                 "lancamento_original": lanc,
                 "tipo_registro": tipo_reg,
+                "formato": "antigo",
             })
             continue
 
-        # Tipo desconhecido -> ignorado, mas contamos
         n_vazias += 1
 
-    df_vendas = pd.DataFrame(linhas_vendas, columns=COLUNAS_VENDAS)
-    df_repasses = pd.DataFrame(linhas_repasses, columns=COLUNAS_REPASSES)
-
+    df_v = pd.DataFrame(linhas_vendas, columns=COLUNAS_VENDAS)
+    df_r = pd.DataFrame(linhas_repasses, columns=COLUNAS_REPASSES)
     return ResultadoLeituraGetnet(
-        df_vendas=df_vendas,
-        df_repasses=df_repasses,
-        total_vendas=int((df_vendas["tipo_registro"] == "venda").sum()) if not df_vendas.empty else 0,
+        df_vendas=df_v, df_repasses=df_r,
+        total_vendas=int((df_v["tipo_registro"] == "venda").sum()) if not df_v.empty else 0,
         total_cancelamentos=n_cancel,
-        total_repasses=len(df_repasses),
+        total_repasses=len(df_r),
         linhas_saldo_anterior_ignoradas=n_saldo,
         linhas_vazias_ignoradas=n_vazias,
-        estabelecimentos=sorted(estabs_set),
-        total_bruto_vendas=float(df_vendas["valor_parcela_bruto"].sum()) if not df_vendas.empty else 0.0,
-        total_liquido_vendas=float(df_vendas["valor_liquido"].sum()) if not df_vendas.empty else 0.0,
-        total_taxa_vendas=float(df_vendas["valor_taxa"].sum()) if not df_vendas.empty else 0.0,
-        total_repassado=float(df_repasses["valor_repasse"].sum()) if not df_repasses.empty else 0.0,
+        estabelecimentos=sorted(estabs),
+        total_bruto_vendas=float(df_v["valor_parcela_bruto"].sum()) if not df_v.empty else 0.0,
+        total_liquido_vendas=float(df_v["valor_liquido"].sum()) if not df_v.empty else 0.0,
+        total_taxa_vendas=float(df_v["valor_taxa"].sum()) if not df_v.empty else 0.0,
+        total_repassado=float(df_r["valor_repasse"].sum()) if not df_r.empty else 0.0,
+        formato_detectado="antigo",
     )
+
+
+# ==============================================================================
+# LEITURA - FORMATO NOVO (Extrato de Vendas Cartões)
+# ==============================================================================
+
+def _ler_formato_novo(wb) -> ResultadoLeituraGetnet:
+    sh = wb.sheet_by_name(NOME_ABA_CARTOES)
+    datemode = wb.datemode
+    idx_cab = _localizar_cabecalho(sh, _MARCADORES_NOVO)
+    if idx_cab is None:
+        raise ValueError("Cabeçalho Getnet Extrato de Vendas não localizado.")
+    mapa = _mapa_colunas(sh, idx_cab)
+
+    col_estab = _col(mapa, "estabelecimento comercial")
+    col_cnpj = _col(mapa, "cpf / cnpj")
+    col_bandeira = _col(mapa, "bandeira")
+    col_modalidade = _col(mapa, "modalidade")
+    col_forma_pgto = _col(mapa, "forma de pagamento")
+    col_data_venda = _col(mapa, "data/hora da venda", "data da venda")
+    col_status = _col(mapa, "status da transação", "status")
+    col_parcelas = _col(mapa, "parcelas")
+    col_data_prev = _col(mapa, "data prevista do 1º pagamento", "data prevista")
+    col_num_cartao = _col(mapa, "número do cartão")
+    col_autoriza = _col(mapa, "número de autorização", "aut")
+    col_cv_nsu = _col(mapa, "número do comprovante de vendas", "cv", "nsu")
+    col_terminal = _col(mapa, "número do terminal", "terminal")
+    col_vlr_bruto = _col(mapa, "valor bruto")
+    col_vlr_taxa = _col(mapa, "valor taxa")
+    col_vlr_liquido = _col(mapa, "valor líquido", "valor liquido")
+
+    linhas_vendas = []
+    n_vazias = 0
+    estabs = set()
+
+    def _get(row, ci, dv=""):
+        return row[ci] if ci is not None else dv
+
+    for r in range(idx_cab + 1, sh.nrows):
+        row = sh.row_values(r)
+        if not any(str(v).strip() for v in row):
+            n_vazias += 1
+            continue
+
+        estab_raw = _get(row, col_estab, "")
+        if not str(estab_raw).strip():
+            n_vazias += 1
+            continue
+
+        estab = str(estab_raw).strip()
+        vlr_bruto = _to_float(_get(row, col_vlr_bruto, 0))
+        if vlr_bruto == 0:
+            n_vazias += 1
+            continue
+
+        estabs.add(estab)
+        cnpj = str(_get(row, col_cnpj, "")).strip()
+        forma_pgto = str(_get(row, col_forma_pgto, "")).strip()
+        band_txt = str(_get(row, col_bandeira, "")).strip()
+        modalidade_txt = str(_get(row, col_modalidade, "")).strip()
+        bandeira, modalidade = _extrair_bandeira_e_modalidade(
+            band_txt, forma_pgto=forma_pgto, modalidade_txt=modalidade_txt
+        )
+        parc_total = _to_int(_get(row, col_parcelas, 1), 1) or 1
+        vlr_parc = round(vlr_bruto / parc_total, 2) if parc_total > 0 else vlr_bruto
+
+        data_venda = _to_date(_get(row, col_data_venda), datemode)
+        data_prev_1a = _to_date(_get(row, col_data_prev), datemode)
+
+        vlr_taxa = _to_float(_get(row, col_vlr_taxa, 0))
+        vlr_liq_total = _to_float(_get(row, col_vlr_liquido, 0))
+        # taxa por parcela e líquido por parcela
+        vlr_taxa_parc = round(vlr_taxa / parc_total, 2) if parc_total > 0 else vlr_taxa
+        vlr_liq_parc = round(vlr_liq_total / parc_total, 2) if parc_total > 0 else vlr_liq_total
+
+        base = dict(
+            adquirente="getnet",
+            estabelecimento=estab,
+            ec_centralizador=estab,
+            cnpj_estabelecimento=cnpj,
+            data_venda=data_venda,
+            hora_venda="",
+            valor_venda_bruto=vlr_bruto,
+            valor_parcela_bruto=vlr_parc,
+            valor_taxa=abs(vlr_taxa_parc),
+            valor_liquido=vlr_liq_parc,
+            bandeira=bandeira,
+            modalidade=modalidade,
+            parcelas_total=parc_total,
+            autorizacao=str(_get(row, col_autoriza, "")).strip(),
+            nsu=str(_get(row, col_cv_nsu, "")).strip(),
+            numero_cartao_mascarado=str(_get(row, col_num_cartao, "")).strip(),
+            terminal=str(_get(row, col_terminal, "")).strip(),
+            lancamento_original=forma_pgto,
+            tipo_registro="venda",
+            formato="novo",
+        )
+
+        # Expandir parcelas: 1 linha por parcela com data prev = 1a + (n-1)*30 dias
+        for n in range(1, parc_total + 1):
+            dt_n = data_prev_1a
+            if data_prev_1a is not None and n > 1:
+                dt_n = data_prev_1a + timedelta(days=30 * (n - 1))
+            linhas_vendas.append({**base,
+                "data_prev_pagamento": dt_n,
+                "parcela_atual": n,
+            })
+
+    df_v = pd.DataFrame(linhas_vendas, columns=COLUNAS_VENDAS)
+    return ResultadoLeituraGetnet(
+        df_vendas=df_v,
+        df_repasses=pd.DataFrame(columns=COLUNAS_REPASSES),
+        total_vendas=len(df_v),
+        total_cancelamentos=0,
+        total_repasses=0,
+        linhas_saldo_anterior_ignoradas=0,
+        linhas_vazias_ignoradas=n_vazias,
+        estabelecimentos=sorted(estabs),
+        total_bruto_vendas=float(df_v["valor_parcela_bruto"].sum()) if not df_v.empty else 0.0,
+        total_liquido_vendas=float(df_v["valor_liquido"].sum()) if not df_v.empty else 0.0,
+        total_taxa_vendas=float(df_v["valor_taxa"].sum()) if not df_v.empty else 0.0,
+        total_repassado=0.0,
+        formato_detectado="novo",
+    )
+
+
+def ler(dados: bytes) -> ResultadoLeituraGetnet:
+    """Detecta formato automaticamente e delega pro leitor específico."""
+    if not eh_getnet_recebiveis(dados):
+        raise ValueError("Arquivo não é Getnet (nem 'Detalhado' nem 'CARTÕES' encontrados).")
+    wb = _abrir_xls(dados)
+    if NOME_ABA_CARTOES in wb.sheet_names():
+        return _ler_formato_novo(wb)
+    return _ler_formato_antigo(wb)
