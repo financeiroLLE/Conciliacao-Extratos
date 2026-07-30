@@ -335,9 +335,44 @@ def selecionar_banco(conta: str):
 
 
 def voltar_upload():
-    st.session_state.fluxo_etapa = "upload"
-    st.session_state.banco_conta_selecionada = None
+    """Volta pra tela de upload zerando TODO o estado da rodada bancária.
 
+    Bug corrigido (v5.90): antes só mudava a etapa e o banco selecionado,
+    deixando DataFrames, arquivos e resultados anteriores vivos na sessão.
+    """
+    for k in (
+        "resultado",
+        "adquirente_df",
+        "adquirente_bytes",
+        "_banco_persistido_bytes",
+        "_sistema_override_bytes",
+        "_sistema_pendente_bytes",
+        "_override_versao",
+        "_override_versao_processada",
+        "_mostrar_reupload_sk",
+        "pendencias_anteriores",
+        "id_execucao_atual",
+        "xlsx_atual",
+        "csvs_zip_atual",
+        "banco_conta_selecionada",
+        "aviso_periodo",
+        "subtab_conciliacao",
+    ):
+        st.session_state.pop(k, None)
+    for k in (
+        "banco_single",
+        "banco_multi",
+        "sistema",
+        "adquirente",
+        "conta_single",
+        "conta_single_sel",
+        "coluna_conta_sistema",
+    ):
+        st.session_state.pop(k, None)
+    for k in list(st.session_state.keys()):
+        if k.startswith("conta_multi_sel_") or k.startswith("conta_multi_novo_"):
+            st.session_state.pop(k, None)
+    st.session_state.fluxo_etapa = "upload"
 
 # ============================================================
 # CSS global
