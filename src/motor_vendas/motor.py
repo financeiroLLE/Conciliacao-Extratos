@@ -95,11 +95,29 @@ def _modalidades_compativeis(mod_venda, mod_sk) -> bool:
 
 
 def _adquirentes_compativeis(adq_venda, adq_sk) -> bool:
+    """
+    Adquirente do lado Sankhya é PISTA, não filtro.
+
+    Aprovado com Débora em 31/07/2026, junto com o Cenário C da bandeira.
+
+    Motivo: o classificador extrai `adquirente_sankhya` heuristicamente da
+    descrição do Tipo de Título, que pode ter erros de cadastro no ERP.
+    Ex: NF 1143178 do S&D estava com tipo "CRED TEF 1X - VIS/MAS PS" no
+    Financeiro (sufixo PS → classificado como PagSeguro), mas o Cabeçalho
+    da mesma NF diz "1 X -TEF - GETNET- MASTER" — venda foi Getnet, cadastro
+    ficou incorreto.
+
+    A fonte primária de "que adquirente processou a venda" é a própria
+    adquirente (arquivo Cielo/Getnet). O Sankhya é registro contábil que
+    pode divergir. Modalidade continua rígida (débito ≠ crédito), valor
+    e data continuam rígidos — essas 3 já garantem que não haverá match
+    entre venda Cielo e título Getnet no mundo real (probabilidade zero
+    de duas vendas do mesmo valor + data + modalidade caírem em adquirentes
+    diferentes).
+    """
     if _is_none_or_nan(adq_venda):
-        return False  # venda sempre tem adquirente
-    if _is_none_or_nan(adq_sk):
-        return True   # Sankhya sem inferência não bloqueia
-    return adq_venda == adq_sk
+        return False  # venda sempre precisa ter adquirente
+    return True
 
 
 def _to_date(v) -> Optional[date]:
@@ -489,7 +507,8 @@ def _matching_agregado_por_nota(
     )
     vendas_agr["valor_total_venda"] = vendas_agr["valor_total_venda"].round(2)
 
-    # --- Agrupar Sankhya por (adquirente_sankhya, nro_nota) — SÓ nota fiscal ---
+    # --- Agrupar Sankhya por nro_nota — SÓ nota fiscal, sem filtrar adquirente ---
+    # (adquirente_sankhya vira PISTA, não filtro — ver _adquirentes_compativeis)
     df_sk_nf = df_elegiveis[df_elegiveis["classe"] == "nota_fiscal"].copy()
     if df_sk_nf.empty:
         return matches_grupo_1, matches_grupo_2, ids_vendas_casadas, idx_sk_casados
@@ -498,19 +517,19 @@ def _matching_agregado_por_nota(
     if df_sk_nf.empty:
         return matches_grupo_1, matches_grupo_2, ids_vendas_casadas, idx_sk_casados
 
-    notas_agr = df_sk_nf.groupby(["adquirente_sankhya", "nro_nota"], as_index=False).agg(
+    notas_agr = df_sk_nf.groupby("nro_nota", as_index=False).agg(
         valor_total_nota=("vlr_desdobramento", "sum"),
         n_desdob=("vlr_desdobramento", "count"),
         dt_neg_cab=("cabecalho_dt_negociacao", "first"),
+        adquirente_sk=("adquirente_sankhya", "first"),
     )
     notas_agr["valor_total_nota"] = notas_agr["valor_total_nota"].round(2)
 
     # --- Matching venda × nota ---
     for _, venda in vendas_agr.iterrows():
-        # Filtra candidatas: mesmo total + mesma adquirente
+        # Filtra candidatas: mesmo total (adquirente do Sankhya é só pista)
         cand_notas = notas_agr[
-            (notas_agr["valor_total_nota"] == venda["valor_total_venda"])
-            & (notas_agr["adquirente_sankhya"] == venda["adquirente"])
+            notas_agr["valor_total_nota"] == venda["valor_total_venda"]
         ]
         if cand_notas.empty:
             continue
@@ -549,8 +568,7 @@ def _matching_agregado_por_nota(
 
         # Desdobramentos da nota, ordenados por dt_vencimento crescente
         desdob_nota = df_sk_nf[
-            (df_sk_nf["adquirente_sankhya"] == venda["adquirente"])
-            & (df_sk_nf["nro_nota"] == nro_nota_casada)
+            df_sk_nf["nro_nota"] == nro_nota_casada
         ].sort_values("dt_vencimento")
 
         # Se número de parcelas != número de desdobramentos, não força match
@@ -563,6 +581,12 @@ def _matching_agregado_por_nota(
             match = _montar_match(parcela, desdob, match_permissivo=False)
             # Marca origem: passada agregada
             match["fonte_match"] = "agregado_por_nota"
+            # Sinaliza divergência entre adquirente da venda (fonte primária)
+            # e adquirente inferida do Sankhya (pista) — útil pra auditoria
+            adq_venda = parcela.get("adquirente")
+            adq_sk = desdob.get("adquirente_sankhya")
+            if adq_sk is not None and not pd.isna(adq_sk) and adq_venda != adq_sk:
+                match["adquirente_sk_divergente"] = str(adq_sk)
             idx_sk_casados.add(desdob["idx_sankhya"])
 
             # Distribui em Grupo 1 (em aberto) ou Grupo 2 (baixado)
