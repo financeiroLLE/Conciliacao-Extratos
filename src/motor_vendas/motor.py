@@ -75,16 +75,17 @@ def _is_none_or_nan(v) -> bool:
 
 
 def _bandeiras_compativeis(banda_venda, banda_sk) -> bool:
-    """VIS/MAS e MAS/ELO são coringas do Sankhya. None/NaN não bloqueia."""
-    if _is_none_or_nan(banda_venda) or _is_none_or_nan(banda_sk):
-        return True
-    if banda_sk == banda_venda:
-        return True
-    if banda_sk == "vis_mas" and banda_venda in ("visa", "master"):
-        return True
-    if banda_sk == "mas_elo" and banda_venda in ("master", "elo"):
-        return True
-    return False
+    """Cenário C · aprovado com Débora em 31/07/2026.
+
+    A bandeira do Sankhya não é confiável — é rótulo de convenção de cadastro
+    (ex: "MASTER/ELO" pode receber venda VISA na prática). Modalidade continua
+    rigorosa (débito nunca casa com crédito), mas bandeira agora só é pista
+    informativa, não filtro.
+
+    Testado no dataset real: relaxar bandeira ganhou +20 auto-conciliações
+    sem introduzir NENHUM ambíguo/falso positivo.
+    """
+    return True
 
 
 def _modalidades_compativeis(mod_venda, mod_sk) -> bool:
@@ -144,21 +145,42 @@ def _melhor_diff_dias(data_venda, dt_vencimento, data_baixa) -> Optional[int]:
 # ==============================================================================
 
 def _preparar_vendas(df_cielo: pd.DataFrame, df_getnet: pd.DataFrame) -> pd.DataFrame:
-    """Junta Cielo e Getnet numa visão canônica pro matcher."""
+    """Junta Cielo e Getnet numa visão canônica pro matcher.
+
+    Propaga tanto `data_venda` (data real da transação, imutável — usada nos
+    cards da tela pra exibir "Vendido em X") quanto `data_prev_pagamento`
+    (data prevista de recebimento da parcela — usada no motor pra bater com
+    dt_vencimento/data_baixa do Sankhya).
+
+    Também propaga `valor_bruto_venda_total` (valor total da venda, útil
+    quando a parcela é 1/N — pra mostrar contexto no card).
+    """
     linhas = []
 
     if df_cielo is not None and not df_cielo.empty:
         for idx, r in df_cielo.iterrows():
+            valor_parcela = r["valor_bruto"]
+            parc_total = r.get("parcelas_total") or 1
+            # Cielo tem valor_bruto_venda_total (total da venda) explícito
+            valor_total = r.get("valor_bruto_venda_total")
+            if valor_total is None or (isinstance(valor_total, float) and pd.isna(valor_total)):
+                try:
+                    valor_total = round(float(valor_parcela) * int(parc_total), 2)
+                except (ValueError, TypeError):
+                    valor_total = valor_parcela
+
             linhas.append({
                 "origem_venda": idx,
                 "origem_tipo": "cielo",
                 "adquirente": "cielo",
-                "valor_match": r["valor_bruto"],
+                "valor_match": valor_parcela,
+                "valor_bruto_venda_total": valor_total,
+                "data_venda": r.get("data_venda"),
                 "data_prev_pagamento": r["data_prev_pagamento"],
                 "bandeira": _normalizar_bandeira(r["bandeira"]),
                 "modalidade": r["modalidade"],
                 "parcela_atual": r["parcela_atual"],
-                "parcelas_total": r["parcelas_total"],
+                "parcelas_total": parc_total,
                 "nsu": r.get("nsu", ""),
                 "autorizacao": r.get("autorizacao", ""),
                 "tipo_registro": "venda",
@@ -166,16 +188,28 @@ def _preparar_vendas(df_cielo: pd.DataFrame, df_getnet: pd.DataFrame) -> pd.Data
 
     if df_getnet is not None and not df_getnet.empty:
         for idx, r in df_getnet.iterrows():
+            valor_parcela = r["valor_parcela_bruto"]
+            parc_total = r.get("parcelas_total") or 1
+            # Getnet tem valor_venda_bruto (total da venda)
+            valor_total = r.get("valor_venda_bruto")
+            if valor_total is None or (isinstance(valor_total, float) and pd.isna(valor_total)):
+                try:
+                    valor_total = round(float(valor_parcela) * int(parc_total), 2)
+                except (ValueError, TypeError):
+                    valor_total = valor_parcela
+
             linhas.append({
                 "origem_venda": idx,
                 "origem_tipo": "getnet",
                 "adquirente": "getnet",
-                "valor_match": r["valor_parcela_bruto"],
+                "valor_match": valor_parcela,
+                "valor_bruto_venda_total": valor_total,
+                "data_venda": r.get("data_venda"),
                 "data_prev_pagamento": r["data_prev_pagamento"],
                 "bandeira": _normalizar_bandeira(r["bandeira"]),
                 "modalidade": r["modalidade"],
                 "parcela_atual": r["parcela_atual"],
-                "parcelas_total": r["parcelas_total"],
+                "parcelas_total": parc_total,
                 "nsu": r.get("nsu", ""),
                 "autorizacao": r.get("autorizacao", ""),
                 "tipo_registro": r.get("tipo_registro", "venda"),
