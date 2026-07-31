@@ -16,12 +16,31 @@ Leitor Getnet — suporta AMBOS os formatos:
 from __future__ import annotations
 
 import re
+from calendar import monthrange
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from typing import Optional
 
 import pandas as pd
 import xlrd
+
+
+def _add_meses(dt: date, n: int) -> date:
+    """Adiciona N meses mantendo o mesmo dia (com clamp para último dia do mês).
+
+    Necessário porque parcelas do Sankhya vencem no MESMO DIA de meses
+    seguintes (ex: venda em 23/07 com 1a parcela em 24/08 → parc 2 em
+    24/09, parc 3 em 24/10, parc 4 em 24/11...), não a cada +30 dias
+    linear (que acumulava erro em parcelas distantes).
+    """
+    if dt is None or n == 0:
+        return dt
+    mes = dt.month - 1 + n
+    ano = dt.year + mes // 12
+    mes = mes % 12 + 1
+    ultimo_dia = monthrange(ano, mes)[1]
+    dia = min(dt.day, ultimo_dia)
+    return date(ano, mes, dia)
 
 
 NOME_ABA_DETALHADO = "Detalhado"
@@ -438,11 +457,13 @@ def _ler_formato_novo(wb) -> ResultadoLeituraGetnet:
             formato="novo",
         )
 
-        # Expandir parcelas: 1 linha por parcela com data prev = 1a + (n-1)*30 dias
+        # Expandir parcelas: 1 linha por parcela vencendo no MESMO DIA de meses
+        # seguintes a partir da data prevista da 1a parcela (regra real Sankhya).
+        # Antes era +30d linear, que divergia 3-5 dias em parcelas distantes.
         for n in range(1, parc_total + 1):
             dt_n = data_prev_1a
             if data_prev_1a is not None and n > 1:
-                dt_n = data_prev_1a + timedelta(days=30 * (n - 1))
+                dt_n = _add_meses(data_prev_1a, n - 1)
             linhas_vendas.append({**base,
                 "data_prev_pagamento": dt_n,
                 "parcela_atual": n,
