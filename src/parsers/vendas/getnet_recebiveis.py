@@ -414,6 +414,16 @@ def _ler_formato_novo(wb) -> ResultadoLeituraGetnet:
             n_vazias += 1
             continue
 
+        # FILTRO STATUS · Ignora vendas Negadas (só entram as Aprovadas).
+        # Bug identificado em 31/07/2026: o arquivo Getnet traz TODAS as tentativas
+        # (aprovadas + negadas), e sem esse filtro as negadas viravam cards
+        # "sem par no Sankhya" fantasmas — porque negada obviamente não gera
+        # título no Sankhya.
+        status_raw = str(_get(row, col_status, "")).strip().lower()
+        if status_raw and status_raw != "aprovada":
+            n_vazias += 1
+            continue
+
         estabs.add(estab)
         cnpj = str(_get(row, col_cnpj, "")).strip()
         forma_pgto = str(_get(row, col_forma_pgto, "")).strip()
