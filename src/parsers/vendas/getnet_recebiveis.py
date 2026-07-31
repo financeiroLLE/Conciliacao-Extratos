@@ -470,14 +470,35 @@ def _ler_formato_novo(wb) -> ResultadoLeituraGetnet:
         # Expandir parcelas: 1 linha por parcela vencendo no MESMO DIA de meses
         # seguintes a partir da data prevista da 1a parcela (regra real Sankhya).
         # Antes era +30d linear, que divergia 3-5 dias em parcelas distantes.
+        # A ÚLTIMA parcela ajusta centavo pra fechar o total exato (aplica em
+        # valor_parcela_bruto, valor_taxa e valor_liquido) — sem isso o valor
+        # agregado da venda pelo motor não bate com o Sankhya (ex: 2008,08 vs 2008,07).
+        soma_bruto = 0.0
+        soma_taxa = 0.0
+        soma_liq = 0.0
         for n in range(1, parc_total + 1):
             dt_n = data_prev_1a
             if data_prev_1a is not None and n > 1:
                 dt_n = _add_meses(data_prev_1a, n - 1)
-            linhas_vendas.append({**base,
+            if n < parc_total:
+                vlr_p = vlr_parc
+                vlr_t = abs(vlr_taxa_parc)
+                vlr_l = vlr_liq_parc
+                soma_bruto = round(soma_bruto + vlr_p, 2)
+                soma_taxa = round(soma_taxa + vlr_t, 2)
+                soma_liq = round(soma_liq + vlr_l, 2)
+            else:
+                vlr_p = round(vlr_bruto - soma_bruto, 2)
+                vlr_t = round(abs(vlr_taxa) - soma_taxa, 2)
+                vlr_l = round(vlr_liq_total - soma_liq, 2)
+            linha = {**base,
                 "data_prev_pagamento": dt_n,
                 "parcela_atual": n,
-            })
+                "valor_parcela_bruto": vlr_p,
+                "valor_taxa": vlr_t,
+                "valor_liquido": vlr_l,
+            }
+            linhas_vendas.append(linha)
 
     df_v = pd.DataFrame(linhas_vendas, columns=COLUNAS_VENDAS)
     return ResultadoLeituraGetnet(
