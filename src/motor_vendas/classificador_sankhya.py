@@ -103,7 +103,25 @@ def _classificar_classe(row: pd.Series) -> str:
 
 
 def _identificar_adquirente(row: pd.Series, classe: str) -> Optional[str]:
-    """Inferir adquirente pela descrição do Tipo de Título."""
+    """Inferir adquirente pela descrição do Tipo de Título.
+
+    Heurística (validada com Débora em 31/07/2026):
+      - "GETNET" no nome → Getnet (explícito)
+      - "PS" isolado → PagSeguro
+      - "CREDITO A DISTANCIA" no nome → Cielo, IGUAL para nota fiscal ou adiantamento
+
+    Nota sobre "CREDITO A DISTANCIA" (temporário — se mudar, revisar aqui):
+      Hoje, Cielo é a ÚNICA adquirente que usa link de pagamento no cadastro
+      do Sankhya. Todos os títulos com essa descrição batem em uma dessas 3
+      combinações no dataset real:
+        - TOP 1101/1131 · Vendas notas fiscais → Cielo Link (venda com NF)
+        - TOP 1654 · CARTAO-Receita Adiantamento → adiantamento gerado por cartão
+          (também é Cielo, porque Getnet e PS já foram cobertos pelas regras acima)
+      Se a Débora um dia usar "CREDITO A DISTANCIA" para adiantamento manual
+      SEM cartão (situação inexistente hoje), essa regra vai marcar como Cielo
+      indevidamente — revisar. Getnet Link, se surgir no futuro, será cadastrado
+      com TOPs próprias da Getnet, então não vai colidir aqui.
+    """
     desc = str(row.get("tipo_titulo_desc") or "").upper()
     if not desc:
         return None
@@ -116,9 +134,10 @@ def _identificar_adquirente(row: pd.Series, classe: str) -> Optional[str]:
     if _RE_PS_ISOLADO.search(desc):
         return "pagseguro"
 
-    # Cielo link — quando é nota fiscal com TOP 118 (CREDITO A DISTANCIA)
-    tipo_cod = row.get("tipo_titulo")
-    if classe == "nota_fiscal" and tipo_cod == 118:
+    # Cielo (link de pagamento) — detecção por texto na descrição
+    # Robusto: se o Sankhya mudar o código interno (hoje 118) mas mantiver o texto,
+    # continua funcionando.
+    if "CREDITO A DISTANCIA" in desc:
         return "cielo"
 
     return None
