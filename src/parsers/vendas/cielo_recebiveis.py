@@ -269,6 +269,16 @@ def ler(dados: bytes) -> ResultadoLeituraCielo:
             ignoradas += 1
             continue
 
+        # FILTRO STATUS · Ignora vendas Negadas/Canceladas/Não Autorizadas.
+        # Mesmo bug que apareceu no Getnet em 31/07/2026: vendas não aprovadas
+        # não geram título no Sankhya, então precisam sair do dataset.
+        # No arquivo real da Débora hoje o Cielo só traz Aprovadas, mas
+        # filtramos por segurança pra funcionar se um dia trazer outros status.
+        status_raw = str(_get(row, col_status, "")).strip().lower()
+        if status_raw and status_raw not in ("aprovada", "aprovado", ""):
+            ignoradas += 1
+            continue
+
         estabs.add(estab)
 
         forma_pgto = str(_get(row, col_forma_pgto, "")).strip()
