@@ -849,6 +849,9 @@ def _buscar_titulos_em_aberto(texto_busca: str, valor_venda: Optional[float] = N
     """
     Busca títulos do Sankhya EM ABERTO ou BAIXADOS POR CARTÃO por texto/valor.
 
+    Exclui títulos que JÁ FORAM CASADOS pelo motor (Grupo 1 ou 2) ou por
+    ligação manual — evita dupla conciliação e reduz ruído.
+
     Retorna títulos elegíveis (nota fiscal ou adiantamento) que estejam:
       - em_aberto (TOP 0) — precisam ser conciliados
       - baixado_cartao (TOP 1722) — já foram baixados mas podem ser
@@ -863,6 +866,27 @@ def _buscar_titulos_em_aberto(texto_busca: str, valor_venda: Optional[float] = N
 
     # Inclui em_aberto E baixado_cartao (mudança 31/07/2026)
     df_elegiveis = df[df["situacao"].isin(["em_aberto", "baixado_cartao"])].copy()
+    if df_elegiveis.empty:
+        return []
+
+    # Coleta idx_sankhya dos títulos que motor já casou (Grupo 1 e 2) OU
+    # que a Débora ligou manualmente
+    sk_idx_casados = set()
+    resultado_motor = st.session_state.get("cv_motor_resultado")
+    if resultado_motor is not None:
+        for df_g in (resultado_motor.grupo_1_conciliadas, resultado_motor.grupo_2_ja_baixadas):
+            if df_g is not None and not df_g.empty and "sk_idx" in df_g.columns:
+                for idx in df_g["sk_idx"].dropna().tolist():
+                    sk_idx_casados.add(idx)
+    # Também exclui os confirmados manualmente
+    confirmadas = st.session_state.get("cv_confirmadas_manual", {}) or {}
+    for chave, dados in confirmadas.items():
+        idx = dados.get("sk_idx")
+        if idx is not None:
+            sk_idx_casados.add(idx)
+
+    if sk_idx_casados:
+        df_elegiveis = df_elegiveis[~df_elegiveis.index.isin(sk_idx_casados)]
     if df_elegiveis.empty:
         return []
 
