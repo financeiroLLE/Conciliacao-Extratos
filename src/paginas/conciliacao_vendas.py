@@ -1091,12 +1091,47 @@ def _dias_desde(data: Any, hoje: Optional[date] = None) -> Optional[int]:
 
 
 def _classificar_venda_sem_titulo(venda: pd.Series, hoje: Optional[date] = None) -> Tuple[str, str]:
-    dias = _dias_desde(venda.get("data_prev_pagamento"), hoje)
+    """Classifica uma venda sem par no Sankhya.
+
+    Distingue 3 situações usando `data_venda` (real, imutável) para julgar
+    urgência e `data_prev_pagamento` (previsão da parcela) só como contexto:
+
+    - "parcela_futura"    · data prevista da parcela está NO FUTURO → normal,
+                            Sankhya ainda vai lançar o título dessa parcela
+                            (ex: parcela 4/6 de crédito parcelado, vence em 3 meses)
+    - "aguardando_faturamento" · venda ocorreu há < 3 dias → normal, Sankhya
+                                 pode não ter faturado ainda
+    - "divergencia_real" · venda há ≥ 3 dias e sem par → precisa investigar
+    """
+    if hoje is None:
+        hoje = date.today()
+
+    data_venda = venda.get("data_venda") if not _is_none(venda.get("data_venda")) else None
+    data_prev = venda.get("data_prev_pagamento")
+
+    # 1. Data prevista de pagamento NO FUTURO → parcela futura (situação normal)
+    dias_ate_prev = _dias_desde(data_prev, hoje)
+    if dias_ate_prev is not None and dias_ate_prev < 0:
+        dias_futuros = -dias_ate_prev
+        return ("parcela_futura", f"Parcela futura · vence em {dias_futuros} dia(s)")
+
+    # 2. Usa data_venda real (não a prevista) pra julgar urgência
+    ref_data = data_venda if data_venda is not None else data_prev
+    dias = _dias_desde(ref_data, hoje)
     if dias is None:
         return ("aguardando_faturamento", "Aguardando faturamento · sem data")
     if dias < 3:
         return ("aguardando_faturamento", f"Aguardando faturamento · {dias} dia(s)")
     return ("divergencia_real", f"Divergência real · {dias} dias sem par")
+
+
+def _is_none(v) -> bool:
+    if v is None:
+        return True
+    try:
+        return pd.isna(v)
+    except (TypeError, ValueError):
+        return False
 
 
 # ==============================================================================
@@ -1282,7 +1317,7 @@ def _render_pills(contadores: Dict[str, int]):
     """5 pills clicáveis via st.button."""
     ordem = [
         ("a_analisar", "A analisar", contadores["a_analisar"]),
-        ("auto_conciliadas", "Auto-conciliadas", contadores["auto_conciliadas"]),
+        ("auto_conciliadas", "Conciliadas", contadores["auto_conciliadas"]),
         ("compensadas", "Compensadas", contadores["compensadas"]),
         ("aguardando", "Aguardando", contadores["aguardando"]),
         ("devolucoes", "Devoluções", contadores["devolucoes"]),
@@ -1387,11 +1422,25 @@ def _render_card_ambiguo(venda: pd.Series, idx_card: int):
         pass
 
     nsu = venda.get("nsu") or ""
-    valor = venda.get("valor_match")
-    data_venda = venda.get("data_prev_pagamento")
+    valor_parcela = venda.get("valor_match")
+    valor_total_venda = venda.get("valor_bruto_venda_total")
+
+    # Data REAL da venda (imutável); data prevista da parcela pra timeline
+    data_venda_real = venda.get("data_venda")
+    if _is_none(data_venda_real):
+        data_venda_real = None
+    data_prev = venda.get("data_prev_pagamento")
 
     # Puxar bruto/taxa/liq do df original
     bruto, taxa_pct, liquido = _puxar_valores_originais(venda)
+
+    parc_num = None
+    parc_qtd = None
+    try:
+        parc_num = int(parc_atual) if parc_atual is not None else None
+        parc_qtd = int(parc_total) if parc_total is not None else None
+    except (ValueError, TypeError):
+        pass
 
     tags = [
         '<span class="cv-tag cv-tag-amarelo">Múltiplas candidatas</span>',
@@ -1427,16 +1476,56 @@ def _render_card_ambiguo(venda: pd.Series, idx_card: int):
             f'</div>'
         )
 
-    timeline_html = _render_timeline_html(data_venda, data_venda, None)
-    valores_dir = _bloco_valores_direita_html(valor, bruto, taxa_pct, liquido)
+    # Timeline: usa data_venda (real) → data_prev_pagamento → (baixado)
+    timeline_html = _render_timeline_html(data_venda_real or data_prev, data_prev, None)
+
+    # Bloco direito: total da venda em destaque quando parcelado
+    if parc_qtd and parc_qtd > 1 and valor_total_venda is not None:
+        valores_dir = (
+            f'<div class="cv-valor-dir">'
+            f'<div class="cv-valor-sub">total da venda</div>'
+            f'<div class="cv-valor-grande">{_fmt_moeda(valor_total_venda)}</div>'
+            f'<div class="cv-valor-sub" style="margin-top:4px;">'
+            f'parcela: bruto {_fmt_moeda(bruto if bruto is not None else valor_parcela)}'
+        )
+        if taxa_pct is not None:
+            try:
+                valores_dir += f' · taxa {float(taxa_pct):.2f}%'.replace(".", ",")
+            except (ValueError, TypeError):
+                pass
+        if liquido is not None:
+            valores_dir += f' · líq {_fmt_moeda(liquido)}'
+        valores_dir += '</div></div>'
+    else:
+        valores_dir = _bloco_valores_direita_html(valor_parcela, bruto, taxa_pct, liquido)
+
+    # Título: valor da parcela + contexto quando parcelado
+    if parc_qtd and parc_qtd > 1:
+        titulo_html = (
+            f'<div class="cv-card-titulo">{_fmt_moeda(valor_parcela)} '
+            f'<span style="font-size:11px; color:{TEXTO_MUTED}; font-weight:400;">'
+            f'· parcela {parc_num}/{parc_qtd}</span></div>'
+        )
+    else:
+        titulo_html = f'<div class="cv-card-titulo">{_fmt_moeda(valor_parcela)}</div>'
+
+    # Subtítulo: data REAL da venda + origem
+    origem = f"dados da {adq.upper()}" if adq and adq != "—" else "dados da adquirente"
+    if data_venda_real:
+        sub_txt = f"Vendido em {_fmt_data_br(data_venda_real)}"
+        if parc_qtd and parc_qtd > 1 and data_prev:
+            sub_txt += f" · previsão parc {parc_num}/{parc_qtd}: {_fmt_data_br(data_prev)}"
+        sub_txt += f" · {origem}"
+    else:
+        sub_txt = f"Data de venda indisponível · previsão {_fmt_data_br(data_prev)} · {origem}"
 
     card_html = (
         f'<div class="cv-card">'
         f'<div class="cv-card-topo">'
         f'<div style="flex:1; min-width:0;">'
         f'<div class="cv-tag-linha">{"".join(tags)}</div>'
-        f'<div class="cv-card-titulo">{_fmt_moeda(valor)}</div>'
-        f'<div class="cv-card-sub">Vendido em {_fmt_data_br(data_venda)}</div>'
+        f'{titulo_html}'
+        f'<div class="cv-card-sub">{_escape(sub_txt)}</div>'
         f'</div>'
         f'{valores_dir}'
         f'</div>'
@@ -1468,7 +1557,14 @@ def _render_card_ambiguo(venda: pd.Series, idx_card: int):
 
 
 def _render_card_venda_sem_titulo(venda: pd.Series, idx_card: int, hoje: date):
-    """Card branco. Layout rico + botão 'Buscar par no Sankhya' que expande busca."""
+    """Card branco. Layout rico + botão 'Buscar par no Sankhya' que expande busca.
+
+    Mudanças 31/07/2026 (após feedback Débora):
+      - Usa `data_venda` REAL (não `data_prev_pagamento`) no "Vendido em X"
+      - Mostra valor TOTAL da venda quando parcelado (2× de X, 6× de Y, etc)
+      - Distingue "parcela futura" (situação normal, cinza) de "divergência real" (laranja)
+      - Mostra origem explícita (dados da adquirente)
+    """
     status_key, status_label = _classificar_venda_sem_titulo(venda, hoje)
 
     adq = _label_adquirente(venda.get("adquirente"))
@@ -1477,19 +1573,29 @@ def _render_card_venda_sem_titulo(venda: pd.Series, idx_card: int, hoje: date):
     parc_atual = venda.get("parcela_atual")
     parc_total = venda.get("parcelas_total")
     parc_txt = ""
+    parc_num = None
+    parc_qtd = None
     try:
-        pa = int(parc_atual) if parc_atual is not None else None
-        pt = int(parc_total) if parc_total is not None else None
-        if pa and pt and pt > 1:
-            parc_txt = f"Parcela {pa}/{pt}"
+        parc_num = int(parc_atual) if parc_atual is not None else None
+        parc_qtd = int(parc_total) if parc_total is not None else None
+        if parc_num and parc_qtd and parc_qtd > 1:
+            parc_txt = f"Parcela {parc_num}/{parc_qtd}"
     except (ValueError, TypeError):
         pass
 
     nsu = venda.get("nsu") or ""
-    valor = venda.get("valor_match")
-    data_venda = venda.get("data_prev_pagamento")
+    valor_parcela = venda.get("valor_match")
+    valor_total_venda = venda.get("valor_bruto_venda_total")
+
+    # Data REAL da venda (imutável); data prevista pra timeline
+    data_venda_real = venda.get("data_venda")
+    if _is_none(data_venda_real):
+        data_venda_real = None
+    data_prev = venda.get("data_prev_pagamento")
+
     bruto, taxa_pct, liquido = _puxar_valores_originais(venda)
 
+    # Classe do card + tag de status: laranja pra divergência, cinza pros demais
     if status_key == "divergencia_real":
         card_class = "cv-card cv-card-divergencia cv-card-com-busca"
         tag_status = f'<span class="cv-tag cv-tag-laranja">{_escape(status_label)}</span>'
@@ -1507,16 +1613,59 @@ def _render_card_venda_sem_titulo(venda: pd.Series, idx_card: int, hoje: date):
     if nsu:
         tags.append(f'<span class="cv-tag">Nº {_escape(nsu)}</span>')
 
-    timeline_html = _render_timeline_html(data_venda, data_venda, None)
-    valores_dir = _bloco_valores_direita_html(valor, bruto, taxa_pct, liquido)
+    # Timeline: usa data_venda (real) → data_prev_pagamento → (baixado)
+    timeline_html = _render_timeline_html(data_venda_real or data_prev, data_prev, None)
+
+    # Bloco direito: se é parcela de venda maior, mostra o TOTAL bem visível
+    if parc_qtd and parc_qtd > 1 and valor_total_venda is not None:
+        # Parcela de venda parcelada: destaque no valor total
+        valores_dir = (
+            f'<div class="cv-valor-dir">'
+            f'<div class="cv-valor-sub">total da venda</div>'
+            f'<div class="cv-valor-grande">{_fmt_moeda(valor_total_venda)}</div>'
+            f'<div class="cv-valor-sub" style="margin-top:4px;">'
+            f'parcela: bruto {_fmt_moeda(bruto if bruto is not None else valor_parcela)}'
+        )
+        if taxa_pct is not None:
+            try:
+                valores_dir += f' · taxa {float(taxa_pct):.2f}%'.replace(".", ",")
+            except (ValueError, TypeError):
+                pass
+        if liquido is not None:
+            valores_dir += f' · líq {_fmt_moeda(liquido)}'
+        valores_dir += '</div></div>'
+    else:
+        # À vista/débito ou 1 parcela: usa o bloco padrão
+        valores_dir = _bloco_valores_direita_html(valor_parcela, bruto, taxa_pct, liquido)
+
+    # Título esquerdo: valor da parcela + contexto de parcelamento
+    if parc_qtd and parc_qtd > 1:
+        titulo_html = (
+            f'<div class="cv-card-titulo">{_fmt_moeda(valor_parcela)} '
+            f'<span style="font-size:11px; color:{TEXTO_MUTED}; font-weight:400;">'
+            f'· parcela {parc_num}/{parc_qtd}</span></div>'
+        )
+    else:
+        titulo_html = f'<div class="cv-card-titulo">{_fmt_moeda(valor_parcela)}</div>'
+
+    # Subtítulo: data REAL da venda + previsão + origem
+    origem = f"dados da {adq.upper()}" if adq and adq != "—" else "dados da adquirente"
+    if data_venda_real:
+        sub_txt = f"Vendido em {_fmt_data_br(data_venda_real)}"
+        if parc_qtd and parc_qtd > 1 and data_prev:
+            sub_txt += f" · previsão pagamento parc {parc_num}/{parc_qtd}: {_fmt_data_br(data_prev)}"
+        sub_txt += f" · {origem}"
+    else:
+        # Sem data_venda: fallback com aviso
+        sub_txt = f"Data de venda indisponível · previsão pagamento {_fmt_data_br(data_prev)} · {origem}"
 
     card_html = (
         f'<div class="{card_class}">'
         f'<div class="cv-card-topo">'
         f'<div style="flex:1; min-width:0;">'
         f'<div class="cv-tag-linha">{"".join(tags)}</div>'
-        f'<div class="cv-card-titulo">{_fmt_moeda(valor)}</div>'
-        f'<div class="cv-card-sub">Vendido em {_fmt_data_br(data_venda)} · sem par no Sankhya</div>'
+        f'{titulo_html}'
+        f'<div class="cv-card-sub">{_escape(sub_txt)}</div>'
         f'</div>'
         f'{valores_dir}'
         f'</div>'
