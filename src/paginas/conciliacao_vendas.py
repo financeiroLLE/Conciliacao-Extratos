@@ -287,12 +287,23 @@ div[data-testid="stFormSubmitButton"] > button[kind="primary"] {{
     border: none !important;
     font-weight: 500 !important;
 }}
+/* Força cor do texto interno (Streamlit envolve o label em <p>) */
+div[data-testid="stButton"] > button[kind="primary"] *,
+div[data-testid="stDownloadButton"] > button[kind="primary"] *,
+div[data-testid="stFormSubmitButton"] > button[kind="primary"] * {{
+    color: {AZUL_NAVY} !important;
+}}
 div[data-testid="stButton"] > button[kind="primary"]:hover,
 div[data-testid="stDownloadButton"] > button[kind="primary"]:hover,
 div[data-testid="stFormSubmitButton"] > button[kind="primary"]:hover {{
     background-color: {AMARELO_ESCURO} !important;
     color: {AZUL_NAVY} !important;
     border: none !important;
+}}
+div[data-testid="stButton"] > button[kind="primary"]:hover *,
+div[data-testid="stDownloadButton"] > button[kind="primary"]:hover *,
+div[data-testid="stFormSubmitButton"] > button[kind="primary"]:hover * {{
+    color: {AZUL_NAVY} !important;
 }}
 div[data-testid="stButton"] > button[kind="primary"]:active,
 div[data-testid="stButton"] > button[kind="primary"]:focus:not(:active),
@@ -312,11 +323,20 @@ div[data-testid="stDownloadButton"] > button[kind="secondary"] {{
     border: 1px solid {AMARELO_ESCURO} !important;
     font-weight: 500 !important;
 }}
+/* Força cor do texto interno também no secundário */
+div[data-testid="stButton"] > button[kind="secondary"] *,
+div[data-testid="stDownloadButton"] > button[kind="secondary"] * {{
+    color: {AZUL_NAVY} !important;
+}}
 div[data-testid="stButton"] > button[kind="secondary"]:hover,
 div[data-testid="stDownloadButton"] > button[kind="secondary"]:hover {{
     background-color: {CREME_ESCURO} !important;
     color: {AZUL_NAVY} !important;
     border: 1px solid {AMARELO_ESCURO} !important;
+}}
+div[data-testid="stButton"] > button[kind="secondary"]:hover *,
+div[data-testid="stDownloadButton"] > button[kind="secondary"]:hover * {{
+    color: {AZUL_NAVY} !important;
 }}
 div[data-testid="stButton"] > button[kind="secondary"]:active,
 div[data-testid="stButton"] > button[kind="secondary"]:focus:not(:active) {{
