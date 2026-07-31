@@ -103,10 +103,31 @@ def _adquirentes_compativeis(adq_venda, adq_sk) -> bool:
 
 
 def _to_date(v) -> Optional[date]:
-    if v is None or _is_none_or_nan(v):
+    """Converte para `date` puro (sem hora).
+
+    IMPORTANTE: `pd.Timestamp` herda de `datetime.date`, então `isinstance(v, date)`
+    retorna True mesmo pra Timestamp — sem conversão explícita, o motor tentaria
+    subtrair `date - Timestamp` e falharia com TypeError.
+    """
+    if v is None:
         return None
+    try:
+        if pd.isna(v):
+            return None
+    except (TypeError, ValueError):
+        pass
+    # Timestamp ou datetime → chama .date() explicitamente
+    if hasattr(v, "date") and callable(getattr(v, "date", None)):
+        try:
+            d = v.date()
+            if isinstance(d, date):
+                return d
+        except Exception:
+            pass
+    # Se já é date puro (sem herança de datetime), retorna direto
     if isinstance(v, date):
         return v
+    # Fallback: parse via pandas
     try:
         return pd.to_datetime(v).date()
     except Exception:
