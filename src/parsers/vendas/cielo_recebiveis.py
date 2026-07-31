@@ -15,12 +15,35 @@ Leitor Cielo — suporta AMBOS os formatos:
 from __future__ import annotations
 
 import re
+from calendar import monthrange
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Optional
 
 import pandas as pd
 import xlrd
+
+
+def _add_meses(dt: date, n: int) -> date:
+    """Adiciona N meses mantendo o mesmo dia (com clamp para último dia do mês novo).
+
+    Necessário porque parcelas do Sankhya vencem no MESMO DIA de meses seguintes
+    (ex: venda em 23/07 → parc 1 vence 25/08, parc 2 vence 25/09, parc 3 vence
+    25/10...), não a cada +30 dias linear (que acumula erro por causa de meses
+    de 28-31 dias e leva parcelas distantes a divergirem em 3-5 dias do Sankhya,
+    ficando fora da tolerância de match).
+
+    Ex: _add_meses(date(2026,8,24), 3) → date(2026,11,24)
+        _add_meses(date(2026,1,31), 1) → date(2026,2,28)  (clamp)
+    """
+    if dt is None or n == 0:
+        return dt
+    mes = dt.month - 1 + n
+    ano = dt.year + mes // 12
+    mes = mes % 12 + 1
+    ultimo_dia = monthrange(ano, mes)[1]
+    dia = min(dt.day, ultimo_dia)
+    return date(ano, mes, dia)
 
 
 COLUNAS_SAIDA = [
@@ -302,11 +325,14 @@ def ler(dados: bytes) -> ResultadoLeituraCielo:
         )
 
         if is_novo and parc_total > 1:
-            # Explode em N parcelas com datas D+30, D+60, ...
+            # Explode em N parcelas. Cada parcela vence no MESMO DIA de meses
+            # seguintes a partir da data prevista da 1ª parcela (regra real do
+            # Sankhya). Antes usávamos +30d linear, o que gerava divergência
+            # de 3-5 dias em parcelas distantes (fora da tolerância de match).
             for n in range(1, parc_total + 1):
                 dt_prev_n = data_prev
                 if data_prev is not None and n > 1:
-                    dt_prev_n = data_prev + timedelta(days=30 * (n - 1))
+                    dt_prev_n = _add_meses(data_prev, n - 1)
                 linhas.append({**base,
                     "data_prev_pagamento": dt_prev_n,
                     "valor_bruto": valor_parcela,
