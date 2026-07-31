@@ -246,7 +246,7 @@ def _classificar_situacao(top_baixa) -> str:
 # FUNÇÃO PRINCIPAL
 # ==============================================================================
 
-def classificar(df: pd.DataFrame) -> pd.DataFrame:
+def classificar(df: pd.DataFrame, df_cabecalho: Optional[pd.DataFrame] = None) -> pd.DataFrame:
     """
     Adiciona colunas de classificação ao DataFrame retornado pelo leitor Sankhya.
 
@@ -254,11 +254,23 @@ def classificar(df: pd.DataFrame) -> pd.DataFrame:
         df: DataFrame da função `financeiro_sankhya.ler()`, com as colunas:
             top_baixa, top_baixa_desc, tipo_titulo, tipo_titulo_desc,
             tipo_operacao, receita_despesa, historico, ...
+        df_cabecalho: DataFrame OPCIONAL da função `cabecalho_nota_sankhya.ler()`.
+            Se fornecido, faz JOIN por Nro. Nota e enriquece cada título com:
+              - cabecalho_dt_negociacao : data real da venda no Sankhya
+              - cabecalho_vlr_nota_total : valor total da nota fiscal (útil pra
+                mostrar contexto em vendas parceladas onde o título é só
+                uma das parcelas)
+              - cabecalho_descricao_tipo_negociacao : "3 X -TEF- GETNET - VISA"
+              - cabecalho_status_nfe : status da NF-e
+              - cabecalho_dt_movimento : data do movimento no Sankhya
+            Adiantamentos (TOP OP 1654) NÃO estão no Cabeçalho — vão ficar com
+            None nessas colunas, o que é o comportamento esperado.
 
     Returns:
         DataFrame com colunas adicionais:
             classe, adquirente_sankhya, bandeira_sankhya, modalidade_sankhya,
-            parcelas_sankhya, nro_nota_referenciada, situacao
+            parcelas_sankhya, nro_nota_referenciada, situacao,
+            e (se df_cabecalho fornecido) as colunas cabecalho_* acima.
     """
     if df is None or df.empty:
         # Devolve DataFrame vazio mas com as colunas certas
@@ -266,6 +278,9 @@ def classificar(df: pd.DataFrame) -> pd.DataFrame:
             "classe", "adquirente_sankhya", "bandeira_sankhya",
             "modalidade_sankhya", "parcelas_sankhya",
             "nro_nota_referenciada", "situacao",
+            "cabecalho_dt_negociacao", "cabecalho_vlr_nota_total",
+            "cabecalho_descricao_tipo_negociacao", "cabecalho_status_nfe",
+            "cabecalho_dt_movimento",
         ]
         vazio = df.copy() if df is not None else pd.DataFrame()
         for c in cols_extra:
@@ -316,7 +331,72 @@ def classificar(df: pd.DataFrame) -> pd.DataFrame:
     out["tipo_referencia"] = tipos_ref
     out["situacao"] = situacoes
 
+    # JOIN opcional com Cabeçalho da Nota (Entrega 2 · 31/07/2026)
+    out = _enriquecer_com_cabecalho(out, df_cabecalho)
+
     return out
+
+
+def _enriquecer_com_cabecalho(df: pd.DataFrame, df_cabecalho: Optional[pd.DataFrame]) -> pd.DataFrame:
+    """Adiciona colunas do Cabeçalho da Nota via JOIN por Nro. Nota.
+
+    Se df_cabecalho for None ou vazio, adiciona colunas vazias mesmo assim
+    para manter o schema consistente (motor e página consomem essas colunas).
+
+    Interseção validada: 169 de 170 notas do Cabeçalho batem com o Financeiro
+    (adiantamentos não aparecem no Cabeçalho, o que é esperado).
+    """
+    cols_cabecalho = [
+        "cabecalho_dt_negociacao",
+        "cabecalho_vlr_nota_total",
+        "cabecalho_descricao_tipo_negociacao",
+        "cabecalho_status_nfe",
+        "cabecalho_dt_movimento",
+    ]
+
+    if df_cabecalho is None or df_cabecalho.empty:
+        for c in cols_cabecalho:
+            df[c] = None
+        return df
+
+    # Prepara df_cabecalho: normaliza nro_nota como int
+    cab = df_cabecalho[[
+        "nro_nota", "dt_negociacao", "vlr_nota_total",
+        "descricao_tipo_negociacao", "status_nfe", "dt_movimento",
+    ]].copy()
+    cab = cab[cab["nro_nota"].notna()]
+    cab["nro_nota"] = cab["nro_nota"].astype("Int64")
+    cab = cab.rename(columns={
+        "dt_negociacao": "cabecalho_dt_negociacao",
+        "vlr_nota_total": "cabecalho_vlr_nota_total",
+        "descricao_tipo_negociacao": "cabecalho_descricao_tipo_negociacao",
+        "status_nfe": "cabecalho_status_nfe",
+        "dt_movimento": "cabecalho_dt_movimento",
+    })
+    # Se houver notas duplicadas no Cabeçalho (não deveria mas por segurança),
+    # mantém a primeira
+    cab = cab.drop_duplicates(subset=["nro_nota"], keep="first")
+
+    # Normaliza nro_nota do Financeiro pra bater
+    df_join = df.copy()
+    if "nro_nota" in df_join.columns:
+        df_join["_nro_nota_norm"] = pd.to_numeric(df_join["nro_nota"], errors="coerce").astype("Int64")
+    else:
+        # Financeiro deveria ter esse campo — se não tem, adiciona None em todas as colunas
+        for c in cols_cabecalho:
+            df[c] = None
+        return df
+
+    resultado = df_join.merge(
+        cab, how="left", left_on="_nro_nota_norm", right_on="nro_nota",
+        suffixes=("", "_cab"),
+    )
+    # Se merge criou coluna nro_nota_cab (duplicada), remove
+    if "nro_nota_cab" in resultado.columns:
+        resultado = resultado.drop(columns=["nro_nota_cab"])
+    resultado = resultado.drop(columns=["_nro_nota_norm"])
+
+    return resultado
 
 
 # ==============================================================================
