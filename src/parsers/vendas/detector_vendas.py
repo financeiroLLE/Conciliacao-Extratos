@@ -22,12 +22,14 @@ from typing import Optional
 from . import financeiro_sankhya
 from . import cielo_recebiveis
 from . import getnet_recebiveis
+from . import cabecalho_nota_sankhya
 
 
 TIPOS_CONHECIDOS = {
     "financeiro_sankhya": "Financeiro Sankhya",
     "cielo_recebiveis": "Cielo Recebíveis Detalhe",
     "getnet_recebiveis": "Getnet Recebíveis Completos",
+    "cabecalho_nota_sankhya": "Cabeçalho da Nota Sankhya",
     "desconhecido": "Desconhecido",
 }
 
@@ -78,7 +80,22 @@ def detectar(dados: bytes) -> ResultadoDeteccao:
     except Exception:
         pass
 
-    # 3. Financeiro Sankhya
+    # 3. Cabeçalho da Nota Sankhya (Entrega 2 · 31/07/2026)
+    # DEVE vir ANTES do Financeiro Sankhya: o Cabeçalho tem colunas específicas
+    # ("Nro. Nota", "Dt. Neg.", "Vlr. Nota") que o Financeiro não tem, e a
+    # função `eh_cabecalho_nota` verifica ausência de marcadores exclusivos do
+    # Financeiro pra evitar confusão bidirecional.
+    try:
+        if cabecalho_nota_sankhya.eh_cabecalho_nota(dados):
+            return ResultadoDeteccao(
+                tipo="cabecalho_nota_sankhya",
+                tipo_legivel=TIPOS_CONHECIDOS["cabecalho_nota_sankhya"],
+                confianca="alta",
+            )
+    except Exception:
+        pass
+
+    # 4. Financeiro Sankhya
     try:
         if financeiro_sankhya.eh_financeiro_sankhya(dados):
             return ResultadoDeteccao(
@@ -92,7 +109,7 @@ def detectar(dados: bytes) -> ResultadoDeteccao:
     # Nada casou
     head = dados[:8]
     if head.startswith(b"\xD0\xCF\x11\xE0"):
-        motivo = "Arquivo é .xls binário mas não bate com Financeiro Sankhya, Cielo nem Getnet."
+        motivo = "Arquivo é .xls binário mas não bate com Financeiro Sankhya, Cabeçalho da Nota, Cielo nem Getnet."
     elif head.startswith(b"PK\x03\x04"):
         motivo = "Arquivo é .xlsx/zip — nenhum dos leitores esperados aceita este formato ainda."
     else:
