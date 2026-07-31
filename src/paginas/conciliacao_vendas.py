@@ -1913,7 +1913,13 @@ def _render_pill_a_analisar(resultado):
 # ==============================================================================
 
 def _render_card_conciliada(grupo: Dict[str, Any], idx_card: int, mostrar_desfazer: bool = True):
-    """Card branco com faixa verde. Uma venda auto-conciliada (pode ter N parcelas)."""
+    """Card branco com faixa verde. Uma venda auto-conciliada (pode ter N parcelas).
+
+    Mudanças 31/07/2026:
+      - "Vendido em X" usa data_venda REAL (não data_prev_pagamento)
+      - Mostra linha "Sankhya" com dados do Cabeçalho da Nota quando disponíveis:
+        Dt.Neg. + NF + status (validação cruzada com a adquirente).
+    """
     adq = _label_adquirente(grupo.get("adquirente"))
     ban = _label_bandeira(grupo.get("bandeira"))
     mod = _label_modalidade(grupo.get("modalidade"), grupo.get("parcelas_total"))
@@ -1922,11 +1928,26 @@ def _render_card_conciliada(grupo: Dict[str, Any], idx_card: int, mostrar_desfaz
     empresa = grupo.get("empresa") or ""
     empresa_txt = f" · {empresa}" if empresa else ""
     nsu = grupo.get("nsu") or ""
-    data_venda = grupo.get("data_prev_pagamento")
+
+    # Data REAL da venda (adquirente); fallback data_prev quando ausente
+    data_venda_real = grupo.get("data_venda")
+    if _is_none(data_venda_real):
+        data_venda_real = None
+    data_prev = grupo.get("data_prev_pagamento")
+    data_venda_exibir = data_venda_real or data_prev
 
     parcelas = grupo.get("parcelas", [])
     n_parc = len(parcelas)
     valor_total = grupo.get("valor_total", 0)
+
+    # Puxar info do Cabeçalho da primeira parcela que tiver (adiantamentos não têm)
+    cab_dt_neg = None
+    cab_status = None
+    for p in parcelas:
+        if not _is_none(p.get("sk_cab_dt_negociacao")):
+            cab_dt_neg = p.get("sk_cab_dt_negociacao")
+            cab_status = p.get("sk_cab_status_nfe")
+            break
 
     # Tags
     tags = [
@@ -1938,8 +1959,11 @@ def _render_card_conciliada(grupo: Dict[str, Any], idx_card: int, mostrar_desfaz
         tags.append(f'<span class="cv-tag">{n_parc} parcelas</span>')
     if nsu:
         tags.append(f'<span class="cv-tag">Nº {_escape(nsu)}</span>')
+    # Tag extra quando NF confirmada pelo Cabeçalho
+    if cab_dt_neg is not None:
+        tags.append(f'<span class="cv-tag cv-tag-verde">✓ Nota confirmada</span>')
 
-    # Parcelas
+    # Parcelas (linha por parcela dentro do card)
     linhas_parc = []
     for p in parcelas:
         pa = p.get("parcela_atual")
@@ -1969,13 +1993,24 @@ def _render_card_conciliada(grupo: Dict[str, Any], idx_card: int, mostrar_desfaz
 
     parcelas_html = f'<div class="cv-parcelas-lista">{"".join(linhas_parc)}</div>' if linhas_parc else ""
 
+    # Subtítulo enriquecido: dupla validação quando Cabeçalho tem dados
+    origem = f"dados da {adq.upper()}" if adq and adq != "—" else "dados da adquirente"
+    sub_linhas = []
+    sub_linhas.append(f'<b>Adquirente:</b> Vendido em {_fmt_data_br(data_venda_exibir)} · {origem}')
+    if cab_dt_neg is not None:
+        cab_txt = f'Faturado em {_fmt_data_br(cab_dt_neg)}'
+        if cab_status:
+            cab_txt += f' · {_escape(str(cab_status))}'
+        sub_linhas.append(f'<b>Sankhya:</b> {cab_txt}')
+    sub_html = ' · '.join(sub_linhas) if len(sub_linhas) == 1 else '<br>'.join(sub_linhas)
+
     card_html = (
         f'<div class="cv-card cv-card-sucesso">'
         f'<div class="cv-card-topo">'
         f'<div style="flex:1; min-width:0;">'
         f'<div class="cv-tag-linha">{"".join(tags)}</div>'
         f'<div class="cv-card-titulo">{_escape(parceiro)}{_escape(empresa_txt)}</div>'
-        f'<div class="cv-card-sub">Vendido em {_fmt_data_br(data_venda)}</div>'
+        f'<div class="cv-card-sub">{sub_html}</div>'
         f'</div>'
         f'<div class="cv-valor-dir">'
         f'<div class="cv-valor-sub">total</div>'
