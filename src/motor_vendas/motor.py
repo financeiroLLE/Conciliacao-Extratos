@@ -344,7 +344,22 @@ def _buscar_candidatos_permissivo(
 # ==============================================================================
 
 def _montar_match(venda_row: pd.Series, candidato: pd.Series, match_permissivo: bool = False) -> dict:
-    """Constrói o dict do match (Grupo 1 ou Grupo 2)."""
+    """Constrói o dict do match (Grupo 1 ou Grupo 2).
+
+    Inclui campos enriquecidos com Cabeçalho da Nota (Entrega 2, 31/07/2026),
+    se disponíveis. Para adiantamentos ou títulos sem NF, esses campos ficam None.
+    """
+    def _safe_get(row, col, default=None):
+        if col not in row.index:
+            return default
+        v = row[col]
+        try:
+            if pd.isna(v):
+                return default
+        except (TypeError, ValueError):
+            pass
+        return v
+
     return {
         **venda_row.to_dict(),
         "sk_idx": candidato["idx_sankhya"],
@@ -354,13 +369,18 @@ def _montar_match(venda_row: pd.Series, candidato: pd.Series, match_permissivo: 
         "sk_nome_parceiro": candidato["nome_parceiro"],
         "sk_vlr_desdobramento": candidato["vlr_desdobramento"],
         "sk_dt_vencimento": candidato["dt_vencimento"],
-        "sk_data_baixa": candidato.get("data_baixa") if "data_baixa" in candidato.index else None,
+        "sk_data_baixa": _safe_get(candidato, "data_baixa"),
         "sk_classe": candidato["classe"],
         "sk_tipo_titulo_desc": candidato["tipo_titulo_desc"],
         "sk_historico": candidato["historico"],
         "sk_ref_nf": candidato["nro_nota_referenciada"],
-        "sk_ref_acordo": candidato.get("referencia_acordo") if "referencia_acordo" in candidato.index else None,
+        "sk_ref_acordo": _safe_get(candidato, "referencia_acordo"),
         "sk_situacao": candidato["situacao"],
+        # Enriquecimento via Cabeçalho da Nota (Entrega 2 · 31/07/2026)
+        "sk_cab_dt_negociacao": _safe_get(candidato, "cabecalho_dt_negociacao"),
+        "sk_cab_vlr_nota_total": _safe_get(candidato, "cabecalho_vlr_nota_total"),
+        "sk_cab_descricao_tipo_negociacao": _safe_get(candidato, "cabecalho_descricao_tipo_negociacao"),
+        "sk_cab_status_nfe": _safe_get(candidato, "cabecalho_status_nfe"),
         "match_permissivo": match_permissivo,
     }
 
