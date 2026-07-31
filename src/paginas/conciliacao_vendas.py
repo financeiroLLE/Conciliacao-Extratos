@@ -826,7 +826,12 @@ def _puxar_valores_originais(venda: pd.Series) -> Tuple[Optional[float], Optiona
 def _buscar_titulos_em_aberto(texto_busca: str, valor_venda: Optional[float] = None,
                               limite: int = 15) -> List[Dict[str, Any]]:
     """
-    Busca títulos do Sankhya EM ABERTO por texto (parceiro/NF/valor).
+    Busca títulos do Sankhya EM ABERTO ou BAIXADOS POR CARTÃO por texto/valor.
+
+    Retorna títulos elegíveis (nota fiscal ou adiantamento) que estejam:
+      - em_aberto (TOP 0) — precisam ser conciliados
+      - baixado_cartao (TOP 1722) — já foram baixados mas podem ser
+        associados manualmente à venda para auditoria
 
     Se texto_busca vazio E valor_venda dado, retorna os com valor mais próximo.
     Se texto_busca dado, filtra por match textual.
@@ -835,50 +840,47 @@ def _buscar_titulos_em_aberto(texto_busca: str, valor_venda: Optional[float] = N
     if df is None or df.empty:
         return []
 
-    df_abertos = df[df["situacao"] == "em_aberto"].copy()
-    if df_abertos.empty:
+    # Inclui em_aberto E baixado_cartao (mudança 31/07/2026)
+    df_elegiveis = df[df["situacao"].isin(["em_aberto", "baixado_cartao"])].copy()
+    if df_elegiveis.empty:
         return []
 
     texto = (texto_busca or "").strip().lower()
 
     if texto:
-        # Match textual em parceiro, NF, valor
-        mask = pd.Series(False, index=df_abertos.index)
+        mask = pd.Series(False, index=df_elegiveis.index)
 
-        # Parceiro
-        if "nome_parceiro" in df_abertos.columns:
-            mask = mask | df_abertos["nome_parceiro"].astype(str).str.lower().str.contains(texto, na=False)
+        if "nome_parceiro" in df_elegiveis.columns:
+            mask = mask | df_elegiveis["nome_parceiro"].astype(str).str.lower().str.contains(texto, na=False)
 
-        # NF
-        if "nro_nota" in df_abertos.columns:
-            mask = mask | df_abertos["nro_nota"].astype(str).str.lower().str.contains(texto, na=False)
+        if "nro_nota" in df_elegiveis.columns:
+            mask = mask | df_elegiveis["nro_nota"].astype(str).str.lower().str.contains(texto, na=False)
 
-        # Valor: tenta parsear texto como número
         try:
             texto_num = float(texto.replace(",", ".").replace("r$", "").replace(" ", ""))
-            if "vlr_desdobramento" in df_abertos.columns:
-                mask = mask | (df_abertos["vlr_desdobramento"].round(2) == round(texto_num, 2))
+            if "vlr_desdobramento" in df_elegiveis.columns:
+                mask = mask | (df_elegiveis["vlr_desdobramento"].round(2) == round(texto_num, 2))
         except ValueError:
             pass
 
-        # NF referenciada (adiantamento)
-        if "nro_nota_referenciada" in df_abertos.columns:
-            mask = mask | df_abertos["nro_nota_referenciada"].astype(str).str.lower().str.contains(texto, na=False)
+        if "nro_nota_referenciada" in df_elegiveis.columns:
+            mask = mask | df_elegiveis["nro_nota_referenciada"].astype(str).str.lower().str.contains(texto, na=False)
 
-        df_filt = df_abertos[mask]
+        df_filt = df_elegiveis[mask]
     else:
-        df_filt = df_abertos
+        df_filt = df_elegiveis
 
-    # Se tem valor de referência, ordena por proximidade
+    # Ordena: primeiro por proximidade de valor, depois em_aberto primeiro
     if valor_venda is not None and "vlr_desdobramento" in df_filt.columns:
         df_filt = df_filt.copy()
         df_filt["_dist"] = (df_filt["vlr_desdobramento"] - valor_venda).abs()
-        df_filt = df_filt.sort_values("_dist").head(limite)
-        df_filt = df_filt.drop(columns=["_dist"])
+        # em_aberto = 0, baixado_cartao = 1 (em_aberto vem primeiro em empate)
+        df_filt["_sit_ord"] = df_filt["situacao"].map({"em_aberto": 0, "baixado_cartao": 1})
+        df_filt = df_filt.sort_values(["_dist", "_sit_ord"]).head(limite)
+        df_filt = df_filt.drop(columns=["_dist", "_sit_ord"])
     else:
         df_filt = df_filt.head(limite)
 
-    # Retorna como lista de dicts
     resultados = []
     for _, row in df_filt.iterrows():
         resultados.append({
@@ -890,8 +892,10 @@ def _buscar_titulos_em_aberto(texto_busca: str, valor_venda: Optional[float] = N
             "sk_empresa_nome": row.get("empresa_nome"),
             "sk_vlr_desdobramento": row.get("vlr_desdobramento"),
             "sk_dt_vencimento": row.get("dt_vencimento"),
+            "sk_data_baixa": row.get("data_baixa") if "data_baixa" in row.index else None,
             "sk_ref_nf": row.get("nro_nota_referenciada"),
             "sk_historico": row.get("historico"),
+            "sk_situacao": row.get("situacao"),
         })
     return resultados
 
@@ -1572,7 +1576,7 @@ def _render_busca_inline(venda: pd.Series, chave_str: str, idx_card: int):
     st.markdown(
         f'<div style="background:{CINZA_CLARO}; border-radius:6px 6px 0 0; padding:10px 12px; margin-top:-6px;">'
         f'<div style="font-size:10px; color:{TEXTO_MUTED}; text-transform:uppercase; letter-spacing:0.8px; font-weight:700;">'
-        f'Buscar par no Sankhya · valor bruto pré-preenchido · edite pra buscar por parceiro ou NF'
+        f'Buscar par no Sankhya · em aberto ou já baixados · valor bruto pré-preenchido · edite pra buscar por parceiro ou NF'
         f'</div></div>',
         unsafe_allow_html=True,
     )
@@ -1609,6 +1613,9 @@ def _render_busca_inline(venda: pd.Series, chave_str: str, idx_card: int):
 
     for i, tit in enumerate(resultados):
         classe = _safe_str(tit.get("sk_classe"))
+        situacao = _safe_str(tit.get("sk_situacao"))
+        data_baixa = tit.get("sk_data_baixa")
+        ja_baixado = situacao == "baixado_cartao"
 
         # Tag e identificador
         if classe == "adiantamento":
@@ -1619,6 +1626,17 @@ def _render_busca_inline(venda: pd.Series, chave_str: str, idx_card: int):
             tag_html = '<span style="background:#E8F5EC;color:#2E7D4F;font-size:9px;padding:2px 6px;border-radius:3px;margin-right:6px;font-weight:600;text-transform:uppercase;letter-spacing:0.4px;">NF</span>'
             nro_nota = _safe_int_str(tit.get("sk_nro_nota"))
             id_txt = f"NF {nro_nota}" if nro_nota else "sem número"
+
+        # Tag adicional: se já foi baixado por cartão
+        tag_situacao_html = ""
+        if ja_baixado:
+            data_baixa_txt = _fmt_data_curta(data_baixa) if data_baixa is not None else "?"
+            tag_situacao_html = (
+                f'<span style="background:{VERDE_FUNDO};color:{VERDE};'
+                f'font-size:9px;padding:2px 6px;border-radius:3px;margin-right:6px;'
+                f'font-weight:600;text-transform:uppercase;letter-spacing:0.4px;">'
+                f'✓ Baixado {_escape(data_baixa_txt)}</span>'
+            )
 
         parceiro = _safe_str(tit.get("sk_nome_parceiro"), default="sem parceiro")
         vlr = tit.get("sk_vlr_desdobramento")
@@ -1636,12 +1654,16 @@ def _render_busca_inline(venda: pd.Series, chave_str: str, idx_card: int):
         except (ValueError, TypeError):
             pass
 
+        # Texto do rótulo do botão: muda se já baixado (associação de auditoria)
+        label_btn = "Associar" if ja_baixado else "Ligar aqui"
+
         # Renderiza linha com todos os campos blindados
         col_info, col_btn = st.columns([5, 1])
         with col_info:
             linha_html = (
                 f'<div style="background:{BRANCO}; border-radius:4px; padding:8px 10px; '
                 f'font-size:12px; color:{AZUL_NAVY}; margin-bottom:4px; min-height:32px;">'
+                f'{tag_situacao_html}'
                 f'{tag_html}'
                 f'<span style="color:{AZUL_NAVY};">'
                 f'{_escape(id_txt)} · <b>{_escape(parceiro)}</b> · '
@@ -1651,7 +1673,7 @@ def _render_busca_inline(venda: pd.Series, chave_str: str, idx_card: int):
             )
             st.markdown(linha_html, unsafe_allow_html=True)
         with col_btn:
-            if st.button("Ligar aqui", key=f"cv_ligar_{idx_card}_{i}",
+            if st.button(label_btn, key=f"cv_ligar_{idx_card}_{i}",
                          type="primary", use_container_width=True):
                 _acao_ligar_manualmente(chave_str, tit, venda_dict=venda_dict)
                 st.rerun()
