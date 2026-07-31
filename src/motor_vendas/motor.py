@@ -1,28 +1,39 @@
 # -*- coding: utf-8 -*-
 """
-Motor de conciliação de vendas — Fase 4 · MVP-A.
+Motor de conciliação de vendas — Fase 4 · MVP-A · v2 (data flexível + passada permissiva).
 
 Cruza vendas das adquirentes (Cielo, Getnet) com títulos do Sankhya
 (notas fiscais + adiantamentos) e organiza em 4 grupos + "a analisar".
 
+MUDANÇAS v2 (31/07/2026):
+    1. Comparação de data usa a MELHOR data do título disponível:
+       - Título em aberto: dt_vencimento (só ela existe)
+       - Título baixado (TOP 1722): min(diff(dt_vencimento), diff(data_baixa))
+       Motivo: quando o Sankhya baixou o título por cartão, a "data_baixa"
+       é quando a adquirente efetivamente pagou — bate exato com a
+       data_prev_pagamento da venda, ao passo que dt_vencimento é a
+       projeção contábil e pode divergir alguns dias.
+
+    2. Segunda passada permissiva para títulos BAIXADO_CARTAO restantes:
+       Se depois da primeira passada uma venda ficou sem par E um título
+       baixado por cartão ficou órfão E as características fortes casam
+       (valor + adquirente + bandeira + modalidade), CASA MESMO SEM DATA.
+       Motivo: o Sankhya já baixou → já tem certeza de recebimento.
+       Não faz sentido gerar "a analisar" pra algo que ele já resolveu.
+
+Regras invioláveis (aprendidas com Débora, memória 30-31/07/2026):
+    - Zero falso positivo (matches ambíguos vão pra "a analisar")
+    - Motor NUNCA escolhe entre múltiplos candidatos
+    - "Conciliado" (bancário) ≠ "baixa de título" — não confundir
+    - Núm. Documento nunca é chave de identidade — usar data+valor+histórico
+
 Entrada:
-    df_sankhya_classificado : DataFrame retornado por
-                              classificador_sankhya.classificar()
-    df_cielo                : DataFrame de vendas Cielo
-                              (leitor cielo_recebiveis.ler())
-    df_getnet_vendas        : DataFrame de vendas Getnet
-                              (leitor getnet_recebiveis.ler().df_vendas)
-    tolerancia_dias         : int (default 2)
+    df_sankhya_classificado : DataFrame de classificador_sankhya.classificar()
+    df_cielo                : DataFrame do leitor cielo_recebiveis.ler()
+    df_getnet_vendas        : DataFrame do leitor getnet_recebiveis.ler().df_vendas
+    tolerancia_dias         : int (default 2, usado só na 1ª passada)
 
-Saída: dict com DataFrames dos 4 grupos + "a_analisar".
-
-Regras (memória 30/07/2026):
-    - Adiantamento (TOP_OP 1654) e nota fiscal em aberto (TOP 0) são candidatos
-    - Nunca há ambos com mesmo cliente+valor abertos (0 casos ambíguos nos dados)
-    - Match por: valor exato + data compatível + adquirente + bandeira + modalidade
-    - Parcelas do parcelado tratadas como vendas independentes
-    - Match único → auto-concilia (Grupo 1); múltiplos → "a analisar"; zero → "a analisar"
-    - Ignora TOP 1731/1732 (compensadas — já resolvidas)
+Saída: ResultadoMotor dataclass com 7 DataFrames.
 """
 
 from __future__ import annotations
@@ -38,22 +49,16 @@ import pandas as pd
 # NORMALIZAÇÃO DE BANDEIRA
 # ==============================================================================
 
-# Mapa Adquirente -> código curto usado pelo classificador Sankhya
 _MAPA_BANDEIRA = {
-    "mastercard": "master",
-    "master": "master",
-    "mas": "master",
-    "visa": "visa",
-    "vis": "visa",
+    "mastercard": "master", "master": "master", "mas": "master",
+    "visa": "visa", "vis": "visa",
     "elo": "elo",
     "hipercard": "hipercard",
-    "amex": "amex",
-    "american express": "amex",
+    "amex": "amex", "american express": "amex",
 }
 
 
 def _normalizar_bandeira(b) -> Optional[str]:
-    """Retorna código curto ('master', 'visa', 'elo', ...) ou None."""
     if b is None:
         return None
     s = str(b).strip().lower()
@@ -61,7 +66,6 @@ def _normalizar_bandeira(b) -> Optional[str]:
 
 
 def _is_none_or_nan(v) -> bool:
-    """True se v é None ou NaN do pandas."""
     if v is None:
         return True
     try:
@@ -71,10 +75,7 @@ def _is_none_or_nan(v) -> bool:
 
 
 def _bandeiras_compativeis(banda_venda, banda_sk) -> bool:
-    """
-    True se as bandeiras batem, considerando 'VIS/MAS' e 'MAS/ELO' como coringas do Sankhya.
-    Se qualquer lado for None/NaN, retorna True (não impede match — pista fraca).
-    """
+    """VIS/MAS e MAS/ELO são coringas do Sankhya. None/NaN não bloqueia."""
     if _is_none_or_nan(banda_venda) or _is_none_or_nan(banda_sk):
         return True
     if banda_sk == banda_venda:
@@ -87,57 +88,63 @@ def _bandeiras_compativeis(banda_venda, banda_sk) -> bool:
 
 
 def _modalidades_compativeis(mod_venda, mod_sk) -> bool:
-    """True se as modalidades batem. None/NaN em qualquer lado não bloqueia."""
     if _is_none_or_nan(mod_venda) or _is_none_or_nan(mod_sk):
         return True
     return mod_venda == mod_sk
 
 
 def _adquirentes_compativeis(adq_venda, adq_sk) -> bool:
-    """True se as adquirentes batem. None/NaN do lado Sankhya não bloqueia (pista fraca)."""
     if _is_none_or_nan(adq_venda):
-        return False  # venda tem que ter adquirente conhecida
+        return False  # venda sempre tem adquirente
     if _is_none_or_nan(adq_sk):
-        return True   # Sankhya sem inferência = não bloqueia
+        return True   # Sankhya sem inferência não bloqueia
     return adq_venda == adq_sk
 
 
-def _datas_compativeis(dt_venda: date, dt_titulo: date, tolerancia_dias: int) -> bool:
-    """True se |dt_venda - dt_titulo| <= tolerância."""
-    if dt_venda is None or dt_titulo is None:
-        return False
-    if not isinstance(dt_venda, date):
-        try:
-            dt_venda = pd.to_datetime(dt_venda).date()
-        except Exception:
-            return False
-    if not isinstance(dt_titulo, date):
-        try:
-            dt_titulo = pd.to_datetime(dt_titulo).date()
-        except Exception:
-            return False
-    return abs((dt_venda - dt_titulo).days) <= tolerancia_dias
+def _to_date(v) -> Optional[date]:
+    if v is None or _is_none_or_nan(v):
+        return None
+    if isinstance(v, date):
+        return v
+    try:
+        return pd.to_datetime(v).date()
+    except Exception:
+        return None
+
+
+def _melhor_diff_dias(data_venda, dt_vencimento, data_baixa) -> Optional[int]:
+    """
+    Retorna a MENOR diferença de dias entre a data prevista da venda
+    e qualquer das duas datas do título (dt_vencimento e data_baixa).
+
+    Se apenas dt_vencimento existe, usa ela.
+    Se ambas existem (título baixado), usa a de menor diferença.
+    Se nenhuma existe, retorna None.
+    """
+    dv = _to_date(data_venda)
+    if dv is None:
+        return None
+
+    diffs = []
+    dt_v = _to_date(dt_vencimento)
+    if dt_v is not None:
+        diffs.append(abs((dv - dt_v).days))
+
+    dt_b = _to_date(data_baixa)
+    if dt_b is not None:
+        diffs.append(abs((dv - dt_b).days))
+
+    if not diffs:
+        return None
+    return min(diffs)
 
 
 # ==============================================================================
-# PREPARAÇÃO DAS VENDAS (visão canônica única)
+# PREPARAÇÃO DAS VENDAS
 # ==============================================================================
 
 def _preparar_vendas(df_cielo: pd.DataFrame, df_getnet: pd.DataFrame) -> pd.DataFrame:
-    """
-    Junta Cielo e Getnet numa visão canônica pro matcher.
-
-    Colunas:
-        origem_venda       : índice no DataFrame original (pra rastrear depois)
-        origem_tipo        : 'cielo' | 'getnet'
-        adquirente         : 'cielo' | 'getnet'
-        valor_match        : valor da parcela a bater com o título Sankhya
-        data_prev_pagamento
-        bandeira           : código curto ('master', 'visa', 'elo', None)
-        modalidade         : 'debito' | 'credito_avista' | 'credito_parcelado'
-        parcela_atual, parcelas_total
-        chaves de rastreio : nsu, autorizacao, tipo_registro
-    """
+    """Junta Cielo e Getnet numa visão canônica pro matcher."""
     linhas = []
 
     if df_cielo is not None and not df_cielo.empty:
@@ -178,23 +185,22 @@ def _preparar_vendas(df_cielo: pd.DataFrame, df_getnet: pd.DataFrame) -> pd.Data
 
 
 # ==============================================================================
-# BUSCA DE CANDIDATOS SANKHYA PARA UMA VENDA
+# BUSCA DE CANDIDATOS — PRIMEIRA PASSADA (estrita, com data flexível)
 # ==============================================================================
 
-def _buscar_candidatos(
+def _buscar_candidatos_estrito(
     venda_row: pd.Series,
     df_sk_elegiveis: pd.DataFrame,
     tolerancia_dias: int,
 ) -> pd.DataFrame:
     """
-    Pra uma venda, retorna os títulos Sankhya que podem casar.
-
-    Filtros aplicados (todos precisam bater):
-        1. valor_match == vlr_desdobramento (ao centavo, tolerância R$ 0,01)
-        2. |data_prev_pagamento - dt_vencimento| <= tolerancia_dias
-        3. adquirente compatível
-        4. bandeira compatível (se ambos lados conhecidos)
-        5. modalidade compatível (se ambos lados conhecidos)
+    Filtros aplicados na PRIMEIRA passada (todos precisam bater):
+      1. valor_match == vlr_desdobramento (ao centavo)
+      2. MELHOR data (min entre dt_vencimento e data_baixa quando aplicável)
+         dentro da tolerância
+      3. adquirente compatível
+      4. bandeira compatível (se ambos lados conhecidos)
+      5. modalidade compatível (se ambos lados conhecidos)
     """
     if df_sk_elegiveis.empty:
         return df_sk_elegiveis
@@ -202,16 +208,24 @@ def _buscar_candidatos(
     valor_venda = venda_row["valor_match"]
     data_venda = venda_row["data_prev_pagamento"]
 
-    # Filtro 1: valor exato ao centavo (usar arredondamento pra evitar imprecisão float)
+    # Filtro 1: valor ao centavo
     mask_valor = (df_sk_elegiveis["vlr_desdobramento"].round(2) == round(float(valor_venda), 2))
     candidatos = df_sk_elegiveis[mask_valor].copy()
     if candidatos.empty:
         return candidatos
 
-    # Filtro 2: data compatível
-    def _data_ok(dt_sk):
-        return _datas_compativeis(data_venda, dt_sk, tolerancia_dias)
-    mask_data = candidatos["dt_vencimento"].apply(_data_ok)
+    # Filtro 2: data — usa MELHOR das duas quando disponível
+    tem_data_baixa = "data_baixa" in candidatos.columns
+
+    def _data_ok(row):
+        dt_venc = row.get("dt_vencimento")
+        dt_bai = row.get("data_baixa") if tem_data_baixa else None
+        diff = _melhor_diff_dias(data_venda, dt_venc, dt_bai)
+        if diff is None:
+            return False
+        return diff <= tolerancia_dias
+
+    mask_data = candidatos.apply(_data_ok, axis=1)
     candidatos = candidatos[mask_data]
     if candidatos.empty:
         return candidatos
@@ -245,12 +259,84 @@ def _buscar_candidatos(
 
 
 # ==============================================================================
+# BUSCA DE CANDIDATOS — SEGUNDA PASSADA (permissiva, SÓ para baixados)
+# ==============================================================================
+
+def _buscar_candidatos_permissivo(
+    venda_row: pd.Series,
+    df_baixados_orfaos: pd.DataFrame,
+) -> pd.DataFrame:
+    """
+    Segunda passada · SÓ para títulos baixado_cartao restantes.
+    Regras: valor exato + adquirente + bandeira + modalidade.
+    DATA É IGNORADA — se o Sankhya baixou, já validou.
+    """
+    if df_baixados_orfaos.empty:
+        return df_baixados_orfaos
+
+    valor_venda = venda_row["valor_match"]
+    mask_valor = (df_baixados_orfaos["vlr_desdobramento"].round(2) == round(float(valor_venda), 2))
+    candidatos = df_baixados_orfaos[mask_valor].copy()
+    if candidatos.empty:
+        return candidatos
+
+    adq_venda = venda_row["adquirente"]
+    mask_adq = candidatos["adquirente_sankhya"].apply(
+        lambda a: _adquirentes_compativeis(adq_venda, a)
+    )
+    candidatos = candidatos[mask_adq]
+    if candidatos.empty:
+        return candidatos
+
+    banda_venda = venda_row["bandeira"]
+    mask_ban = candidatos["bandeira_sankhya"].apply(
+        lambda b: _bandeiras_compativeis(banda_venda, b)
+    )
+    candidatos = candidatos[mask_ban]
+    if candidatos.empty:
+        return candidatos
+
+    mod_venda = venda_row["modalidade"]
+    mask_mod = candidatos["modalidade_sankhya"].apply(
+        lambda m: _modalidades_compativeis(mod_venda, m)
+    )
+    candidatos = candidatos[mask_mod]
+
+    return candidatos
+
+
+# ==============================================================================
+# MONTA REGISTRO DE MATCH
+# ==============================================================================
+
+def _montar_match(venda_row: pd.Series, candidato: pd.Series, match_permissivo: bool = False) -> dict:
+    """Constrói o dict do match (Grupo 1 ou Grupo 2)."""
+    return {
+        **venda_row.to_dict(),
+        "sk_idx": candidato["idx_sankhya"],
+        "sk_nro_unico": candidato["nro_unico"],
+        "sk_nro_nota": candidato["nro_nota"],
+        "sk_empresa_nome": candidato["empresa_nome"],
+        "sk_nome_parceiro": candidato["nome_parceiro"],
+        "sk_vlr_desdobramento": candidato["vlr_desdobramento"],
+        "sk_dt_vencimento": candidato["dt_vencimento"],
+        "sk_data_baixa": candidato.get("data_baixa") if "data_baixa" in candidato.index else None,
+        "sk_classe": candidato["classe"],
+        "sk_tipo_titulo_desc": candidato["tipo_titulo_desc"],
+        "sk_historico": candidato["historico"],
+        "sk_ref_nf": candidato["nro_nota_referenciada"],
+        "sk_ref_acordo": candidato.get("referencia_acordo") if "referencia_acordo" in candidato.index else None,
+        "sk_situacao": candidato["situacao"],
+        "match_permissivo": match_permissivo,
+    }
+
+
+# ==============================================================================
 # MOTOR PRINCIPAL
 # ==============================================================================
 
 @dataclass
 class ResultadoMotor:
-    """Resultado da rodada de conciliação organizado em grupos."""
     grupo_1_conciliadas: pd.DataFrame = field(default_factory=pd.DataFrame)
     grupo_2_ja_baixadas: pd.DataFrame = field(default_factory=pd.DataFrame)
     grupo_3_aguardando: pd.DataFrame = field(default_factory=pd.DataFrame)
@@ -260,7 +346,6 @@ class ResultadoMotor:
     a_analisar_titulo_sem_venda: pd.DataFrame = field(default_factory=pd.DataFrame)
 
     def resumo(self) -> dict:
-        """Contadores pros KPIs da tela."""
         return {
             "grupo_1_conciliadas": len(self.grupo_1_conciliadas),
             "grupo_2_ja_baixadas": len(self.grupo_2_ja_baixadas),
@@ -283,22 +368,11 @@ def rodar(
     df_getnet_vendas: Optional[pd.DataFrame],
     tolerancia_dias: int = 2,
 ) -> ResultadoMotor:
-    """
-    Cruza vendas × títulos e retorna o resultado organizado em grupos.
-
-    Args:
-        df_sankhya_classificado: saída de classificador_sankhya.classificar()
-        df_cielo: DataFrame de vendas Cielo (pode ser None)
-        df_getnet_vendas: DataFrame de vendas Getnet (pode ser None)
-        tolerancia_dias: janela de tolerância de data em dias (default 2)
-
-    Returns:
-        ResultadoMotor com os 4 grupos + "a analisar".
-    """
+    """Cruza vendas × títulos e retorna resultado organizado em grupos."""
     # 1. Preparar vendas em visão canônica
     df_vendas = _preparar_vendas(df_cielo, df_getnet_vendas)
 
-    # 2. Separar devoluções (Grupo 4) — vendas com tipo_registro = "cancelamento"
+    # 2. Separar devoluções (Grupo 4)
     if not df_vendas.empty and "tipo_registro" in df_vendas.columns:
         mask_dev = df_vendas["tipo_registro"] == "cancelamento"
         grupo_4 = df_vendas[mask_dev].copy()
@@ -306,53 +380,34 @@ def rodar(
     else:
         grupo_4 = pd.DataFrame()
 
-    # 3. Filtrar títulos elegíveis do Sankhya (em aberto + baixados por cartão)
+    # 3. Filtrar títulos elegíveis do Sankhya
     df_sk = df_sankhya_classificado.copy()
     mask_elegivel = (
         df_sk["situacao"].isin(["em_aberto", "baixado_cartao"])
         & df_sk["classe"].isin(["adiantamento", "nota_fiscal"])
     )
     df_elegiveis = df_sk[mask_elegivel].copy()
+    df_elegiveis = df_elegiveis.reset_index(drop=False).rename(columns={"index": "idx_sankhya"})
 
-    # Reset index pra ter índices únicos consistentes
-    df_elegiveis = df_elegiveis.reset_index(drop=False).rename(
-        columns={"index": "idx_sankhya"}
-    )
-
-    # 4. Pra cada venda, buscar candidatos
-    matches_grupo_1 = []   # em_aberto, match único
-    matches_grupo_2 = []   # baixado_cartao, match único (auditoria)
+    # 4. PRIMEIRA PASSADA — matching estrito com data flexível
+    matches_grupo_1 = []
+    matches_grupo_2 = []
     ambiguos = []
-    venda_sem_titulo = []
+    venda_sem_titulo_pass1 = []
     titulos_casados_ids = set()
 
     for _, venda in df_vendas.iterrows():
-        candidatos = _buscar_candidatos(venda, df_elegiveis, tolerancia_dias)
+        candidatos = _buscar_candidatos_estrito(venda, df_elegiveis, tolerancia_dias)
         n = len(candidatos)
 
         if n == 0:
-            venda_sem_titulo.append(venda.to_dict())
+            venda_sem_titulo_pass1.append(venda)
             continue
 
         if n == 1:
             candidato = candidatos.iloc[0]
             idx_sk = candidato["idx_sankhya"]
-            match = {
-                **venda.to_dict(),
-                "sk_idx": idx_sk,
-                "sk_nro_unico": candidato["nro_unico"],
-                "sk_nro_nota": candidato["nro_nota"],
-                "sk_empresa_nome": candidato["empresa_nome"],
-                "sk_nome_parceiro": candidato["nome_parceiro"],
-                "sk_vlr_desdobramento": candidato["vlr_desdobramento"],
-                "sk_dt_vencimento": candidato["dt_vencimento"],
-                "sk_classe": candidato["classe"],
-                "sk_tipo_titulo_desc": candidato["tipo_titulo_desc"],
-                "sk_historico": candidato["historico"],
-                "sk_ref_nf": candidato["nro_nota_referenciada"],
-                "sk_ref_acordo": candidato["referencia_acordo"],
-                "sk_situacao": candidato["situacao"],
-            }
+            match = _montar_match(venda, candidato, match_permissivo=False)
             titulos_casados_ids.add(idx_sk)
             if candidato["situacao"] == "em_aberto":
                 matches_grupo_1.append(match)
@@ -367,22 +422,50 @@ def rodar(
             "candidatos": candidatos.to_dict(orient="records"),
         })
 
-    # 5. Grupo 3 (aguardando captura) e "titulo_sem_venda":
-    # Títulos em aberto que nenhuma venda casou.
+    # 5. SEGUNDA PASSADA — permissiva SÓ para baixados restantes
+    # Vendas que ficaram sem par tentam bater com títulos baixado_cartao órfãos,
+    # ignorando tolerância de data. Se o Sankhya baixou, já validou.
+    df_baixados_orfaos = df_elegiveis[
+        (df_elegiveis["situacao"] == "baixado_cartao")
+        & (~df_elegiveis["idx_sankhya"].isin(titulos_casados_ids))
+    ].copy()
+
+    venda_sem_titulo_final = []
+
+    for venda in venda_sem_titulo_pass1:
+        if df_baixados_orfaos.empty:
+            venda_sem_titulo_final.append(venda.to_dict() if hasattr(venda, "to_dict") else dict(venda))
+            continue
+
+        candidatos = _buscar_candidatos_permissivo(venda, df_baixados_orfaos)
+        n = len(candidatos)
+
+        if n == 0:
+            venda_sem_titulo_final.append(venda.to_dict() if hasattr(venda, "to_dict") else dict(venda))
+            continue
+
+        if n == 1:
+            candidato = candidatos.iloc[0]
+            idx_sk = candidato["idx_sankhya"]
+            match = _montar_match(venda, candidato, match_permissivo=True)
+            titulos_casados_ids.add(idx_sk)
+            matches_grupo_2.append(match)
+            # Remove do pool
+            df_baixados_orfaos = df_baixados_orfaos[df_baixados_orfaos["idx_sankhya"] != idx_sk]
+            continue
+
+        # n >= 2 → ambíguo (candidatas são todas baixadas)
+        ambiguos.append({
+            **venda.to_dict(),
+            "n_candidatos": n,
+            "candidatos": candidatos.to_dict(orient="records"),
+            "fonte_ambiguidade": "passada_permissiva",
+        })
+
+    # 6. Grupo 3 (aguardando captura): títulos em aberto que ninguém casou
     df_em_aberto = df_elegiveis[df_elegiveis["situacao"] == "em_aberto"]
     mask_orfaos = ~df_em_aberto["idx_sankhya"].isin(titulos_casados_ids)
-    titulos_orfaos = df_em_aberto[mask_orfaos].copy()
-
-    # Regra: se o título tem adquirente identificada e ainda estamos no período previsto,
-    # cai em "aguardando captura". Se identificamos como órfão (adquirente sem venda), fica
-    # em "titulo_sem_venda".
-    # Por simplicidade: todos os órfãos em aberto vão pra Grupo 3, e a Débora pode filtrar
-    # pela adquirente na tela. O "titulo_sem_venda" fica reservado pra casos claros de erro
-    # (ex: título com data de vencimento no passado sem venda casando).
-    grupo_3 = titulos_orfaos
-
-    # Títulos baixados por cartão sem venda casando também são anômalos —
-    # mas raros e ficam no Grupo 2 vazio. Simplifica: só titulos_orfaos em_aberto.
+    grupo_3 = df_em_aberto[mask_orfaos].copy()
 
     return ResultadoMotor(
         grupo_1_conciliadas=pd.DataFrame(matches_grupo_1),
@@ -390,6 +473,6 @@ def rodar(
         grupo_3_aguardando=grupo_3,
         grupo_4_devolucoes=grupo_4,
         a_analisar_ambiguos=pd.DataFrame(ambiguos),
-        a_analisar_venda_sem_titulo=pd.DataFrame(venda_sem_titulo),
-        a_analisar_titulo_sem_venda=pd.DataFrame(),  # reservado, ainda não usado
+        a_analisar_venda_sem_titulo=pd.DataFrame(venda_sem_titulo_final),
+        a_analisar_titulo_sem_venda=pd.DataFrame(),
     )
