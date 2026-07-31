@@ -37,6 +37,7 @@ from src.parsers.vendas import (
     financeiro_sankhya,
     cielo_recebiveis,
     getnet_recebiveis,
+    cabecalho_nota_sankhya,
 )
 
 from src.motor_vendas import motor as motor_vendas
@@ -633,6 +634,7 @@ def _processar_arquivos():
     df_cielo_lista: List[pd.DataFrame] = []
     df_getnet_vendas_lista: List[pd.DataFrame] = []
     df_getnet_repasses_lista: List[pd.DataFrame] = []
+    df_cabecalho_lista: List[pd.DataFrame] = []
 
     resumo = {
         "sankhya_linhas": 0, "sankhya_top_1722": 0, "sankhya_top_0": 0,
@@ -640,6 +642,7 @@ def _processar_arquivos():
         "cielo_vendas": 0, "cielo_bruto": 0.0, "cielo_liquido": 0.0,
         "getnet_vendas": 0, "getnet_cancelamentos": 0, "getnet_repasses": 0,
         "getnet_liquido": 0.0, "getnet_repassado": 0.0,
+        "cabecalho_notas": 0, "cabecalho_valor": 0.0,
     }
 
     for nome, entry in uploads.items():
@@ -690,6 +693,22 @@ def _processar_arquivos():
                     f"Getnet Recebíveis · {res.total_vendas} vendas · "
                     f"{_fmt_moeda(res.total_repassado)} repassado"
                 )
+
+            elif tipo == "cabecalho_nota_sankhya":
+                # Entrega 2 · 31/07/2026 — arquivo complementar ao Financeiro Sankhya.
+                # Traz uma linha por NF: data de negociação real, valor total da nota,
+                # tipo de negociação. Motor faz JOIN por Nro. Nota no classificador.
+                res = cabecalho_nota_sankhya.ler(dados)
+                df_cabecalho_lista.append(res.df)
+                resumo["cabecalho_notas"] += res.total_notas
+                resumo["cabecalho_valor"] += res.total_valor
+                periodo_txt = ""
+                if res.periodo_inicio and res.periodo_fim:
+                    periodo_txt = f" · {_fmt_data_br(res.periodo_inicio)} a {_fmt_data_br(res.periodo_fim)}"
+                entry["detalhe_pos_processamento"] = (
+                    f"Cabeçalho da Nota · {res.total_notas} notas · "
+                    f"{_fmt_moeda(res.total_valor)} total{periodo_txt}"
+                )
             else:
                 entry.setdefault("detalhe_pos_processamento", entry.get("motivo", "Tipo não reconhecido."))
                 continue
@@ -702,6 +721,7 @@ def _processar_arquivos():
     st.session_state["cv_df_cielo"] = pd.concat(df_cielo_lista, ignore_index=True) if df_cielo_lista else None
     st.session_state["cv_df_getnet_vendas"] = pd.concat(df_getnet_vendas_lista, ignore_index=True) if df_getnet_vendas_lista else None
     st.session_state["cv_df_getnet_repasses"] = pd.concat(df_getnet_repasses_lista, ignore_index=True) if df_getnet_repasses_lista else None
+    st.session_state["cv_df_cabecalho"] = pd.concat(df_cabecalho_lista, ignore_index=True) if df_cabecalho_lista else None
 
     resumo["sankhya_empresas"] = sorted(resumo["sankhya_empresas"])
     st.session_state["cv_resumo"] = resumo
@@ -728,7 +748,8 @@ def _rodar_motor():
         return "Nenhum arquivo de adquirente (Cielo/Getnet) foi carregado."
 
     try:
-        df_sk_classificado = classificador_sankhya.classificar(df_sk)
+        df_cab = st.session_state.get("cv_df_cabecalho")
+        df_sk_classificado = classificador_sankhya.classificar(df_sk, df_cabecalho=df_cab)
         resultado = motor_vendas.rodar(
             df_sankhya_classificado=df_sk_classificado,
             df_cielo=df_cielo,
