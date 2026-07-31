@@ -437,13 +437,158 @@ class ResultadoMotor:
         }
 
 
+def _matching_agregado_por_nota(
+    df_vendas: pd.DataFrame,
+    df_elegiveis: pd.DataFrame,
+    tolerancia_dias: int,
+) -> tuple:
+    """PASSADA A — matching por VALOR TOTAL da venda × valor total da nota.
+
+    Aprovado com Débora em 31/07/2026.
+
+    Ideia: quando uma venda tem N parcelas e a nota fiscal correspondente tem
+    N desdobramentos, o TOTAL sempre bate ao centavo mesmo que as parcelas
+    individuais divirjam (arredondamento — ex: 669,36+669,36+669,35=2008,07,
+    mas 2008,07/3 arredonda pra 669,36 e a soma daria 2008,08).
+
+    Ao casar UMA venda com UMA nota pelo total, casamos automaticamente
+    TODAS as parcelas com TODOS os desdobramentos correspondentes.
+
+    Regras:
+      1. Agrupa vendas por (adquirente, nsu) → total_venda
+      2. Agrupa notas fiscais por (adquirente_sk, nro_nota) → total_nota
+         (adiantamentos NÃO entram — não têm NF formal)
+      3. Match único quando: total (ao centavo) + adquirente + data compatível
+      4. Se match único → casa todas parcelas × desdobramentos por ordem
+         cronológica (parcela 1 → desdob mais antigo, e assim por diante)
+      5. Se 2+ candidatas → não escolhe, deixa pra Passada B
+
+    Retorna:
+      matches_grupo_1, matches_grupo_2, ids_vendas_casadas, idx_sk_casados
+    """
+    matches_grupo_1 = []
+    matches_grupo_2 = []
+    ids_vendas_casadas = set()  # (adquirente, nsu)
+    idx_sk_casados = set()
+
+    if df_vendas.empty:
+        return matches_grupo_1, matches_grupo_2, ids_vendas_casadas, idx_sk_casados
+
+    # --- Agrupar vendas por (adquirente, nsu) ---
+    df_v = df_vendas.copy()
+    df_v = df_v[df_v["nsu"].astype(str).str.strip() != ""]  # ignora sem NSU
+    if df_v.empty:
+        return matches_grupo_1, matches_grupo_2, ids_vendas_casadas, idx_sk_casados
+
+    vendas_agr = df_v.groupby(["adquirente", "nsu"], as_index=False).agg(
+        valor_total_venda=("valor_match", "sum"),
+        data_venda=("data_venda", "first"),
+        data_prev_1=("data_prev_pagamento", "min"),
+        modalidade=("modalidade", "first"),
+        n_parcelas=("valor_match", "count"),
+    )
+    vendas_agr["valor_total_venda"] = vendas_agr["valor_total_venda"].round(2)
+
+    # --- Agrupar Sankhya por (adquirente_sankhya, nro_nota) — SÓ nota fiscal ---
+    df_sk_nf = df_elegiveis[df_elegiveis["classe"] == "nota_fiscal"].copy()
+    if df_sk_nf.empty:
+        return matches_grupo_1, matches_grupo_2, ids_vendas_casadas, idx_sk_casados
+
+    df_sk_nf = df_sk_nf[df_sk_nf["nro_nota"].notna()]
+    if df_sk_nf.empty:
+        return matches_grupo_1, matches_grupo_2, ids_vendas_casadas, idx_sk_casados
+
+    notas_agr = df_sk_nf.groupby(["adquirente_sankhya", "nro_nota"], as_index=False).agg(
+        valor_total_nota=("vlr_desdobramento", "sum"),
+        n_desdob=("vlr_desdobramento", "count"),
+        dt_neg_cab=("cabecalho_dt_negociacao", "first"),
+    )
+    notas_agr["valor_total_nota"] = notas_agr["valor_total_nota"].round(2)
+
+    # --- Matching venda × nota ---
+    for _, venda in vendas_agr.iterrows():
+        # Filtra candidatas: mesmo total + mesma adquirente
+        cand_notas = notas_agr[
+            (notas_agr["valor_total_nota"] == venda["valor_total_venda"])
+            & (notas_agr["adquirente_sankhya"] == venda["adquirente"])
+        ]
+        if cand_notas.empty:
+            continue
+
+        # Filtra por data (usando dt_neg_cab quando disponível vs data_venda)
+        if venda["data_venda"] is not None and not pd.isna(venda["data_venda"]):
+            data_venda = _to_date(venda["data_venda"])
+
+            def _data_bate(row):
+                dt_neg = row.get("dt_neg_cab")
+                dt_neg_d = _to_date(dt_neg) if dt_neg is not None else None
+                if dt_neg_d is None or data_venda is None:
+                    # Sem dt_neg do Cabeçalho (nota sem correspondência) → usa
+                    # dt_vencimento do primeiro desdob como fallback aproximado
+                    return True
+                return abs((data_venda - dt_neg_d).days) <= tolerancia_dias
+
+            cand_notas = cand_notas[cand_notas.apply(_data_bate, axis=1)]
+
+        if cand_notas.empty:
+            continue
+
+        # Deve ser match único (senão deixa pra Passada B)
+        if len(cand_notas) != 1:
+            continue
+
+        nota_casada = cand_notas.iloc[0]
+        nro_nota_casada = nota_casada["nro_nota"]
+
+        # --- Ligar todas as parcelas com todos os desdobramentos ---
+        # Parcelas da venda, ordenadas por parcela_atual
+        parcelas_venda = df_v[
+            (df_v["adquirente"] == venda["adquirente"])
+            & (df_v["nsu"] == venda["nsu"])
+        ].sort_values("parcela_atual")
+
+        # Desdobramentos da nota, ordenados por dt_vencimento crescente
+        desdob_nota = df_sk_nf[
+            (df_sk_nf["adquirente_sankhya"] == venda["adquirente"])
+            & (df_sk_nf["nro_nota"] == nro_nota_casada)
+        ].sort_values("dt_vencimento")
+
+        # Se número de parcelas != número de desdobramentos, não força match
+        # (caso raro mas defensivo)
+        if len(parcelas_venda) != len(desdob_nota):
+            continue
+
+        # Casa 1 a 1 na ordem cronológica
+        for (_, parcela), (_, desdob) in zip(parcelas_venda.iterrows(), desdob_nota.iterrows()):
+            match = _montar_match(parcela, desdob, match_permissivo=False)
+            # Marca origem: passada agregada
+            match["fonte_match"] = "agregado_por_nota"
+            idx_sk_casados.add(desdob["idx_sankhya"])
+
+            # Distribui em Grupo 1 (em aberto) ou Grupo 2 (baixado)
+            if desdob["situacao"] == "em_aberto":
+                matches_grupo_1.append(match)
+            else:  # baixado_cartao
+                matches_grupo_2.append(match)
+
+        ids_vendas_casadas.add((venda["adquirente"], venda["nsu"]))
+
+    return matches_grupo_1, matches_grupo_2, ids_vendas_casadas, idx_sk_casados
+
+
 def rodar(
     df_sankhya_classificado: pd.DataFrame,
     df_cielo: Optional[pd.DataFrame],
     df_getnet_vendas: Optional[pd.DataFrame],
     tolerancia_dias: int = 2,
 ) -> ResultadoMotor:
-    """Cruza vendas × títulos e retorna resultado organizado em grupos."""
+    """Cruza vendas × títulos e retorna resultado organizado em grupos.
+
+    3 passadas em ordem (aprovado com Débora em 31/07/2026):
+      A · agregada  → venda toda × nota toda, chave = valor_total + adq + data
+      B · individual → parcela × desdobramento, restos da A
+      C · permissiva → restos da B tentam bater com baixados sem verificar data
+    """
     # 1. Preparar vendas em visão canônica
     df_vendas = _preparar_vendas(df_cielo, df_getnet_vendas)
 
@@ -464,15 +609,37 @@ def rodar(
     df_elegiveis = df_sk[mask_elegivel].copy()
     df_elegiveis = df_elegiveis.reset_index(drop=False).rename(columns={"index": "idx_sankhya"})
 
-    # 4. PRIMEIRA PASSADA — matching estrito com data flexível
     matches_grupo_1 = []
     matches_grupo_2 = []
     ambiguos = []
-    venda_sem_titulo_pass1 = []
     titulos_casados_ids = set()
 
-    for _, venda in df_vendas.iterrows():
-        candidatos = _buscar_candidatos_estrito(venda, df_elegiveis, tolerancia_dias)
+    # ==========================================================================
+    # PASSADA A · AGREGADA por valor total (venda × nota)
+    # ==========================================================================
+    g1_agr, g2_agr, ids_vendas_casadas_A, idx_sk_casados_A = _matching_agregado_por_nota(
+        df_vendas, df_elegiveis, tolerancia_dias
+    )
+    matches_grupo_1.extend(g1_agr)
+    matches_grupo_2.extend(g2_agr)
+    titulos_casados_ids.update(idx_sk_casados_A)
+
+    # Vendas restantes = as que NÃO foram casadas na passada A
+    def _chave_venda(v):
+        return (v.get("adquirente"), v.get("nsu"))
+    df_vendas_restantes = df_vendas[
+        ~df_vendas.apply(lambda v: _chave_venda(v) in ids_vendas_casadas_A, axis=1)
+    ].copy() if not df_vendas.empty else df_vendas
+
+    # Elegíveis restantes = os que NÃO foram casados na A
+    df_elegiveis_restantes = df_elegiveis[~df_elegiveis["idx_sankhya"].isin(idx_sk_casados_A)].copy()
+
+    # ==========================================================================
+    # PASSADA B · INDIVIDUAL (parcela × desdobramento, estrito com data flexível)
+    # ==========================================================================
+    venda_sem_titulo_pass1 = []
+    for _, venda in df_vendas_restantes.iterrows():
+        candidatos = _buscar_candidatos_estrito(venda, df_elegiveis_restantes, tolerancia_dias)
         n = len(candidatos)
 
         if n == 0:
@@ -483,7 +650,9 @@ def rodar(
             candidato = candidatos.iloc[0]
             idx_sk = candidato["idx_sankhya"]
             match = _montar_match(venda, candidato, match_permissivo=False)
+            match["fonte_match"] = "individual"
             titulos_casados_ids.add(idx_sk)
+            df_elegiveis_restantes = df_elegiveis_restantes[df_elegiveis_restantes["idx_sankhya"] != idx_sk]
             if candidato["situacao"] == "em_aberto":
                 matches_grupo_1.append(match)
             else:  # baixado_cartao
@@ -497,16 +666,14 @@ def rodar(
             "candidatos": candidatos.to_dict(orient="records"),
         })
 
-    # 5. SEGUNDA PASSADA — permissiva SÓ para baixados restantes
-    # Vendas que ficaram sem par tentam bater com títulos baixado_cartao órfãos,
-    # ignorando tolerância de data. Se o Sankhya baixou, já validou.
-    df_baixados_orfaos = df_elegiveis[
-        (df_elegiveis["situacao"] == "baixado_cartao")
-        & (~df_elegiveis["idx_sankhya"].isin(titulos_casados_ids))
+    # ==========================================================================
+    # PASSADA C · PERMISSIVA (só baixados restantes, ignora data)
+    # ==========================================================================
+    df_baixados_orfaos = df_elegiveis_restantes[
+        df_elegiveis_restantes["situacao"] == "baixado_cartao"
     ].copy()
 
     venda_sem_titulo_final = []
-
     for venda in venda_sem_titulo_pass1:
         if df_baixados_orfaos.empty:
             venda_sem_titulo_final.append(venda.to_dict() if hasattr(venda, "to_dict") else dict(venda))
@@ -523,13 +690,13 @@ def rodar(
             candidato = candidatos.iloc[0]
             idx_sk = candidato["idx_sankhya"]
             match = _montar_match(venda, candidato, match_permissivo=True)
+            match["fonte_match"] = "permissivo"
             titulos_casados_ids.add(idx_sk)
             matches_grupo_2.append(match)
-            # Remove do pool
             df_baixados_orfaos = df_baixados_orfaos[df_baixados_orfaos["idx_sankhya"] != idx_sk]
             continue
 
-        # n >= 2 → ambíguo (candidatas são todas baixadas)
+        # n >= 2 → ambíguo
         ambiguos.append({
             **venda.to_dict(),
             "n_candidatos": n,
@@ -537,7 +704,7 @@ def rodar(
             "fonte_ambiguidade": "passada_permissiva",
         })
 
-    # 6. Grupo 3 (aguardando captura): títulos em aberto que ninguém casou
+    # Grupo 3 (aguardando captura): títulos em aberto que ninguém casou
     df_em_aberto = df_elegiveis[df_elegiveis["situacao"] == "em_aberto"]
     mask_orfaos = ~df_em_aberto["idx_sankhya"].isin(titulos_casados_ids)
     grupo_3 = df_em_aberto[mask_orfaos].copy()
