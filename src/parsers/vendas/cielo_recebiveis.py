@@ -339,13 +339,23 @@ def ler(dados: bytes) -> ResultadoLeituraCielo:
             # seguintes a partir da data prevista da 1ª parcela (regra real do
             # Sankhya). Antes usávamos +30d linear, o que gerava divergência
             # de 3-5 dias em parcelas distantes (fora da tolerância de match).
+            # A ÚLTIMA parcela ajusta o centavo pra fechar o total exato
+            # (ex: 2008,07 / 3 = 669,3566... → parcelas 1 e 2 = 669,36,
+            #  parcela 3 = 2008,07 - 669,36 - 669,36 = 669,35). Sem isso,
+            # meu total ficaria 2008,08 e a estratégia agregada não bateria.
+            soma_anteriores = 0.0
             for n in range(1, parc_total + 1):
                 dt_prev_n = data_prev
                 if data_prev is not None and n > 1:
                     dt_prev_n = _add_meses(data_prev, n - 1)
+                if n < parc_total:
+                    vlr_n = valor_parcela
+                    soma_anteriores = round(soma_anteriores + vlr_n, 2)
+                else:
+                    vlr_n = round(valor_bruto_raw - soma_anteriores, 2)
                 linhas.append({**base,
                     "data_prev_pagamento": dt_prev_n,
-                    "valor_bruto": valor_parcela,
+                    "valor_bruto": vlr_n,
                     "parcela_atual": n,
                 })
         else:
