@@ -251,12 +251,32 @@ _CSS = f"""
     margin-top: 8px;
 }}
 .cv-candidatas-header {{
-    color: {TEXTO_MUTED}; font-size: 10px;
+    color: {TEXTO_MUTED} !important;
+    -webkit-text-fill-color: {TEXTO_MUTED} !important;
+    font-size: 10px;
     text-transform: uppercase; letter-spacing: 0.8px; margin-bottom: 6px; font-weight: 600;
 }}
-.cv-candidata-linha {{ padding: 4px 0; color: {AZUL_NAVY}; }}
-.cv-candidata-tag-nf   {{ background: {VERDE_FUNDO}; color: {VERDE}; font-size: 9px; padding: 2px 6px; border-radius: 3px; margin-right: 6px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px; }}
-.cv-candidata-tag-adi  {{ background: {LARANJA_FUNDO}; color: {LARANJA}; font-size: 9px; padding: 2px 6px; border-radius: 3px; margin-right: 6px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px; }}
+.cv-candidatas-header * {{
+    color: {TEXTO_MUTED} !important;
+    -webkit-text-fill-color: {TEXTO_MUTED} !important;
+}}
+.cv-candidata-linha {{
+    padding: 4px 0;
+    color: {AZUL_NAVY} !important;
+    -webkit-text-fill-color: {AZUL_NAVY} !important;
+}}
+.cv-candidata-linha * {{
+    color: {AZUL_NAVY} !important;
+    -webkit-text-fill-color: {AZUL_NAVY} !important;
+}}
+.cv-candidata-tag-nf   {{
+    background: {VERDE_FUNDO}; color: {VERDE} !important; -webkit-text-fill-color: {VERDE} !important;
+    font-size: 9px; padding: 2px 6px; border-radius: 3px; margin-right: 6px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px;
+}}
+.cv-candidata-tag-adi  {{
+    background: {LARANJA_FUNDO}; color: {LARANJA} !important; -webkit-text-fill-color: {LARANJA} !important;
+    font-size: 9px; padding: 2px 6px; border-radius: 3px; margin-right: 6px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px;
+}}
 
 /* -------- AUTO-CONCILIADAS -------- */
 .cv-secao-wrapper {{
@@ -916,6 +936,19 @@ def _buscar_titulos_em_aberto(texto_busca: str, valor_venda: Optional[float] = N
         if "nro_nota" in df_elegiveis.columns:
             mask = mask | df_elegiveis["nro_nota"].astype(str).str.lower().str.contains(texto, na=False)
 
+        # Bloco 1+ (24/08/2026): busca também por código do parceiro, CNPJ e Nro Único
+        if "parceiro_cod" in df_elegiveis.columns:
+            mask = mask | df_elegiveis["parceiro_cod"].astype(str).str.lower().str.contains(texto, na=False)
+
+        if "cnpj" in df_elegiveis.columns:
+            # Normaliza CNPJ removendo pontos, barras e traços da coluna e do texto de busca
+            cnpj_norm = df_elegiveis["cnpj"].astype(str).str.replace(r"[.\-/]", "", regex=True).str.lower()
+            texto_cnpj = texto.replace(".", "").replace("-", "").replace("/", "")
+            mask = mask | cnpj_norm.str.contains(texto_cnpj, na=False)
+
+        if "nro_unico" in df_elegiveis.columns:
+            mask = mask | df_elegiveis["nro_unico"].astype(str).str.lower().str.contains(texto, na=False)
+
         try:
             texto_num = float(texto.replace(",", ".").replace("r$", "").replace(" ", ""))
             if "vlr_desdobramento" in df_elegiveis.columns:
@@ -1178,9 +1211,25 @@ def _calcular_contadores_pills(resultado, ligacoes_desfeitas: set) -> Dict[str, 
 
     n_confirmadas_total = len(confirmadas)
 
+    # Bloco 1: ligadas manualmente com justificativa (Supabase) — descontam de "A analisar" e somam em "Conciliadas"
+    lig_persist = st.session_state.get("cv_lig_persistidas", {}) or {}
+    n_lig_manuais_de_amb = 0
+    n_lig_manuais_de_vst = 0
+    for chave_str in lig_persist.keys():
+        # Não conta se já foi confirmada manualmente na rodada (evita contagem dupla)
+        if chave_str in confirmadas:
+            continue
+        if chave_str in chaves_amb:
+            n_lig_manuais_de_amb += 1
+        elif chave_str in chaves_vst:
+            n_lig_manuais_de_vst += 1
+    n_lig_manuais_total = n_lig_manuais_de_amb + n_lig_manuais_de_vst
+
     return {
-        "a_analisar": (n_amb - n_manuais_de_amb) + (n_vst - n_manuais_de_vst) + n_tsv + n_desf,
-        "auto_conciliadas": n_g1_parcelas - n_g1_desfeitas + n_confirmadas_total,
+        "a_analisar": (n_amb - n_manuais_de_amb - n_lig_manuais_de_amb)
+                    + (n_vst - n_manuais_de_vst - n_lig_manuais_de_vst)
+                    + n_tsv + n_desf,
+        "auto_conciliadas": n_g1_parcelas - n_g1_desfeitas + n_confirmadas_total + n_lig_manuais_total,
         "compensadas": len(resultado.grupo_2_ja_baixadas) if resultado.grupo_2_ja_baixadas is not None else 0,
         "aguardando": len(resultado.grupo_3_aguardando) if resultado.grupo_3_aguardando is not None else 0,
         "devolucoes": len(resultado.grupo_4_devolucoes) if resultado.grupo_4_devolucoes is not None else 0,
@@ -1565,14 +1614,27 @@ def _render_card_ambiguo(venda: pd.Series, idx_card: int):
     linhas_cand = [f'<div class="cv-candidatas-header">{len(candidatas)} candidatas em aberto no Sankhya · motor não escolhe, você decide</div>']
     for i, cand in enumerate(candidatas):
         classe = cand.get("classe")
+        nro_unico = cand.get("nro_unico")
+        nro_unico_txt = f"Nº Único {int(nro_unico)}" if nro_unico and not pd.isna(nro_unico) else ""
+
         if classe == "adiantamento":
             tag_html = '<span class="cv-candidata-tag-adi">Adiantamento</span>'
             ref_nf = cand.get("nro_nota_referenciada")
-            info = f"REF NF {ref_nf}" if ref_nf else "sem REF NF"
+            partes = []
+            if nro_unico_txt:
+                partes.append(nro_unico_txt)
+            if ref_nf and not pd.isna(ref_nf):
+                partes.append(f"REF NF {int(ref_nf)}")
+            info = " · ".join(partes) if partes else "sem identificação"
         else:
             tag_html = '<span class="cv-candidata-tag-nf">Nota fiscal</span>'
             nro = cand.get("nro_nota")
-            info = f"NF {nro}" if nro else "Nota fiscal"
+            partes = []
+            if nro and not pd.isna(nro):
+                partes.append(f"NF {int(nro)}")
+            if nro_unico_txt:
+                partes.append(nro_unico_txt)
+            info = " · ".join(partes) if partes else "Nota fiscal"
 
         parceiro = cand.get("nome_parceiro") or "—"
         vlr = cand.get("vlr_desdobramento")
@@ -1908,7 +1970,7 @@ def _render_busca_inline(venda: pd.Series, chave_str: str, idx_card: int):
     st.markdown(
         f'<div style="background:{CINZA_CLARO}; border-radius:6px 6px 0 0; padding:10px 12px; margin-top:-6px;">'
         f'<div style="font-size:10px; color:{TEXTO_MUTED}; text-transform:uppercase; letter-spacing:0.8px; font-weight:700;">'
-        f'Buscar par no Sankhya · em aberto ou já baixados · valor bruto pré-preenchido · edite pra buscar por parceiro ou NF'
+        f'Buscar par no Sankhya · em aberto ou já baixados · valor bruto pré-preenchido · edite pra buscar por parceiro, código, CNPJ, NF ou Nro Único'
         f'</div></div>',
         unsafe_allow_html=True,
     )
@@ -1926,7 +1988,7 @@ def _render_busca_inline(venda: pd.Series, chave_str: str, idx_card: int):
         "Buscar",
         value=texto_atual,
         key=f"cv_busca_txt_{idx_card}",
-        placeholder="Ex: Terra Ltda · 8214 · 304,31",
+        placeholder="Ex: Terra Ltda · 71096 · 05.953.543/0001-47 · 17208158 · 304,31",
         label_visibility="collapsed",
     )
     busca_txt = st.session_state.get("cv_busca_texto", {})
@@ -1950,14 +2012,27 @@ def _render_busca_inline(venda: pd.Series, chave_str: str, idx_card: int):
         ja_baixado = situacao == "baixado_cartao"
 
         # Tag e identificador
+        nro_unico_id = _safe_int_str(tit.get("sk_nro_unico"))
+        nro_unico_txt = f"Nº Único {nro_unico_id}" if nro_unico_id else ""
+
         if classe == "adiantamento":
             tag_html = '<span style="background:#FFF0E0;color:#D97706;font-size:9px;padding:2px 6px;border-radius:3px;margin-right:6px;font-weight:600;text-transform:uppercase;letter-spacing:0.4px;">Adiant.</span>'
             ref_nf = _safe_int_str(tit.get("sk_ref_nf"))
-            id_txt = f"REF NF {ref_nf}" if ref_nf else "sem REF NF"
+            partes = []
+            if nro_unico_txt:
+                partes.append(nro_unico_txt)
+            if ref_nf:
+                partes.append(f"REF NF {ref_nf}")
+            id_txt = " · ".join(partes) if partes else "sem identificação"
         else:
             tag_html = '<span style="background:#E8F5EC;color:#2E7D4F;font-size:9px;padding:2px 6px;border-radius:3px;margin-right:6px;font-weight:600;text-transform:uppercase;letter-spacing:0.4px;">NF</span>'
             nro_nota = _safe_int_str(tit.get("sk_nro_nota"))
-            id_txt = f"NF {nro_nota}" if nro_nota else "sem número"
+            partes = []
+            if nro_nota:
+                partes.append(f"NF {nro_nota}")
+            if nro_unico_txt:
+                partes.append(nro_unico_txt)
+            id_txt = " · ".join(partes) if partes else "sem número"
 
         # Tag adicional: se já foi baixado por cartão
         tag_situacao_html = ""
@@ -2169,21 +2244,14 @@ def _render_pill_a_analisar(resultado):
     def _foi_ligada_manual(venda_row) -> bool:
         return _venda_tem_ligacao_manual(venda_row)
 
-    # Coletar vendas ligadas manualmente para seção separada
-    vendas_ligadas_manual = []
-    vistas_lig = set()
-
     # Filtrar vendas que já foram confirmadas manualmente OU ligadas via Supabase
+    # (as ligadas manualmente aparecem na pill "Conciliadas", não aqui)
     ambiguos_pendentes = []
     if ambiguos is not None and not ambiguos.empty:
         for _, venda in ambiguos.iterrows():
             if _foi_confirmada(venda):
                 continue
             if _foi_ligada_manual(venda):
-                cs = _chave_str_de(venda)
-                if cs not in vistas_lig:
-                    vendas_ligadas_manual.append(venda)
-                    vistas_lig.add(cs)
                 continue
             ambiguos_pendentes.append(venda)
 
@@ -2193,14 +2261,10 @@ def _render_pill_a_analisar(resultado):
             if _foi_confirmada(venda):
                 continue
             if _foi_ligada_manual(venda):
-                cs = _chave_str_de(venda)
-                if cs not in vistas_lig:
-                    vendas_ligadas_manual.append(venda)
-                    vistas_lig.add(cs)
                 continue
             vst_pendentes.append(venda)
 
-    total = len(ambiguos_pendentes) + len(vst_pendentes) + len(ligacoes_desf) + len(vendas_ligadas_manual)
+    total = len(ambiguos_pendentes) + len(vst_pendentes) + len(ligacoes_desf)
 
     if total == 0:
         st.markdown(
@@ -2212,22 +2276,6 @@ def _render_pill_a_analisar(resultado):
     max_cards = st.session_state.get("cv_max_cards_a_analisar", 20)
     renderizados = 0
     idx = 0
-
-    # 0. Ligadas manualmente (topo — resolvidas pelo usuário)
-    if vendas_ligadas_manual:
-        st.markdown(
-            f'<div style="font-size:11px; color:{AMARELO}; text-transform:uppercase; '
-            f'letter-spacing:1px; font-weight:700; margin:6px 0 8px 0;">'
-            f'✎ Ligadas manualmente ({len(vendas_ligadas_manual)}) · persistidas no Supabase'
-            f'</div>',
-            unsafe_allow_html=True,
-        )
-        for venda in vendas_ligadas_manual:
-            if renderizados >= max_cards:
-                break
-            _render_card_ligada_manual(venda, idx)
-            renderizados += 1
-            idx += 1
 
     # 1. Ambíguos (mais urgentes)
     for venda in ambiguos_pendentes:
@@ -2464,10 +2512,25 @@ def _render_pill_auto_conciliadas(resultado):
     df_g1 = resultado.grupo_1_conciliadas
     confirmadas = st.session_state.get("cv_confirmadas_manual", {})
 
+    # Bloco 1: coletar vendas ligadas manualmente para exibir aqui
+    _hidratar_ligacoes_persistidas()
+    vendas_ligadas_manual = []
+    vistas_lig = set()
+    for df_pool in (resultado.a_analisar_ambiguos, resultado.a_analisar_venda_sem_titulo):
+        if df_pool is None or df_pool.empty:
+            continue
+        for _, venda in df_pool.iterrows():
+            if _venda_tem_ligacao_manual(venda):
+                cs = _chave_str_de(venda)
+                if cs not in vistas_lig:
+                    vendas_ligadas_manual.append(venda)
+                    vistas_lig.add(cs)
+
     tem_g1 = df_g1 is not None and not df_g1.empty
     tem_manuais = bool(confirmadas)
+    tem_ligadas = bool(vendas_ligadas_manual)
 
-    if not tem_g1 and not tem_manuais:
+    if not tem_g1 and not tem_manuais and not tem_ligadas:
         st.markdown(
             '<div class="cv-empty-state">Nenhuma venda auto-conciliada nesta rodada.</div>',
             unsafe_allow_html=True,
@@ -2477,7 +2540,22 @@ def _render_pill_auto_conciliadas(resultado):
     ligacoes_desf = st.session_state.get("cv_ligacoes_desfeitas", set())
     grupos = _agrupar_conciliadas_por_venda(df_g1, ligacoes_desf) if tem_g1 else []
 
-    # BLOCO 1: Confirmadas manualmente (aparece primeiro, se houver)
+    # BLOCO 1a: Ligadas manualmente com justificativa (persistidas no Supabase)
+    if tem_ligadas:
+        st.markdown(
+            f'<div class="cv-secao-wrapper" style="border-left:4px solid {AMARELO};">'
+            f'<div class="cv-secao-header">'
+            f'<div class="cv-secao-header-titulo">'
+            f'✎ {len(vendas_ligadas_manual)} ligada{"s" if len(vendas_ligadas_manual)>1 else ""} manualmente com justificativa · persistida{"s" if len(vendas_ligadas_manual)>1 else ""} no Supabase'
+            f'</div>'
+            f'</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+        for i, venda in enumerate(vendas_ligadas_manual):
+            _render_card_ligada_manual(venda, i)
+
+    # BLOCO 1b: Confirmadas manualmente na rodada atual (sem persistência)
     if tem_manuais:
         st.markdown(
             f'<div class="cv-secao-wrapper">'
@@ -2493,7 +2571,7 @@ def _render_pill_auto_conciliadas(resultado):
             _render_card_confirmacao_manual(chave_str, dados, i)
 
     if not grupos:
-        if not tem_manuais:
+        if not tem_manuais and not tem_ligadas:
             st.markdown(
                 '<div class="cv-empty-state">Todas as auto-conciliações foram desfeitas manualmente.</div>',
                 unsafe_allow_html=True,
