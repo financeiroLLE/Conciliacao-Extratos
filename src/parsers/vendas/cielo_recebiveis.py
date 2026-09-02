@@ -149,12 +149,24 @@ def _col(mapa: dict, *aliases: str) -> Optional[int]:
 
 
 def eh_cielo(dados: bytes) -> bool:
+    """
+    Detecção rigorosa: o arquivo Cielo tem uma aba cujo nome começa
+    obrigatoriamente com 'vendas_cielo' (ex: 'vendas_cielo_historico_detalhe1').
+    Isso evita falso positivo com arquivos Getnet CVS/Analítico, cujo cabeçalho
+    coincidentemente compartilha 4 palavras-chave ('estabelecimento', 'valor bruto',
+    'valor líquido', 'data') mas nunca tem aba desse nome.
+    """
     try:
         wb = _abrir_xls(dados)
     except Exception:
         return False
     if wb.nsheets < 1:
         return False
+    # 1) Trava obrigatória por nome de aba
+    nomes_abas = [str(n).strip().lower() for n in wb.sheet_names()]
+    if not any(n.startswith("vendas_cielo") for n in nomes_abas):
+        return False
+    # 2) Confirma cabeçalho na primeira aba
     sh = wb.sheet_by_index(0)
     return _localizar_cabecalho(sh) is not None
 
