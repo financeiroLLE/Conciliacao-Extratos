@@ -1164,17 +1164,77 @@ def _calcular_totais_adquirente(df_cielo, df_getnet) -> Dict[str, Any]:
     }
 
 
-def _calcular_total_sankhya_elegivel(df_sankhya) -> Dict[str, Any]:
+def _calcular_total_sankhya_elegivel(df_sankhya, resultado=None) -> Dict[str, Any]:
+    """
+    Total de títulos elegíveis + quanto foi contemplado (consumido por matches).
+
+    Contemplado inclui:
+      - Títulos casados automaticamente (G1)
+      - Títulos consumidos por confirmações manuais (busca no Sankhya + escolha de candidato)
+
+    NÃO inclui ligações manuais justificadas — elas não têm título Sankhya associado,
+    justamente por isso são "manuais".
+    """
     if df_sankhya is None or df_sankhya.empty:
-        return {"total": 0.0, "total_n": 0}
+        return {"total": 0.0, "total_n": 0, "contemplado": 0.0, "contemplado_n": 0}
 
     df_c = classificador_sankhya.classificar(df_sankhya)
     df_el = classificador_sankhya.filtrar_elegiveis_para_match(df_c)
 
     if df_el is None or df_el.empty:
-        return {"total": 0.0, "total_n": 0}
+        return {"total": 0.0, "total_n": 0, "contemplado": 0.0, "contemplado_n": 0}
 
-    return {"total": float(df_el["vlr_desdobramento"].sum()), "total_n": len(df_el)}
+    total = float(df_el["vlr_desdobramento"].sum())
+    total_n = len(df_el)
+
+    contemplado = 0.0
+    contemplado_n = 0
+
+    if resultado is not None:
+        # 1) Títulos G1 (auto-conciliadas) — soma valor_sk (valor do título) por parcela
+        if resultado.grupo_1_conciliadas is not None and not resultado.grupo_1_conciliadas.empty:
+            df_g1 = resultado.grupo_1_conciliadas
+            # Descontar ligações desfeitas
+            ligacoes_desf = st.session_state.get("cv_ligacoes_desfeitas", set())
+            for _, row in df_g1.iterrows():
+                chave = _chave_venda_original(row)
+                chave_str = "|".join(str(x) for x in chave)
+                if chave_str in ligacoes_desf:
+                    continue
+                v = row.get("valor_match")
+                if v is not None and not pd.isna(v):
+                    contemplado += float(v)
+                    contemplado_n += 1
+
+        # 2) Confirmações manuais (busca no Sankhya / escolha de candidato)
+        #    Cada confirmação consumiu 1 título (valor da venda daquela parcela)
+        confirmadas = st.session_state.get("cv_confirmadas_manual", {}) or {}
+        for chave_str, dados in confirmadas.items():
+            v = None
+            if isinstance(dados, dict):
+                v = dados.get("valor_titulo") or dados.get("valor_venda") or dados.get("valor")
+            # Se não vier no dict, tenta descobrir pelo pool "a analisar"
+            if v is None:
+                for df_pool in (resultado.a_analisar_ambiguos, resultado.a_analisar_venda_sem_titulo):
+                    if df_pool is None or df_pool.empty:
+                        continue
+                    for _, r in df_pool.iterrows():
+                        cs = "|".join(str(x) for x in _chave_venda_original(r))
+                        if cs == chave_str:
+                            v = r.get("valor_match")
+                            break
+                    if v is not None:
+                        break
+            if v is not None and not pd.isna(v):
+                contemplado += float(v)
+                contemplado_n += 1
+
+    return {
+        "total": total,
+        "total_n": total_n,
+        "contemplado": contemplado,
+        "contemplado_n": contemplado_n,
+    }
 
 
 def _calcular_kpis_por_adquirente(resultado, df_cielo, df_getnet) -> Dict[str, Dict[str, Any]]:
@@ -1486,7 +1546,7 @@ def _render_topo_resultado(resultado):
     df_sk = st.session_state.get("cv_df_sankhya")
 
     tot_adq = _calcular_totais_adquirente(df_cielo, df_getnet)
-    tot_sk = _calcular_total_sankhya_elegivel(df_sk)
+    tot_sk = _calcular_total_sankhya_elegivel(df_sk, resultado=resultado)
 
     diff = tot_adq["total"] - tot_sk["total"]
     bate = abs(diff) < 0.01
@@ -1542,11 +1602,30 @@ def _render_topo_resultado(resultado):
         st.markdown(html1, unsafe_allow_html=True)
 
     with col2:
+        # Progresso do lado Sankhya (títulos contemplados por matches)
+        contemplado_sk = tot_sk.get("contemplado", 0.0)
+        contemplado_sk_n = tot_sk.get("contemplado_n", 0)
+        if contemplado_sk > 0 and tot_sk["total"] > 0:
+            pct_sk = round(contemplado_sk / tot_sk["total"] * 100, 1)
+            falta_sk = max(0.0, tot_sk["total"] - contemplado_sk)
+            falta_sk_n = max(0, tot_sk["total_n"] - contemplado_sk_n)
+            progresso_sk_html = (
+                f'<div style="font-size:11px;color:{VERDE};margin-top:6px;font-weight:600;">'
+                f'✓ {_fmt_moeda(contemplado_sk)} contemplado ({pct_sk:.1f}%)'
+                f'</div>'
+                f'<div style="font-size:11px;color:{TEXTO_MUTED};margin-top:2px;">'
+                f'Faltam {_fmt_moeda(falta_sk)} · {falta_sk_n} títulos'
+                f'</div>'
+            )
+        else:
+            progresso_sk_html = ""
+
         html2 = (
             f'<div class="cv-balanco-card cv-balanco-card-destaque">'
             f'<div class="cv-balanco-label">Total Sankhya {diff_html}</div>'
             f'<div class="cv-balanco-valor">{_fmt_moeda(tot_sk["total"])}</div>'
             f'<div class="cv-balanco-sub">{tot_sk["total_n"]} títulos elegíveis (nota + adiantamento)</div>'
+            f'{progresso_sk_html}'
             f'</div>'
         )
         st.markdown(html2, unsafe_allow_html=True)
@@ -1643,28 +1722,19 @@ def _render_tarja_progresso(resultado, df_cielo, df_getnet):
 
     manuais_txt = f" · {manuais_n} resolvida{'s' if manuais_n != 1 else ''} por você" if manuais_n > 0 else ""
 
-    # Texto principal e secundário em partes separadas (evita span aninhado em flex)
-    texto_principal = f'{emoji} Progresso: {resolvido_n} de {total_n} resolvidas ({pct:.1f}%){manuais_txt}'
-    texto_secundario = f'Faltam {_fmt_moeda(valor_falta)} em {n_falta} vendas'
-
     tarja = (
-        f'<div style="background:{BRANCO};border-radius:8px;padding:12px 16px;'
+        f'<div style="background:{BRANCO};border-radius:8px;padding:10px 14px;'
         f'margin:12px 0 4px 0;border-left:4px solid {cor};'
         f'box-shadow:0 1px 2px rgba(0,0,0,0.08);">'
-        # Título "Progresso da rodada" sempre visível como label
-        f'<div style="font-size:10px;color:{TEXTO_MUTED};text-transform:uppercase;'
-        f'letter-spacing:1px;font-weight:600;margin-bottom:6px;">Progresso da rodada</div>'
-        # Linha principal com o texto do progresso (em bold)
-        f'<div style="font-size:14px;color:{AZUL_NAVY};font-weight:600;margin-bottom:2px;">'
-        f'{_escape(texto_principal)}'
+        f'<div style="display:flex;justify-content:space-between;align-items:center;'
+        f'font-size:12px;color:{AZUL_NAVY};font-weight:600;">'
+        f'<span>{emoji} Progresso: {resolvido_n} de {total_n} resolvidas · '
+        f'<span style="color:{cor};">{pct:.1f}%</span>{manuais_txt}</span>'
+        f'<span style="font-weight:400;color:{TEXTO_MUTED};font-size:11px;">'
+        f'Faltam {_fmt_moeda(valor_falta)} em {n_falta} vendas</span>'
         f'</div>'
-        # Linha secundária (o que falta)
-        f'<div style="font-size:12px;color:{TEXTO_MUTED};margin-bottom:8px;">'
-        f'{_escape(texto_secundario)}'
-        f'</div>'
-        # Barra de progresso
-        f'<div style="height:8px;background:{CREME_ESCURO};border-radius:4px;'
-        f'overflow:hidden;">'
+        f'<div style="height:6px;background:{CREME_ESCURO};border-radius:3px;'
+        f'margin-top:6px;overflow:hidden;">'
         f'<div style="height:100%;background:{cor};width:{pct:.1f}%;'
         f'transition:width 0.3s ease;"></div>'
         f'</div>'
