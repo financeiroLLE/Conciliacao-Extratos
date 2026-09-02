@@ -45,6 +45,7 @@ def _add_meses(dt: date, n: int) -> date:
 
 NOME_ABA_DETALHADO = "Detalhado"
 NOME_ABA_CARTOES = "CARTÕES"
+NOME_ABA_ANALITICO = "ANALITICO"
 
 
 COLUNAS_VENDAS = [
@@ -151,13 +152,19 @@ def _col(mapa: dict, *aliases: str) -> Optional[int]:
 
 
 def eh_getnet_recebiveis(dados: bytes) -> bool:
-    """Reconhece AMBOS formatos: Recebíveis Completos + Extrato de Vendas Cartões."""
+    """Reconhece TODOS os formatos suportados:
+    - Recebíveis Completos (aba 'Detalhado')
+    - Extrato de Vendas Cartões (aba 'CARTÕES')
+    - CVS Analítico "O que vendi" (aba 'ANALITICO')
+    """
     try:
         wb = _abrir_xls(dados)
     except Exception:
         return False
     abas = wb.sheet_names()
-    return NOME_ABA_DETALHADO in abas or NOME_ABA_CARTOES in abas
+    return (NOME_ABA_DETALHADO in abas
+            or NOME_ABA_CARTOES in abas
+            or NOME_ABA_ANALITICO in abas)
 
 
 _MARCADORES_ANTIGO = [
@@ -169,6 +176,12 @@ _MARCADORES_NOVO = [
     "estabelecimento comercial", "cpf / cnpj",
     "bandeira", "modalidade", "forma de pagamento",
     "data/hora da venda", "número de autorização",
+]
+
+_MARCADORES_ANALITICO = [
+    "cód. estabelecimento", "cartões",
+    "data/hora", "valor bruto", "número do terminal",
+    "total de parcelas", "número da autorização",
 ]
 
 
@@ -518,11 +531,203 @@ def _ler_formato_novo(wb) -> ResultadoLeituraGetnet:
     )
 
 
+def _extrair_bandeira_modalidade_analitico(cartoes_txt: str, desc_lancamento: str = "") -> tuple:
+    """
+    Formato analítico: coluna 'Cartões' junta bandeira + modalidade,
+    e 'Descrição do Lançamento' complementa com detalhe de parcelas.
+    Exemplos:
+        'MASTERCARD DÉBITO' → ('Mastercard', 'debito')
+        'VISA CRÉDITO' + 'CRÉDITO PARCELADO LOJA' → ('Visa', 'credito_parcelado')
+        'VISA CRÉDITO' + 'CRÉDITO À VISTA' → ('Visa', 'credito_avista')
+        'ELO CRÉDITO' → ('Elo', 'credito_avista') se não vier descrição contrária
+    """
+    ct = str(cartoes_txt or "").strip().upper()
+    dl = str(desc_lancamento or "").strip().upper()
+
+    # Bandeira: primeira palavra
+    bandeira = ""
+    if ct:
+        primeira = ct.split()[0]
+        # normalizar capitalização
+        mapa_band = {"MASTERCARD": "Mastercard", "VISA": "Visa", "ELO": "Elo",
+                     "AMERICAN": "American Express", "HIPERCARD": "Hipercard"}
+        bandeira = mapa_band.get(primeira, primeira.capitalize())
+
+    # Modalidade: prioriza Descrição do Lançamento, cai pra Cartões
+    src = f"{ct} {dl}"
+    if "DÉBITO" in src or "DEBITO" in src:
+        modalidade = "debito"
+    elif "PARCEL" in src:
+        modalidade = "credito_parcelado"
+    elif "À VISTA" in src or "A VISTA" in src or "AVISTA" in src:
+        modalidade = "credito_avista"
+    elif "CRÉDITO" in src or "CREDITO" in src:
+        modalidade = "credito_avista"
+    else:
+        modalidade = "outro"
+
+    return (bandeira, modalidade)
+
+
+def _ler_formato_analitico(wb) -> ResultadoLeituraGetnet:
+    """
+    Leitor do formato 'CVS Analítico - O que vendi'.
+    Aba única: ANALITICO. Cabeçalho na L7 (índice 7 zero-based).
+    Traz TODOS os terminais/ECs do CNPJ — é o formato oficial adotado.
+    """
+    sh = wb.sheet_by_name(NOME_ABA_ANALITICO)
+    datemode = wb.datemode
+    idx_cab = _localizar_cabecalho(sh, _MARCADORES_ANALITICO)
+    if idx_cab is None:
+        raise ValueError("Cabeçalho do Getnet Analítico (ANALITICO) não localizado.")
+    mapa = _mapa_colunas(sh, idx_cab)
+
+    col_estab = _col(mapa, "cód. estabelecimento", "cod. estabelecimento", "cod estabelecimento")
+    col_cartoes = _col(mapa, "cartões", "cartoes")
+    col_data_venda = _col(mapa, "data/hora \nda venda", "data/hora da venda", "data da venda", "data/hora")
+    col_data_prev = _col(mapa, "data prevista do 1º pagamento", "data prevista")
+    col_num_cartao = _col(mapa, "número do cartão")
+    col_autoriza = _col(mapa, "número da autorização")
+    col_cv_nsu = _col(mapa, "número do comprovante \nde vendas", "número do comprovante de vendas", "cv")
+    col_terminal = _col(mapa, "número do terminal", "terminal")
+    col_desc_lanc = _col(mapa, "descrição do lançamento", "descricao do lancamento")
+    col_parcelas = _col(mapa, "total de parcelas", "parcelas")
+    col_vlr_bruto = _col(mapa, "valor bruto")
+    col_vlr_taxa = _col(mapa, "valor da taxa \ne/ou tarifa", "valor da taxa e/ou tarifa", "valor da taxa")
+    col_vlr_liquido = _col(mapa, "valor líquido", "valor liquido")
+    col_emissor = _col(mapa, "emissor cartão", "emissor")
+
+    linhas_vendas = []
+    n_vazias = 0
+    estabs = set()
+
+    def _get(row, ci, dv=""):
+        return row[ci] if ci is not None else dv
+
+    for r in range(idx_cab + 1, sh.nrows):
+        row = sh.row_values(r)
+
+        # Pular linhas vazias
+        if not any(str(v).strip() for v in row):
+            n_vazias += 1
+            continue
+
+        estab_raw = _get(row, col_estab, "")
+        # Estabelecimento vem como float (ex: 1067967.0) — precisa ter valor não nulo
+        estab_str = str(estab_raw).strip()
+        if not estab_str or estab_str.lower() == "nan":
+            n_vazias += 1
+            continue
+
+        # Pular possíveis linhas de subtotal (não têm número na coluna estabelecimento)
+        try:
+            float(estab_str)
+        except (ValueError, TypeError):
+            n_vazias += 1
+            continue
+
+        vlr_bruto = _to_float(_get(row, col_vlr_bruto, 0))
+        if vlr_bruto == 0:
+            n_vazias += 1
+            continue
+
+        estab = str(int(float(estab_str)))
+        estabs.add(estab)
+
+        cartoes_txt = str(_get(row, col_cartoes, "")).strip()
+        desc_lanc_txt = str(_get(row, col_desc_lanc, "")).strip()
+        bandeira, modalidade = _extrair_bandeira_modalidade_analitico(cartoes_txt, desc_lanc_txt)
+
+        parc_total = _to_int(_get(row, col_parcelas, 1), 1) or 1
+        vlr_parc = round(vlr_bruto / parc_total, 2) if parc_total > 0 else vlr_bruto
+
+        data_venda = _to_date(_get(row, col_data_venda), datemode)
+        data_prev_1a = _to_date(_get(row, col_data_prev), datemode)
+
+        vlr_taxa = _to_float(_get(row, col_vlr_taxa, 0))
+        vlr_liq_total = _to_float(_get(row, col_vlr_liquido, 0))
+        vlr_taxa_parc = round(vlr_taxa / parc_total, 2) if parc_total > 0 else vlr_taxa
+        vlr_liq_parc = round(vlr_liq_total / parc_total, 2) if parc_total > 0 else vlr_liq_total
+
+        base = dict(
+            adquirente="getnet",
+            estabelecimento=estab,
+            ec_centralizador=estab,
+            cnpj_estabelecimento="",  # não vem por linha no formato analítico
+            data_venda=data_venda,
+            hora_venda="",
+            valor_venda_bruto=vlr_bruto,
+            valor_parcela_bruto=vlr_parc,
+            valor_taxa=abs(vlr_taxa_parc),
+            valor_liquido=vlr_liq_parc,
+            bandeira=bandeira,
+            modalidade=modalidade,
+            parcelas_total=parc_total,
+            autorizacao=str(_get(row, col_autoriza, "")).strip(),
+            nsu=str(_get(row, col_cv_nsu, "")).strip(),
+            numero_cartao_mascarado=str(_get(row, col_num_cartao, "")).strip(),
+            terminal=str(_get(row, col_terminal, "")).strip(),
+            lancamento_original=desc_lanc_txt,
+            tipo_registro="venda",
+            formato="analitico",
+        )
+
+        # Expandir parcelas: mesma regra do formato novo — vencer no mesmo dia
+        # de meses seguintes a partir da 1a parcela. Última parcela ajusta centavo.
+        soma_bruto = 0.0
+        soma_taxa = 0.0
+        soma_liq = 0.0
+        for n in range(1, parc_total + 1):
+            dt_n = data_prev_1a
+            if data_prev_1a is not None and n > 1:
+                dt_n = _add_meses(data_prev_1a, n - 1)
+            if n < parc_total:
+                vlr_p = vlr_parc
+                vlr_t = abs(vlr_taxa_parc)
+                vlr_l = vlr_liq_parc
+                soma_bruto = round(soma_bruto + vlr_p, 2)
+                soma_taxa = round(soma_taxa + vlr_t, 2)
+                soma_liq = round(soma_liq + vlr_l, 2)
+            else:
+                vlr_p = round(vlr_bruto - soma_bruto, 2)
+                vlr_t = round(abs(vlr_taxa) - soma_taxa, 2)
+                vlr_l = round(vlr_liq_total - soma_liq, 2)
+            linha = {**base,
+                "data_prev_pagamento": dt_n,
+                "parcela_atual": n,
+                "valor_parcela_bruto": vlr_p,
+                "valor_taxa": vlr_t,
+                "valor_liquido": vlr_l,
+            }
+            linhas_vendas.append(linha)
+
+    df_v = pd.DataFrame(linhas_vendas, columns=COLUNAS_VENDAS)
+    return ResultadoLeituraGetnet(
+        df_vendas=df_v,
+        df_repasses=pd.DataFrame(columns=COLUNAS_REPASSES),
+        total_vendas=len(df_v),
+        total_cancelamentos=0,
+        total_repasses=0,
+        linhas_saldo_anterior_ignoradas=0,
+        linhas_vazias_ignoradas=n_vazias,
+        estabelecimentos=sorted(estabs),
+        total_bruto_vendas=float(df_v["valor_parcela_bruto"].sum()) if not df_v.empty else 0.0,
+        total_liquido_vendas=float(df_v["valor_liquido"].sum()) if not df_v.empty else 0.0,
+        total_taxa_vendas=float(df_v["valor_taxa"].sum()) if not df_v.empty else 0.0,
+        total_repassado=0.0,
+        formato_detectado="analitico",
+    )
+
+
 def ler(dados: bytes) -> ResultadoLeituraGetnet:
     """Detecta formato automaticamente e delega pro leitor específico."""
     if not eh_getnet_recebiveis(dados):
-        raise ValueError("Arquivo não é Getnet (nem 'Detalhado' nem 'CARTÕES' encontrados).")
+        raise ValueError("Arquivo não é Getnet (nem 'Detalhado', 'CARTÕES' nem 'ANALITICO' encontrados).")
     wb = _abrir_xls(dados)
-    if NOME_ABA_CARTOES in wb.sheet_names():
+    abas = wb.sheet_names()
+    # Prioridade: ANALITICO (mais completo — todos os terminais/ECs)
+    if NOME_ABA_ANALITICO in abas:
+        return _ler_formato_analitico(wb)
+    if NOME_ABA_CARTOES in abas:
         return _ler_formato_novo(wb)
     return _ler_formato_antigo(wb)
