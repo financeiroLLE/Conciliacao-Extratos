@@ -170,9 +170,10 @@ _CSS = f"""
 .cv-rodada-supra  {{ font-size: 11px; color: {AMARELO}; letter-spacing: 1.2px; text-transform: uppercase; margin-bottom: 4px; }}
 .cv-rodada-titulo {{ font-size: 18px; font-weight: 500; color: {CREME}; }}
 
-/* -------- RESULTADO — BALANÇO (cards creme) -------- */
+/* -------- RESULTADO — BALANÇO (cards brancos com borda amarela) -------- */
 .cv-balanco-card {{
-    background: {CREME}; border-radius: 10px; padding: 16px 18px;
+    background: {BRANCO}; border-radius: 10px; padding: 16px 18px;
+    border-left: 4px solid {AMARELO_ESCURO};
 }}
 .cv-balanco-card-destaque {{ border-left: 4px solid {AMARELO_ESCURO}; }}
 .cv-balanco-label {{ font-size: 10px; color: {TEXTO_MUTED}; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; font-weight: 600; }}
@@ -183,7 +184,8 @@ _CSS = f"""
 
 /* -------- RESULTADO — BARRAS POR ADQUIRENTE -------- */
 .cv-adq-bloco {{
-    background: {CREME}; border-radius: 10px; padding: 16px 18px; margin-top: 10px;
+    background: {BRANCO}; border-radius: 10px; padding: 16px 18px; margin-top: 10px;
+    border-left: 4px solid {AMARELO_ESCURO};
 }}
 .cv-adq-titulo {{ font-size: 10px; color: {TEXTO_MUTED}; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 12px; font-weight: 600; }}
 .cv-adq-linha  {{ margin-bottom: 10px; }}
@@ -194,6 +196,31 @@ _CSS = f"""
 .cv-adq-pct   {{ color: {AZUL_NAVY}; font-weight: 700; }}
 .cv-adq-barra {{ height: 8px; background: {CREME_ESCURO}; border-radius: 4px; overflow: hidden; }}
 .cv-adq-barra-preenchida {{ height: 100%; background: {AMARELO_ESCURO}; }}
+
+/* -------- PILLS (botões de navegação: A analisar / Conciliadas / etc) -------- */
+/* Pill inativa: fundo branco + borda amarela (mais leve visualmente) */
+div[data-testid="stButton"] > button[kind="secondary"] {{
+    background: {BRANCO} !important;
+    color: {AZUL_NAVY} !important;
+    -webkit-text-fill-color: {AZUL_NAVY} !important;
+    border: 1.5px solid {AMARELO} !important;
+    font-weight: 600 !important;
+}}
+div[data-testid="stButton"] > button[kind="secondary"]:hover {{
+    background: {CREME} !important;
+    border-color: {AMARELO_ESCURO} !important;
+}}
+/* Pill ativa: continua amarelo cheio (primary) */
+div[data-testid="stButton"] > button[kind="primary"] {{
+    background: {AMARELO} !important;
+    color: {AZUL_NAVY} !important;
+    -webkit-text-fill-color: {AZUL_NAVY} !important;
+    border: 1.5px solid {AMARELO_ESCURO} !important;
+    font-weight: 700 !important;
+}}
+div[data-testid="stButton"] > button[kind="primary"]:hover {{
+    background: {AMARELO_ESCURO} !important;
+}}
 
 /* -------- CARDS DE A ANALISAR / RESULTADO -------- */
 .cv-card {{
@@ -1716,10 +1743,35 @@ def _render_card_ambiguo(venda: pd.Series, idx_card: int):
         for i, cand in enumerate(candidatas):
             with cols[i]:
                 classe = cand.get("classe", "?")
+                # Formato C: data completa + Nº Único (quebra em 2 linhas se necessário)
+                venc_txt = _fmt_data_br(cand.get("dt_vencimento"))
+                nro_unico = cand.get("nro_unico")
+                nro_unico_txt = ""
+                if nro_unico and not pd.isna(nro_unico):
+                    try:
+                        nro_unico_txt = f"Nº {int(nro_unico)}"
+                    except (ValueError, TypeError):
+                        nro_unico_txt = f"Nº {nro_unico}"
+
                 if classe == "nota_fiscal":
-                    label = f"Escolher NF {cand.get('nro_nota')}"
+                    nro_nf = cand.get("nro_nota")
+                    partes = []
+                    if venc_txt and venc_txt != "—":
+                        partes.append(venc_txt)
+                    if nro_nf and not pd.isna(nro_nf):
+                        try:
+                            partes.append(f"NF {int(nro_nf)}")
+                        except (ValueError, TypeError):
+                            partes.append(f"NF {nro_nf}")
+                    label = f"Escolher · {' · '.join(partes)}" if partes else "Escolher NF"
                 else:
-                    label = "Escolher Adiantamento"
+                    partes = []
+                    if venc_txt and venc_txt != "—":
+                        partes.append(venc_txt)
+                    if nro_unico_txt:
+                        partes.append(nro_unico_txt)
+                    label = f"Escolher · {' · '.join(partes)}" if partes else "Escolher Adiantamento"
+
                 if st.button(label, key=f"cv_esc_{idx_card}_{i}",
                              type="primary", use_container_width=True):
                     _acao_escolher_candidata(chave_str, cand, venda_dict=venda_dict)
