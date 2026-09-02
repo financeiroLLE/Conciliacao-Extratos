@@ -1643,19 +1643,28 @@ def _render_tarja_progresso(resultado, df_cielo, df_getnet):
 
     manuais_txt = f" · {manuais_n} resolvida{'s' if manuais_n != 1 else ''} por você" if manuais_n > 0 else ""
 
+    # Texto principal e secundário em partes separadas (evita span aninhado em flex)
+    texto_principal = f'{emoji} Progresso: {resolvido_n} de {total_n} resolvidas ({pct:.1f}%){manuais_txt}'
+    texto_secundario = f'Faltam {_fmt_moeda(valor_falta)} em {n_falta} vendas'
+
     tarja = (
-        f'<div style="background:{BRANCO};border-radius:8px;padding:10px 14px;'
+        f'<div style="background:{BRANCO};border-radius:8px;padding:12px 16px;'
         f'margin:12px 0 4px 0;border-left:4px solid {cor};'
         f'box-shadow:0 1px 2px rgba(0,0,0,0.08);">'
-        f'<div style="display:flex;justify-content:space-between;align-items:center;'
-        f'font-size:12px;color:{AZUL_NAVY};font-weight:600;">'
-        f'<span>{emoji} Progresso: {resolvido_n} de {total_n} resolvidas · '
-        f'<span style="color:{cor};">{pct:.1f}%</span>{manuais_txt}</span>'
-        f'<span style="font-weight:400;color:{TEXTO_MUTED};font-size:11px;">'
-        f'Faltam {_fmt_moeda(valor_falta)} em {n_falta} vendas</span>'
+        # Título "Progresso da rodada" sempre visível como label
+        f'<div style="font-size:10px;color:{TEXTO_MUTED};text-transform:uppercase;'
+        f'letter-spacing:1px;font-weight:600;margin-bottom:6px;">Progresso da rodada</div>'
+        # Linha principal com o texto do progresso (em bold)
+        f'<div style="font-size:14px;color:{AZUL_NAVY};font-weight:600;margin-bottom:2px;">'
+        f'{_escape(texto_principal)}'
         f'</div>'
-        f'<div style="height:6px;background:{CREME_ESCURO};border-radius:3px;'
-        f'margin-top:6px;overflow:hidden;">'
+        # Linha secundária (o que falta)
+        f'<div style="font-size:12px;color:{TEXTO_MUTED};margin-bottom:8px;">'
+        f'{_escape(texto_secundario)}'
+        f'</div>'
+        # Barra de progresso
+        f'<div style="height:8px;background:{CREME_ESCURO};border-radius:4px;'
+        f'overflow:hidden;">'
         f'<div style="height:100%;background:{cor};width:{pct:.1f}%;'
         f'transition:width 0.3s ease;"></div>'
         f'</div>'
