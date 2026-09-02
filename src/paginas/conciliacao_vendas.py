@@ -1178,26 +1178,90 @@ def _calcular_total_sankhya_elegivel(df_sankhya) -> Dict[str, Any]:
 
 
 def _calcular_kpis_por_adquirente(resultado, df_cielo, df_getnet) -> Dict[str, Dict[str, Any]]:
+    """
+    Retorna, por adquirente:
+      - total: nº de parcelas (vendas expandidas) do adquirente
+      - auto: parcelas auto-conciliadas pelo motor (G1 + G2)
+      - manuais: resoluções feitas pela Débora nesta rodada
+                 (confirmações manuais + ligações persistidas no Supabase)
+      - resolvido: auto + manuais
+      - pct: percentual resolvido
+      - valor_total / valor_resolvido: mesmo cálculo em R$
+    """
     result = {
-        "getnet": {"conciliadas": 0, "total": 0, "pct": 0.0},
-        "cielo":  {"conciliadas": 0, "total": 0, "pct": 0.0},
+        "getnet": {"total": 0, "auto": 0, "manuais": 0, "resolvido": 0, "pct": 0.0,
+                   "valor_total": 0.0, "valor_resolvido": 0.0},
+        "cielo":  {"total": 0, "auto": 0, "manuais": 0, "resolvido": 0, "pct": 0.0,
+                   "valor_total": 0.0, "valor_resolvido": 0.0},
     }
 
+    # Volume total (parcelas + valores)
     if df_cielo is not None and not df_cielo.empty:
         result["cielo"]["total"] = len(df_cielo)
+        if "valor_bruto" in df_cielo.columns:
+            result["cielo"]["valor_total"] = float(df_cielo["valor_bruto"].sum())
     if df_getnet is not None and not df_getnet.empty:
         result["getnet"]["total"] = len(df_getnet)
+        col_valor = "valor_parcela_bruto" if "valor_parcela_bruto" in df_getnet.columns else "valor_bruto"
+        result["getnet"]["valor_total"] = float(df_getnet[col_valor].sum())
 
+    # Auto-conciliadas pelo motor (G1 + G2)
     for df in (resultado.grupo_1_conciliadas, resultado.grupo_2_ja_baixadas):
         if df is None or df.empty:
             continue
         counts = df["adquirente"].value_counts().to_dict()
         for adq, n in counts.items():
             if adq in result:
-                result[adq]["conciliadas"] += int(n)
+                result[adq]["auto"] += int(n)
+        # Somar valor auto
+        if "valor_match" in df.columns:
+            for adq, sub in df.groupby("adquirente"):
+                if adq in result:
+                    result[adq]["valor_resolvido"] += float(sub["valor_match"].sum())
 
+    # Resoluções manuais da rodada:
+    #   1. Confirmações via busca no Sankhya / escolha de candidato
+    #   2. Ligações manuais persistidas no Supabase
+    confirmadas = st.session_state.get("cv_confirmadas_manual", {}) or {}
+    lig_persist = st.session_state.get("cv_lig_persistidas", {}) or {}
+
+    def _adq_de_chave(chave_str: str) -> Optional[str]:
+        try:
+            return chave_str.split("|", 1)[0].lower()
+        except (AttributeError, IndexError):
+            return None
+
+    # Para saber o valor de cada resolução, precisamos revarrer os df de "a analisar"
+    def _valor_venda_por_chave(chave_str: str) -> float:
+        for df_pool in (resultado.a_analisar_ambiguos, resultado.a_analisar_venda_sem_titulo):
+            if df_pool is None or df_pool.empty:
+                continue
+            for _, row in df_pool.iterrows():
+                cs = "|".join(str(x) for x in _chave_venda_original(row))
+                if cs == chave_str:
+                    v = row.get("valor_match")
+                    if v is not None and not pd.isna(v):
+                        return float(v)
+        return 0.0
+
+    for chave_str in confirmadas.keys():
+        adq = _adq_de_chave(chave_str)
+        if adq in result:
+            result[adq]["manuais"] += 1
+            result[adq]["valor_resolvido"] += _valor_venda_por_chave(chave_str)
+
+    for chave_str in lig_persist.keys():
+        if chave_str in confirmadas:  # já contado acima, evita duplicar
+            continue
+        adq = _adq_de_chave(chave_str)
+        if adq in result:
+            result[adq]["manuais"] += 1
+            result[adq]["valor_resolvido"] += _valor_venda_por_chave(chave_str)
+
+    # Consolidar
     for adq, d in result.items():
-        d["pct"] = round((d["conciliadas"] / d["total"] * 100), 1) if d["total"] > 0 else 0.0
+        d["resolvido"] = d["auto"] + d["manuais"]
+        d["pct"] = round((d["resolvido"] / d["total"] * 100), 1) if d["total"] > 0 else 0.0
 
     return result
 
@@ -1444,12 +1508,35 @@ def _render_topo_resultado(resultado):
     # Balanço lado a lado (usando st.columns pra evitar problemas de layout)
     col1, col2 = st.columns(2)
 
+    # KPIs para calcular progresso global (auto + manuais)
+    kpis = _calcular_kpis_por_adquirente(resultado, df_cielo, df_getnet)
+    total_vendas = tot_adq["total_n"]
+    resolvido_n = kpis["getnet"]["resolvido"] + kpis["cielo"]["resolvido"]
+    resolvido_vlr = kpis["getnet"]["valor_resolvido"] + kpis["cielo"]["valor_resolvido"]
+    pct_resolvido = round(resolvido_n / total_vendas * 100, 1) if total_vendas > 0 else 0.0
+    faltam_n = max(0, total_vendas - resolvido_n)
+    faltam_vlr = max(0.0, tot_adq["total"] - resolvido_vlr)
+
     with col1:
+        # Progresso sempre visível no topo do card
+        if resolvido_n > 0:
+            progresso_html = (
+                f'<div style="font-size:11px;color:{VERDE};margin-top:6px;font-weight:600;">'
+                f'✓ {_fmt_moeda(resolvido_vlr)} resolvido ({pct_resolvido:.1f}%)'
+                f'</div>'
+                f'<div style="font-size:11px;color:{TEXTO_MUTED};margin-top:2px;">'
+                f'Faltam {_fmt_moeda(faltam_vlr)} · {faltam_n} vendas'
+                f'</div>'
+            )
+        else:
+            progresso_html = ""
+
         html1 = (
             f'<div class="cv-balanco-card">'
             f'<div class="cv-balanco-label">Total Adquirente</div>'
             f'<div class="cv-balanco-valor">{_fmt_moeda(tot_adq["total"])}</div>'
             f'<div class="cv-balanco-sub">{tot_adq["total_n"]} vendas · Getnet {tot_adq["getnet_n"]} · Cielo {tot_adq["cielo_n"]}</div>'
+            f'{progresso_html}'
             f'</div>'
         )
         st.markdown(html1, unsafe_allow_html=True)
@@ -1464,38 +1551,117 @@ def _render_topo_resultado(resultado):
         )
         st.markdown(html2, unsafe_allow_html=True)
 
-    # Barras por adquirente
-    kpis = _calcular_kpis_por_adquirente(resultado, df_cielo, df_getnet)
-
+    # Barras por adquirente — agora com auto + suas ações empilhadas
     linhas_partes = []
     for adq_key in ("getnet", "cielo"):
         d = kpis[adq_key]
         if d["total"] == 0:
             continue
-        pct = d["pct"]
-        pct_barra = min(pct, 100)
+        pct_auto = round(d["auto"] / d["total"] * 100, 1) if d["total"] > 0 else 0.0
+        pct_total = d["pct"]
+        pct_auto_barra = min(pct_auto, 100)
+        pct_manuais_barra = max(0, min(pct_total, 100) - pct_auto_barra)
         nome = _label_adquirente(adq_key)
+
+        # Info de contagem
+        if d["manuais"] > 0:
+            info = (
+                f'{d["auto"]} auto + {d["manuais"]} suas = {d["resolvido"]} de {d["total"]} · '
+                f'<span class="cv-adq-pct">{pct_total:.1f}%</span>'
+            )
+        else:
+            info = (
+                f'{d["auto"]} de {d["total"]} · '
+                f'<span class="cv-adq-pct">{pct_total:.1f}%</span>'
+            )
+
         linhas_partes.append(
             f'<div class="cv-adq-linha">'
             f'<div class="cv-adq-linha-topo">'
             f'<span class="cv-adq-nome">{nome}</span>'
-            f'<span class="cv-adq-info">{d["conciliadas"]} de {d["total"]} · '
-            f'<span class="cv-adq-pct">{pct:.1f}%</span></span>'
+            f'<span class="cv-adq-info">{info}</span>'
             f'</div>'
-            f'<div class="cv-adq-barra">'
-            f'<div class="cv-adq-barra-preenchida" style="width:{pct_barra:.1f}%;"></div>'
+            f'<div class="cv-adq-barra" style="display:flex;">'
+            f'<div class="cv-adq-barra-preenchida" style="width:{pct_auto_barra:.1f}%;background:{AMARELO_ESCURO};"></div>'
+            f'<div class="cv-adq-barra-preenchida" style="width:{pct_manuais_barra:.1f}%;background:{VERDE};"></div>'
             f'</div>'
             f'</div>'
         )
 
     if linhas_partes:
+        # Legenda só quando houver resoluções manuais
+        legenda = ""
+        if any(kpis[a]["manuais"] > 0 for a in ("getnet","cielo")):
+            legenda = (
+                f'<div style="font-size:10px;color:{TEXTO_MUTED};margin-top:8px;">'
+                f'<span style="display:inline-block;width:10px;height:10px;background:{AMARELO_ESCURO};border-radius:2px;vertical-align:middle;margin-right:4px;"></span>'
+                f'Automático pelo motor'
+                f'<span style="display:inline-block;width:10px;height:10px;background:{VERDE};border-radius:2px;vertical-align:middle;margin:0 4px 0 12px;"></span>'
+                f'Resolvido por você'
+                f'</div>'
+            )
+
         bloco_html = (
             f'<div class="cv-adq-bloco">'
-            f'<div class="cv-adq-titulo">Auto-conciliação por adquirente</div>'
+            f'<div class="cv-adq-titulo">Conciliação por adquirente</div>'
             f'{"".join(linhas_partes)}'
+            f'{legenda}'
             f'</div>'
         )
         st.markdown(bloco_html, unsafe_allow_html=True)
+
+
+def _render_tarja_progresso(resultado, df_cielo, df_getnet):
+    """
+    Tarja horizontal com progresso global da rodada.
+    Sempre visível, atualiza a cada rerun após qualquer ação da Débora.
+    """
+    kpis = _calcular_kpis_por_adquirente(resultado, df_cielo, df_getnet)
+    total_n = kpis["getnet"]["total"] + kpis["cielo"]["total"]
+    resolvido_n = kpis["getnet"]["resolvido"] + kpis["cielo"]["resolvido"]
+    manuais_n = kpis["getnet"]["manuais"] + kpis["cielo"]["manuais"]
+
+    if total_n == 0:
+        return
+
+    valor_total = kpis["getnet"]["valor_total"] + kpis["cielo"]["valor_total"]
+    valor_resolvido = kpis["getnet"]["valor_resolvido"] + kpis["cielo"]["valor_resolvido"]
+    valor_falta = max(0.0, valor_total - valor_resolvido)
+    n_falta = max(0, total_n - resolvido_n)
+    pct = round(resolvido_n / total_n * 100, 1)
+
+    # Cor da barra: vermelha (<50%), amarela (50-90%), verde (>90%)
+    if pct >= 90:
+        cor = VERDE
+        emoji = "✓"
+    elif pct >= 50:
+        cor = AMARELO_ESCURO
+        emoji = "⚡"
+    else:
+        cor = LARANJA
+        emoji = "→"
+
+    manuais_txt = f" · {manuais_n} resolvida{'s' if manuais_n != 1 else ''} por você" if manuais_n > 0 else ""
+
+    tarja = (
+        f'<div style="background:{BRANCO};border-radius:8px;padding:10px 14px;'
+        f'margin:12px 0 4px 0;border-left:4px solid {cor};'
+        f'box-shadow:0 1px 2px rgba(0,0,0,0.08);">'
+        f'<div style="display:flex;justify-content:space-between;align-items:center;'
+        f'font-size:12px;color:{AZUL_NAVY};font-weight:600;">'
+        f'<span>{emoji} Progresso: {resolvido_n} de {total_n} resolvidas · '
+        f'<span style="color:{cor};">{pct:.1f}%</span>{manuais_txt}</span>'
+        f'<span style="font-weight:400;color:{TEXTO_MUTED};font-size:11px;">'
+        f'Faltam {_fmt_moeda(valor_falta)} em {n_falta} vendas</span>'
+        f'</div>'
+        f'<div style="height:6px;background:{CREME_ESCURO};border-radius:3px;'
+        f'margin-top:6px;overflow:hidden;">'
+        f'<div style="height:100%;background:{cor};width:{pct:.1f}%;'
+        f'transition:width 0.3s ease;"></div>'
+        f'</div>'
+        f'</div>'
+    )
+    st.markdown(tarja, unsafe_allow_html=True)
 
 
 def _render_pills(contadores: Dict[str, int]):
@@ -3196,6 +3362,12 @@ def _render_tela_resultado():
 
     _render_topo_resultado(resultado)
     _render_confirmacao_desfazer()
+
+    # Tarja de progresso global (sempre visível, atualiza a cada ação)
+    df_cielo_p = st.session_state.get("cv_df_cielo")
+    df_getnet_p = st.session_state.get("cv_df_getnet_vendas")
+    _render_tarja_progresso(resultado, df_cielo_p, df_getnet_p)
+
     _render_pills(contadores)
 
     pill_ativa = st.session_state.get("cv_pill_ativa", "a_analisar")
