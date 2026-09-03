@@ -17,6 +17,41 @@ USER_KEY = "supabase_user"
 PROFILE_KEY = "supabase_profile"
 
 
+def _derivar_nome_do_email(email: str) -> str:
+    """
+    Deriva um nome amigável do email quando não há perfil cadastrado.
+    Exemplos:
+        debora.silva@grupolle.com.br  -> "Débora Silva"
+        conciliacao@grupolle.com.br   -> "Conciliação"
+        fernanda.lopes@grupolle.com.br -> "Fernanda Lopes"
+    """
+    if not email or "@" not in email:
+        return "Usuário"
+
+    # Mapa de nomes conhecidos para preservar acentuação correta
+    conhecidos = {
+        "debora.silva": "Débora Silva",
+        "debora.azevedo": "Débora Azevedo",
+        "conciliacao": "Conciliação",
+        "financeiro": "Financeiro",
+        "fernanda.lopes": "Fernanda Lopes",
+        "vanderson": "Vanderson",
+        "beatriz": "Beatriz",
+        "viviane": "Viviane",
+    }
+
+    parte_local = email.split("@", 1)[0].strip().lower()
+    if parte_local in conhecidos:
+        return conhecidos[parte_local]
+
+    # Genérico: separa por . _ - e capitaliza cada palavra
+    import re
+    palavras = re.split(r"[._\-]+", parte_local)
+    if not palavras:
+        return "Usuário"
+    return " ".join(p.capitalize() for p in palavras if p)
+
+
 def sign_in_with_password(email: str, password: str) -> dict:
     """Autentica com email + senha. Retorna dict com resultado."""
     if not is_supabase_configured():
@@ -63,11 +98,14 @@ def sign_in_with_password(email: str, password: str) -> dict:
             )
             st.session_state[PROFILE_KEY] = perfil_data.data
         except Exception as e_perfil:
+            # Sem perfil cadastrado — derivar nome amigável do email
+            # (ex: "debora.silva@grupolle.com.br" -> "Débora Silva")
+            nome_derivado = _derivar_nome_do_email(user.email or "")
             st.session_state[PROFILE_KEY] = {
                 "id": user.id,
-                "nome_completo": "(sem perfil)",
-                "perfil": None,
-                "ativo": False,
+                "nome_completo": nome_derivado,
+                "perfil": "Colaborador",
+                "ativo": True,
                 "_erro_perfil": str(e_perfil),
             }
 
