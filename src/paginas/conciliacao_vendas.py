@@ -305,6 +305,24 @@ div[data-testid="stButton"] > button[kind="primary"]:hover {{
     font-size: 9px; padding: 2px 6px; border-radius: 3px; margin-right: 6px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.4px;
 }}
 
+/* -------- LINHAS DE PARCELAS DENTRO DO CARD AGRUPADO -------- */
+.cv-parcela-linha {{
+    padding: 4px 0;
+    color: {AZUL_NAVY} !important;
+    -webkit-text-fill-color: {AZUL_NAVY} !important;
+    font-size: 13px;
+}}
+.cv-parcela-linha * {{
+    color: {AZUL_NAVY} !important;
+    -webkit-text-fill-color: {AZUL_NAVY} !important;
+}}
+.cv-parcela-bullet {{
+    color: {AMARELO_ESCURO} !important;
+    -webkit-text-fill-color: {AMARELO_ESCURO} !important;
+    font-weight: bold;
+    margin-right: 4px;
+}}
+
 /* -------- AUTO-CONCILIADAS -------- */
 .cv-secao-wrapper {{
     background: {CREME}; border-radius: 10px;
@@ -1092,6 +1110,82 @@ def _venda_tem_ligacao_manual(row_ou_venda) -> bool:
 def _obter_ligacao_manual(row_ou_venda) -> Optional[Dict[str, Any]]:
     chave_str = _chave_str_de(row_ou_venda)
     return (st.session_state.get("cv_lig_persistidas") or {}).get(chave_str)
+
+
+# ==============================================================================
+# BLOCO 1+ · AGRUPAMENTO POR VENDA (parcelas da mesma venda viram 1 card só)
+# ==============================================================================
+
+def _agrupar_parcelas_por_venda(parcelas: List[pd.Series]) -> List[Dict[str, Any]]:
+    """
+    Recebe uma lista de linhas (parcelas expandidas) e agrupa parcelas da mesma
+    venda em um dicionário representando a venda inteira.
+
+    Retorna lista de dicts, cada um com:
+      - representante: pd.Series da 1ª parcela (contém todos os campos da venda)
+      - parcelas: lista de dicts {num, total, valor, dt_prev, dias_para_venc}
+      - parcelas_total: N total de parcelas (int)
+      - valor_venda: soma das parcelas
+      - chave_str: identificador único da venda (adquirente|nsu|autorizacao)
+
+    Preserva a ORDEM ORIGINAL — a venda aparece na posição em que sua 1ª parcela
+    apareceu na lista de entrada.
+    """
+    grupos = {}  # chave_str -> dict
+    ordem = []   # lista de chaves na ordem de aparição
+
+    for parcela in parcelas:
+        chave_str = _chave_str_de(parcela)
+        if chave_str not in grupos:
+            ordem.append(chave_str)
+            grupos[chave_str] = {
+                "representante": parcela,
+                "parcelas": [],
+                "chave_str": chave_str,
+            }
+
+        # Extrai info da parcela
+        num = parcela.get("parcela_atual")
+        total = parcela.get("parcelas_total")
+        valor = parcela.get("valor_match") or parcela.get("valor_parcela_bruto")
+        dt_prev = parcela.get("data_prev_pagamento") or parcela.get("data_venda")
+
+        try:
+            num_int = int(num) if num and not pd.isna(num) else 1
+        except (ValueError, TypeError):
+            num_int = 1
+        try:
+            total_int = int(total) if total and not pd.isna(total) else 1
+        except (ValueError, TypeError):
+            total_int = 1
+
+        dias_venc = None
+        try:
+            if dt_prev is not None and not pd.isna(dt_prev):
+                dt_prev_date = pd.to_datetime(dt_prev).date()
+                dias_venc = (dt_prev_date - date.today()).days
+        except Exception:
+            pass
+
+        grupos[chave_str]["parcelas"].append({
+            "num": num_int,
+            "total": total_int,
+            "valor": float(valor) if valor and not pd.isna(valor) else 0.0,
+            "dt_prev": dt_prev,
+            "dias_para_venc": dias_venc,
+        })
+
+    # Ordenar as parcelas dentro de cada venda por número
+    for g in grupos.values():
+        g["parcelas"].sort(key=lambda p: p["num"])
+        g["parcelas_total"] = g["parcelas"][0]["total"] if g["parcelas"] else 1
+        g["valor_venda"] = sum(p["valor"] for p in g["parcelas"])
+        # Recuperar do representante o valor total original da venda (mais preciso)
+        vt_orig = g["representante"].get("valor_bruto_venda_total")
+        if vt_orig is not None and not pd.isna(vt_orig):
+            g["valor_venda"] = float(vt_orig)
+
+    return [grupos[k] for k in ordem]
 
 
 def _agrupar_conciliadas_por_venda(df_g1: pd.DataFrame, ligacoes_desfeitas: set) -> List[Dict[str, Any]]:
@@ -2523,6 +2617,187 @@ def _render_card_ligada_manual(venda: pd.Series, idx_card: int):
     st.markdown('<div style="margin-bottom:12px;"></div>', unsafe_allow_html=True)
 
 
+def _render_card_venda_agrupada(grupo: Dict[str, Any], idx_card: int, hoje: date):
+    """
+    Renderiza uma venda inteira (todas as parcelas) em um único card.
+    Usa a mesma estrutura visual do card padrão, mas troca:
+      - Título: mostra R$ TOTAL da venda + "N parcelas"
+      - Lista de parcelas dentro do card
+      - Botões únicos (Buscar/Ligar) que agem sobre a venda inteira
+    """
+    venda = grupo["representante"]
+    parcelas = grupo["parcelas"]
+    chave_str = grupo["chave_str"]
+    parcelas_total = grupo["parcelas_total"]
+
+    # Se for venda de 1 parcela só, usa o card padrão (nada de agrupar)
+    if len(parcelas) <= 1 or parcelas_total <= 1:
+        _render_card_venda_sem_titulo(venda, idx_card, hoje)
+        return
+
+    status_key, status_label = _classificar_venda_sem_titulo(venda, hoje)
+
+    adq = _label_adquirente(venda.get("adquirente"))
+    ban = _label_bandeira(venda.get("bandeira"))
+    mod = _label_modalidade(venda.get("modalidade"), venda.get("parcelas_total"))
+    nsu = venda.get("nsu") or ""
+    valor_total_venda = grupo["valor_venda"]
+    data_venda_real = venda.get("data_venda")
+    if _is_none(data_venda_real):
+        data_venda_real = None
+
+    # Classe do card conforme status da parcela mais próxima do vencimento
+    if status_key == "divergencia_real":
+        card_class = "cv-card cv-card-divergencia cv-card-com-busca"
+        tag_status = f'<span class="cv-tag cv-tag-laranja">{_escape(status_label)}</span>'
+    else:
+        card_class = "cv-card cv-card-info cv-card-com-busca"
+        tag_status = f'<span class="cv-tag">{_escape(status_label)}</span>'
+
+    tags = [
+        tag_status,
+        f'<span class="cv-tag cv-tag-adq">{_escape(adq)}</span>',
+        f'<span class="cv-tag">{_escape(mod)} · {_escape(ban)}</span>',
+    ]
+    if nsu:
+        tags.append(f'<span class="cv-tag">Nº {_escape(str(nsu))}</span>')
+
+    # Bloco direito com o total da venda em destaque
+    bruto_p, taxa_p, liquido_p = _puxar_valores_originais(venda)
+    taxa_txt = ""
+    if taxa_p is not None:
+        try:
+            taxa_txt = f" · taxa {float(taxa_p):.2f}%".replace(".", ",")
+        except (ValueError, TypeError):
+            pass
+    valores_dir = (
+        f'<div class="cv-valor-dir">'
+        f'<div class="cv-valor-sub">total da venda</div>'
+        f'<div class="cv-valor-grande">{_fmt_moeda(valor_total_venda)}</div>'
+        f'<div class="cv-valor-sub" style="margin-top:4px;">'
+        f'{parcelas_total} parcelas de {_fmt_moeda(parcelas[0]["valor"])}{taxa_txt}'
+        f'</div>'
+        f'</div>'
+    )
+
+    # Título esquerdo: valor TOTAL + N parcelas
+    titulo_html = (
+        f'<div class="cv-card-titulo">{_fmt_moeda(valor_total_venda)} '
+        f'<span style="font-size:12px; color:{TEXTO_MUTED}; font-weight:400;">'
+        f'· {parcelas_total} parcelas</span></div>'
+    )
+
+    # Subtítulo com data de venda + range de vencimentos
+    origem = f"dados da {adq.upper()}" if adq and adq != "—" else "dados da adquirente"
+    dts_prev = [p["dt_prev"] for p in parcelas if p["dt_prev"] is not None and not (hasattr(p["dt_prev"], "__len__") and pd.isna(p["dt_prev"]))]
+    range_txt = ""
+    if len(dts_prev) >= 2:
+        try:
+            first = _fmt_data_br(dts_prev[0])
+            last = _fmt_data_br(dts_prev[-1])
+            range_txt = f" · vence entre {first} e {last}"
+        except Exception:
+            pass
+    if data_venda_real:
+        sub_txt = f"Vendido em {_fmt_data_br(data_venda_real)}{range_txt} · {origem}"
+    else:
+        sub_txt = f"Data de venda indisponível{range_txt} · {origem}"
+
+    # Lista de parcelas dentro do card
+    linhas_parcelas = []
+    for p in parcelas:
+        n = p["num"]; tot = p["total"]
+        vlr = _fmt_moeda(p["valor"])
+        dt = _fmt_data_br(p["dt_prev"]) if p["dt_prev"] is not None else "—"
+        dias = p["dias_para_venc"]
+        if dias is not None:
+            if dias < 0:
+                dias_txt = f" (venceu há {abs(dias)} dias)"
+                dias_cor = LARANJA
+            elif dias == 0:
+                dias_txt = " (vence hoje)"
+                dias_cor = LARANJA
+            else:
+                dias_txt = f" (em {dias} dias)"
+                dias_cor = TEXTO_MUTED
+        else:
+            dias_txt = ""
+            dias_cor = TEXTO_MUTED
+        linhas_parcelas.append(
+            f'<div class="cv-parcela-linha">'
+            f'<span class="cv-parcela-bullet">•</span> '
+            f'<b>{n}/{tot}</b> · {vlr} · vence {dt}'
+            f'<span style="color:{dias_cor}; font-size:11px;">{dias_txt}</span>'
+            f'</div>'
+        )
+    lista_parcelas_html = (
+        f'<div style="margin-top:12px; padding-top:10px; border-top:1px solid #EAEAEA;">'
+        f'<div style="font-size:10px; color:{TEXTO_MUTED}; text-transform:uppercase; '
+        f'letter-spacing:1px; font-weight:600; margin-bottom:6px;">Parcelas</div>'
+        f'{"".join(linhas_parcelas)}'
+        f'</div>'
+    )
+
+    # Timeline com marco da 1ª parcela (mesma lógica de antes)
+    timeline_html = _render_timeline_html(data_venda_real or parcelas[0]["dt_prev"], parcelas[0]["dt_prev"], None)
+
+    card_html = (
+        f'<div class="{card_class}">'
+        f'<div class="cv-card-topo">'
+        f'<div style="flex:1; min-width:0;">'
+        f'<div class="cv-tag-linha">{"".join(tags)}</div>'
+        f'{titulo_html}'
+        f'<div class="cv-card-sub">{_escape(sub_txt)}</div>'
+        f'</div>'
+        f'{valores_dir}'
+        f'</div>'
+        f'{timeline_html}'
+        f'{lista_parcelas_html}'
+        f'</div>'
+    )
+    st.markdown(card_html, unsafe_allow_html=True)
+
+    # Botões: mesma lógica do card padrão (chave da venda é a mesma)
+    aberta = st.session_state.get("cv_busca_aberta", {}).get(chave_str, False)
+    form_lig = st.session_state.get("cv_lig_form_aberto", {}).get(chave_str, False)
+
+    st.markdown('<div class="cv-btn-busca-wrapper"></div>', unsafe_allow_html=True)
+
+    col_btn_buscar, col_btn_ligar = st.columns(2)
+
+    with col_btn_buscar:
+        label_buscar = "✕  Fechar busca" if aberta else "🔍  Buscar par no Sankhya"
+        if st.button(label_buscar, key=f"cv_toggle_busca_grp_{idx_card}", use_container_width=True):
+            if not aberta:
+                # Pré-preenche com valor TOTAL da venda (não da parcela)
+                try:
+                    texto_pre = f"{valor_total_venda:.2f}".replace(".", ",")
+                except (ValueError, TypeError):
+                    texto_pre = ""
+                busca_txt = st.session_state.get("cv_busca_texto", {})
+                busca_txt[chave_str] = texto_pre
+                st.session_state["cv_busca_texto"] = busca_txt
+                if form_lig:
+                    st.session_state["cv_lig_form_aberto"][chave_str] = False
+            _acao_toggle_busca(chave_str)
+            st.rerun()
+
+    with col_btn_ligar:
+        label_ligar = "✕  Cancelar" if form_lig else "📝  Ligar manualmente"
+        if st.button(label_ligar, key=f"cv_toggle_lig_grp_{idx_card}", use_container_width=True,
+                     type="primary" if not form_lig else "secondary"):
+            _acao_toggle_form_ligar(chave_str)
+            st.rerun()
+
+    if aberta:
+        _render_busca_inline(venda, chave_str, idx_card)
+
+    if form_lig:
+        _render_form_ligar_manual(venda, chave_str, idx_card)
+
+    st.markdown('<div style="margin-bottom:10px;"></div>', unsafe_allow_html=True)
+
+
 def _render_pill_a_analisar(resultado):
     hoje = date.today()
     ambiguos = resultado.a_analisar_ambiguos
@@ -2574,7 +2849,7 @@ def _render_pill_a_analisar(resultado):
     renderizados = 0
     idx = 0
 
-    # 1. Ambíguos (mais urgentes)
+    # 1. Ambíguos (mais urgentes) — não agrupamos porque o motor já expôs candidatos
     for venda in ambiguos_pendentes:
         if renderizados >= max_cards:
             break
@@ -2582,7 +2857,7 @@ def _render_pill_a_analisar(resultado):
         renderizados += 1
         idx += 1
 
-    # 2. Divergências reais e depois aguardando faturamento
+    # 2. Divergências reais e depois aguardando faturamento — AGRUPAR por venda
     divergencias = []
     aguardando = []
     for venda in vst_pendentes:
@@ -2592,24 +2867,33 @@ def _render_pill_a_analisar(resultado):
         else:
             aguardando.append(venda)
 
-    for venda in divergencias:
+    # Agrupa cada bloco preservando ordem
+    divergencias_agrupadas = _agrupar_parcelas_por_venda(divergencias)
+    aguardando_agrupadas = _agrupar_parcelas_por_venda(aguardando)
+
+    for grupo in divergencias_agrupadas:
         if renderizados >= max_cards:
             break
-        _render_card_venda_sem_titulo(venda, idx, hoje)
+        _render_card_venda_agrupada(grupo, idx, hoje)
         renderizados += 1
         idx += 1
 
-    for venda in aguardando:
+    for grupo in aguardando_agrupadas:
         if renderizados >= max_cards:
             break
-        _render_card_venda_sem_titulo(venda, idx, hoje)
+        _render_card_venda_agrupada(grupo, idx, hoje)
         renderizados += 1
         idx += 1
 
-    if renderizados < total:
+    # Total real (em vendas, não parcelas)
+    total_vendas = (len(ambiguos_pendentes)
+                    + len(divergencias_agrupadas) + len(aguardando_agrupadas)
+                    + len(ligacoes_desf))
+
+    if renderizados < total_vendas:
         col1, col2 = st.columns([3, 1])
         with col1:
-            st.caption(f"Mostrando {renderizados} de {total} · aumente o limite pra ver mais")
+            st.caption(f"Mostrando {renderizados} de {total_vendas} vendas · aumente o limite pra ver mais")
         with col2:
             if st.button("Mostrar +20", key="cv_mais_a_analisar", use_container_width=True):
                 st.session_state["cv_max_cards_a_analisar"] = max_cards + 20
