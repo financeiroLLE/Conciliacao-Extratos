@@ -176,6 +176,101 @@ _CSS = f"""
     border-left: 4px solid {AMARELO_ESCURO};
 }}
 .cv-balanco-card-destaque {{ border-left: 4px solid {AMARELO_ESCURO}; }}
+
+/* -------- DETALHE ADQUIRENTE (Getnet / Cielo em R$) -------- */
+.cv-detalhe-adq-wrap {{
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid #EEEEEE;
+}}
+.cv-detalhe-adq {{
+    display: flex;
+    align-items: center;
+    padding: 4px 0;
+    font-size: 13px;
+}}
+.cv-detalhe-bullet {{
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 2px;
+    margin-right: 8px;
+    flex-shrink: 0;
+}}
+.cv-detalhe-nome {{
+    color: {AZUL_NAVY} !important;
+    -webkit-text-fill-color: {AZUL_NAVY} !important;
+    font-weight: 500;
+    min-width: 100px;
+}}
+.cv-detalhe-n {{
+    color: {TEXTO_MUTED} !important;
+    -webkit-text-fill-color: {TEXTO_MUTED} !important;
+    font-size: 11px;
+    flex: 1;
+}}
+.cv-detalhe-valor {{
+    color: {AZUL_NAVY} !important;
+    -webkit-text-fill-color: {AZUL_NAVY} !important;
+    font-weight: 600;
+    text-align: right;
+}}
+
+/* -------- CARD DIFERENÇA (largura total) -------- */
+.cv-card-diferenca {{
+    background: #FFF9E5;
+    border: 1px solid #F0AD00;
+    border-left: 6px solid #F0AD00;
+    border-radius: 8px;
+    padding: 16px 20px;
+    margin-top: 12px;
+    margin-bottom: 12px;
+}}
+.cv-card-diferenca-ok {{
+    background: #EAF5EE;
+    border-color: {VERDE};
+    border-left-color: {VERDE};
+}}
+.cv-diferenca-label {{
+    font-size: 10px;
+    color: #7A6800 !important;
+    -webkit-text-fill-color: #7A6800 !important;
+    font-weight: 600;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    margin-bottom: 6px;
+}}
+.cv-diferenca-valor {{
+    font-size: 20px;
+    font-weight: 600;
+    color: {AZUL_NAVY} !important;
+    -webkit-text-fill-color: {AZUL_NAVY} !important;
+    margin-bottom: 4px;
+}}
+.cv-diferenca-txt {{
+    font-size: 13px;
+    color: {TEXTO_MUTED} !important;
+    -webkit-text-fill-color: {TEXTO_MUTED} !important;
+    font-weight: 400;
+    margin-left: 4px;
+}}
+.cv-diferenca-sub {{
+    font-size: 12px;
+    color: {AZUL_NAVY} !important;
+    -webkit-text-fill-color: {AZUL_NAVY} !important;
+    margin-bottom: 4px;
+}}
+.cv-diferenca-sub b {{
+    color: {AZUL_NAVY} !important;
+    -webkit-text-fill-color: {AZUL_NAVY} !important;
+}}
+.cv-diferenca-explic {{
+    font-size: 11px;
+    color: {TEXTO_MUTED} !important;
+    -webkit-text-fill-color: {TEXTO_MUTED} !important;
+    font-style: italic;
+    margin-top: 4px;
+}}
 .cv-balanco-label {{ font-size: 10px; color: {TEXTO_MUTED}; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 8px; font-weight: 600; }}
 .cv-balanco-valor {{ font-size: 24px; font-weight: 600; color: {AZUL_NAVY}; }}
 .cv-balanco-sub   {{ font-size: 12px; color: {TEXTO_MUTED}; margin-top: 4px; }}
@@ -1650,7 +1745,7 @@ def _render_kpis_importacao():
 # ==============================================================================
 
 def _render_topo_resultado(resultado):
-    """Cabeçalho + balanço + barras por adquirente. Tudo em cards creme."""
+    """Cabeçalho + cards enxutos (adquirente + progresso + diferença) + barras."""
     hoje = date.today()
     df_cielo = st.session_state.get("cv_df_cielo")
     df_getnet = st.session_state.get("cv_df_getnet_vendas")
@@ -1660,11 +1755,6 @@ def _render_topo_resultado(resultado):
     tot_sk = _calcular_total_sankhya_elegivel(df_sk, resultado=resultado)
 
     diff = tot_adq["total"] - tot_sk["total"]
-    bate = abs(diff) < 0.01
-    if bate:
-        diff_html = f'<span class="cv-balanco-ok">· bate ao centavo</span>'
-    else:
-        diff_html = f'<span class="cv-balanco-diff">· dif {_fmt_moeda(abs(diff))}</span>'
 
     # Cabeçalho da rodada
     tol = st.session_state.get("cv_tolerancia_dias", 2)
@@ -1676,72 +1766,139 @@ def _render_topo_resultado(resultado):
     )
     st.markdown(header_html, unsafe_allow_html=True)
 
-    # Balanço lado a lado (usando st.columns pra evitar problemas de layout)
+    # ---- KPIs em VENDAS AGRUPADAS (não parcelas) ----
+    # Para a contagem casar com a pill "A analisar"
+    kpis = _calcular_kpis_por_adquirente(resultado, df_cielo, df_getnet)
+
+    # Contar VENDAS agrupadas (não parcelas)
+    def _n_vendas_unicas(df):
+        if df is None or df.empty:
+            return 0
+        if "adquirente" in df.columns and "nsu" in df.columns:
+            return df[["adquirente", "nsu"]].drop_duplicates().shape[0]
+        return len(df)
+
+    vendas_adq_total = _n_vendas_unicas(df_cielo) + _n_vendas_unicas(df_getnet)
+
+    # Vendas conciliadas (G1 + G2, agrupadas por venda)
+    vendas_conciliadas = 0
+    valor_conciliado = 0.0
+    for df in (resultado.grupo_1_conciliadas, resultado.grupo_2_ja_baixadas):
+        if df is None or df.empty:
+            continue
+        vendas_conciliadas += _n_vendas_unicas(df)
+        if "valor_match" in df.columns:
+            # somar apenas a 1ª parcela de cada venda para não duplicar
+            grp = df.groupby(["adquirente", "nsu"], as_index=False)["valor_match"].sum() if "nsu" in df.columns else df
+            valor_conciliado += float(grp["valor_match"].sum())
+
+    # Vendas pendentes (sem par + ambíguos, agrupadas)
+    vendas_sem_par = _n_vendas_unicas(resultado.a_analisar_venda_sem_titulo)
+    vendas_ambiguas = _n_vendas_unicas(resultado.a_analisar_ambiguos)
+    vendas_pendentes = vendas_sem_par + vendas_ambiguas
+
+    # Recalcular valor pendente com base em vendas únicas
+    valor_pendente = 0.0
+    for df in (resultado.a_analisar_venda_sem_titulo, resultado.a_analisar_ambiguos):
+        if df is None or df.empty or "valor_match" not in df.columns:
+            continue
+        if "nsu" in df.columns:
+            grp = df.groupby(["adquirente", "nsu"], as_index=False)["valor_match"].sum()
+            valor_pendente += float(grp["valor_match"].sum())
+        else:
+            valor_pendente += float(df["valor_match"].sum())
+
+    pct_resolvido = (valor_conciliado / tot_adq["total"] * 100) if tot_adq["total"] > 0 else 0.0
+
+    # ---- Card 1: VENDAS DOS ADQUIRENTES ----
     col1, col2 = st.columns(2)
 
-    # KPIs para calcular progresso global (auto + manuais)
-    kpis = _calcular_kpis_por_adquirente(resultado, df_cielo, df_getnet)
-    total_vendas = tot_adq["total_n"]
-    resolvido_n = kpis["getnet"]["resolvido"] + kpis["cielo"]["resolvido"]
-    resolvido_vlr = kpis["getnet"]["valor_resolvido"] + kpis["cielo"]["valor_resolvido"]
-    pct_resolvido = round(resolvido_n / total_vendas * 100, 1) if total_vendas > 0 else 0.0
-    faltam_n = max(0, total_vendas - resolvido_n)
-    faltam_vlr = max(0.0, tot_adq["total"] - resolvido_vlr)
-
     with col1:
-        # Progresso sempre visível no topo do card
-        if resolvido_n > 0:
-            progresso_html = (
-                f'<div style="font-size:11px;color:{VERDE};margin-top:6px;font-weight:600;">'
-                f'✓ {_fmt_moeda(resolvido_vlr)} resolvido ({pct_resolvido:.1f}%)'
-                f'</div>'
-                f'<div style="font-size:11px;color:{TEXTO_MUTED};margin-top:2px;">'
-                f'Faltam {_fmt_moeda(faltam_vlr)} · {faltam_n} vendas'
-                f'</div>'
-            )
-        else:
-            progresso_html = ""
+        # Detalhe Getnet / Cielo em R$
+        det_getnet = (
+            f'<div class="cv-detalhe-adq">'
+            f'<span class="cv-detalhe-bullet" style="background:{AMARELO};"></span>'
+            f'<span class="cv-detalhe-nome">Getnet</span>'
+            f'<span class="cv-detalhe-n">{tot_adq["getnet_n"]} vendas</span>'
+            f'<span class="cv-detalhe-valor">{_fmt_moeda(tot_adq["getnet_total"])}</span>'
+            f'</div>'
+        ) if tot_adq["getnet_total"] > 0 else ""
+
+        det_cielo = (
+            f'<div class="cv-detalhe-adq">'
+            f'<span class="cv-detalhe-bullet" style="background:{AZUL};"></span>'
+            f'<span class="cv-detalhe-nome">Cielo</span>'
+            f'<span class="cv-detalhe-n">{tot_adq["cielo_n"]} vendas</span>'
+            f'<span class="cv-detalhe-valor">{_fmt_moeda(tot_adq["cielo_total"])}</span>'
+            f'</div>'
+        ) if tot_adq["cielo_total"] > 0 else ""
 
         html1 = (
             f'<div class="cv-balanco-card">'
-            f'<div class="cv-balanco-label">Total Adquirente</div>'
+            f'<div class="cv-balanco-label">Vendas dos adquirentes</div>'
             f'<div class="cv-balanco-valor">{_fmt_moeda(tot_adq["total"])}</div>'
-            f'<div class="cv-balanco-sub">{tot_adq["total_n"]} vendas · Getnet {tot_adq["getnet_n"]} · Cielo {tot_adq["cielo_n"]}</div>'
-            f'{progresso_html}'
+            f'<div class="cv-balanco-sub">{tot_adq["total_n"]} vendas no período</div>'
+            f'<div class="cv-detalhe-adq-wrap">{det_getnet}{det_cielo}</div>'
             f'</div>'
         )
         st.markdown(html1, unsafe_allow_html=True)
 
+    # ---- Card 2: PROGRESSO DA CONCILIAÇÃO ----
     with col2:
-        # Progresso do lado Sankhya (títulos contemplados por matches)
-        contemplado_sk = tot_sk.get("contemplado", 0.0)
-        contemplado_sk_n = tot_sk.get("contemplado_n", 0)
-        if contemplado_sk > 0 and tot_sk["total"] > 0:
-            pct_sk = round(contemplado_sk / tot_sk["total"] * 100, 1)
-            falta_sk = max(0.0, tot_sk["total"] - contemplado_sk)
-            falta_sk_n = max(0, tot_sk["total_n"] - contemplado_sk_n)
-            progresso_sk_html = (
-                f'<div style="font-size:11px;color:{VERDE};margin-top:6px;font-weight:600;">'
-                f'✓ {_fmt_moeda(contemplado_sk)} contemplado ({pct_sk:.1f}%)'
-                f'</div>'
-                f'<div style="font-size:11px;color:{TEXTO_MUTED};margin-top:2px;">'
-                f'Faltam {_fmt_moeda(falta_sk)} · {falta_sk_n} títulos'
-                f'</div>'
-            )
-        else:
-            progresso_sk_html = ""
+        det_conciliado = (
+            f'<div class="cv-detalhe-adq">'
+            f'<span class="cv-detalhe-bullet" style="background:{VERDE};"></span>'
+            f'<span class="cv-detalhe-nome" style="color:{VERDE};">Conciliado</span>'
+            f'<span class="cv-detalhe-n">{vendas_conciliadas} vendas</span>'
+            f'<span class="cv-detalhe-valor" style="color:{VERDE};">{_fmt_moeda(valor_conciliado)}</span>'
+            f'</div>'
+        )
+        det_pendente = (
+            f'<div class="cv-detalhe-adq">'
+            f'<span class="cv-detalhe-bullet" style="background:{VERMELHO};"></span>'
+            f'<span class="cv-detalhe-nome" style="color:{VERMELHO};">Falta atrelar</span>'
+            f'<span class="cv-detalhe-n">{vendas_pendentes} vendas</span>'
+            f'<span class="cv-detalhe-valor" style="color:{VERMELHO};">{_fmt_moeda(valor_pendente)}</span>'
+            f'</div>'
+        ) if vendas_pendentes > 0 else ""
 
         html2 = (
-            f'<div class="cv-balanco-card cv-balanco-card-destaque">'
-            f'<div class="cv-balanco-label">Total Sankhya {diff_html}</div>'
-            f'<div class="cv-balanco-valor">{_fmt_moeda(tot_sk["total"])}</div>'
-            f'<div class="cv-balanco-sub">{tot_sk["total_n"]} títulos elegíveis (nota + adiantamento)</div>'
-            f'{progresso_sk_html}'
+            f'<div class="cv-balanco-card" style="border-left:4px solid {VERDE};">'
+            f'<div class="cv-balanco-label" style="color:{VERDE};">Progresso da conciliação</div>'
+            f'<div class="cv-balanco-valor">{pct_resolvido:.1f}%</div>'
+            f'<div class="cv-balanco-sub">Do valor total das vendas do adquirente</div>'
+            f'<div class="cv-detalhe-adq-wrap">{det_conciliado}{det_pendente}</div>'
             f'</div>'
         )
         st.markdown(html2, unsafe_allow_html=True)
 
-    # Barras por adquirente — 3 partes empilhadas: NSU + auto + suas ações
+    # ---- Card 3 (largura total): DIFERENÇA ADQUIRENTE vs SANKHYA ----
+    if abs(diff) >= 0.01:
+        html_dif = (
+            f'<div class="cv-card-diferenca">'
+            f'<div class="cv-diferenca-label">Diferença entre adquirente e Sankhya</div>'
+            f'<div class="cv-diferenca-valor">{_fmt_moeda(abs(diff))} <span class="cv-diferenca-txt">a ser explicado</span></div>'
+            f'<div class="cv-diferenca-sub">'
+            f'Adquirente: <b>{_fmt_moeda(tot_adq["total"])}</b> · '
+            f'Sankhya elegível: <b>{_fmt_moeda(tot_sk["total"])}</b> ({tot_sk["total_n"]} títulos)'
+            f'</div>'
+            f'<div class="cv-diferenca-explic">'
+            f'Essa é a diferença bruta a explicar. Parte pode ser aguardando faturamento, '
+            f'parte já baixado no Sankhya, parte a criar via ligação manual.'
+            f'</div>'
+            f'</div>'
+        )
+        st.markdown(html_dif, unsafe_allow_html=True)
+    else:
+        html_dif = (
+            f'<div class="cv-card-diferenca cv-card-diferenca-ok">'
+            f'<div class="cv-diferenca-label" style="color:{VERDE};">Adquirente e Sankhya</div>'
+            f'<div class="cv-diferenca-valor" style="color:{VERDE};">✓ Bate ao centavo</div>'
+            f'</div>'
+        )
+        st.markdown(html_dif, unsafe_allow_html=True)
+
+    # ---- Barras por adquirente (mantidas — mostram NSU vs auto vs suas) ----
     linhas_partes = []
     for adq_key in ("getnet", "cielo"):
         d = kpis[adq_key]
@@ -1751,13 +1908,11 @@ def _render_topo_resultado(resultado):
         pct_nsu = round(n_nsu / d["total"] * 100, 1) if d["total"] > 0 else 0.0
         pct_auto = round(d["auto"] / d["total"] * 100, 1) if d["total"] > 0 else 0.0
         pct_total = d["pct"]
-        # Larguras das 3 fatias (todas somando ao pct_total)
         w_nsu = min(pct_nsu, 100)
         w_auto = max(0, min(pct_nsu + pct_auto, 100) - w_nsu)
         w_manuais = max(0, min(pct_total, 100) - w_nsu - w_auto)
         nome = _label_adquirente(adq_key)
 
-        # Info de contagem
         partes_info = []
         if n_nsu > 0:
             partes_info.append(f'{n_nsu} NSU')
@@ -3773,10 +3928,7 @@ def _render_tela_resultado():
     _render_topo_resultado(resultado)
     _render_confirmacao_desfazer()
 
-    # Tarja de progresso global (sempre visível, atualiza a cada ação)
-    df_cielo_p = st.session_state.get("cv_df_cielo")
-    df_getnet_p = st.session_state.get("cv_df_getnet_vendas")
-    _render_tarja_progresso(resultado, df_cielo_p, df_getnet_p)
+    # (Tarja de progresso removida — já aparece no card "Progresso da conciliação")
 
     _render_pills(contadores)
 
