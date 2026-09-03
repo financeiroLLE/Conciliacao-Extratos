@@ -1826,7 +1826,7 @@ def _render_topo_resultado(resultado):
 
         det_cielo = (
             f'<div class="cv-detalhe-adq">'
-            f'<span class="cv-detalhe-bullet" style="background:{AZUL};"></span>'
+            f'<span class="cv-detalhe-bullet" style="background:#0071FE;"></span>'
             f'<span class="cv-detalhe-nome">Cielo</span>'
             f'<span class="cv-detalhe-n">{tot_adq["cielo_n"]} vendas</span>'
             f'<span class="cv-detalhe-valor">{_fmt_moeda(tot_adq["cielo_total"])}</span>'
