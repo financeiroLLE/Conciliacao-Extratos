@@ -374,11 +374,25 @@ def autenticar():
     return nome, username
 
 
-def render_sidebar_usuario(nome: str, username: str = "") -> None:
-    """Renderiza o card do usuário na sidebar (silhueta + nome + botão Sair).
+def render_sidebar_usuario(nome: str, username: str = "", perfil: str = "") -> None:
+    """Renderiza o card do usuário na sidebar (silhueta + nome + email + perfil + botão Sair).
     Deve ser chamada DENTRO de um bloco `with st.sidebar:` no app.py,
     logo APÓS o card institucional GRUPO LLE e ANTES dos menus."""
     st.markdown(_CSS_SIDEBAR_USER, unsafe_allow_html=True)
+
+    # Linhas extras: email (quando existe) e perfil (default 'Colaborador')
+    linhas_extra = ""
+    if username and username != "-":
+        linhas_extra += (
+            f'<div class="lle-user-email" style="font-size:11px; color:#0A1730; '
+            f'opacity:0.75; margin-top:2px; word-break:break-word;">{username}</div>'
+        )
+    perfil_txt = perfil if (perfil and perfil != "-") else "Colaborador"
+    linhas_extra += (
+        f'<div class="lle-user-role" style="font-size:10px; color:#0A1730; '
+        f'font-weight:600; margin-top:4px; text-transform:uppercase; letter-spacing:0.5px;">'
+        f'{perfil_txt}</div>'
+    )
 
     st.markdown(
         f"""
@@ -391,6 +405,7 @@ def render_sidebar_usuario(nome: str, username: str = "") -> None:
             </div>
             <div class="lle-user-info">
               <div class="lle-user-name">{nome}</div>
+              {linhas_extra}
             </div>
           </div>
         </div>
