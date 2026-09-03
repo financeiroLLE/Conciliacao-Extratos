@@ -305,6 +305,8 @@ if not is_logged_in():
 _user_sb = current_user()
 _nome_logado = _user_sb.get("nome_completo", "-") if _user_sb else "-"
 _usuario_logado = _user_sb.get("email", "-") if _user_sb else "-"
+_perfil_logado = _user_sb.get("perfil") if _user_sb else None
+_perfil_logado = _perfil_logado if _perfil_logado else "Colaborador"
 
 
 # ============================================================
@@ -1621,7 +1623,7 @@ with st.sidebar:
 
     # Card usuario (mantido igual)
     from auth import render_sidebar_usuario  # noqa: E402
-    render_sidebar_usuario(_nome_logado or "", _usuario_logado or "")
+    render_sidebar_usuario(_nome_logado or "", _usuario_logado or "", _perfil_logado or "")
 
     # ============================================================
     # VISÃO GERAL
