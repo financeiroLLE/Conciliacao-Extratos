@@ -455,6 +455,105 @@ class ResultadoMotor:
         }
 
 
+def _matching_por_nsu(
+    df_vendas: pd.DataFrame,
+    df_elegiveis: pd.DataFrame,
+) -> tuple:
+    """PASSADA 0 — matching direto por NSU (máxima precisão, novo).
+
+    Aprovado com Débora em 03/09/2026.
+
+    Contexto: o Financeiro do Sankhya passou a expor a coluna 'nsu' quando
+    a Débora/Beatriz adicionam ela na grade antes de exportar. Esse NSU é
+    o mesmo NSU da transação do adquirente (Getnet TEF gravou nativamente).
+
+    Regras:
+      1. Só considera títulos Sankhya COM 'nsu' preenchido (não vazio)
+      2. Agrupa vendas por (adquirente, nsu) → total_venda (soma parcelas)
+      3. Agrupa títulos Sankhya por nsu → total_titulos (soma desdobramentos)
+      4. Match único quando NSU do adquirente == NSU do Sankhya
+      5. Não checa data (NSU é chave forte, dispensa)
+      6. Se valores não baterem exato, ainda casa (marca 'divergencia_valor')
+
+    Retorna:
+      matches_grupo_1, matches_grupo_2, ids_vendas_casadas, idx_sk_casados
+    """
+    matches_grupo_1 = []
+    matches_grupo_2 = []
+    ids_vendas_casadas = set()
+    idx_sk_casados = set()
+
+    if df_vendas is None or df_vendas.empty or df_elegiveis is None or df_elegiveis.empty:
+        return matches_grupo_1, matches_grupo_2, ids_vendas_casadas, idx_sk_casados
+
+    # 1. Só títulos Sankhya com NSU preenchido
+    if "nsu" not in df_elegiveis.columns:
+        return matches_grupo_1, matches_grupo_2, ids_vendas_casadas, idx_sk_casados
+    df_sk_com_nsu = df_elegiveis[
+        df_elegiveis["nsu"].astype(str).str.strip() != ""
+    ].copy()
+    if df_sk_com_nsu.empty:
+        return matches_grupo_1, matches_grupo_2, ids_vendas_casadas, idx_sk_casados
+
+    # Normalizar NSU (remover zeros à esquerda para comparar)
+    df_sk_com_nsu["nsu_norm"] = df_sk_com_nsu["nsu"].astype(str).str.strip().str.lstrip("0")
+
+    df_v = df_vendas.copy()
+    df_v = df_v[df_v["nsu"].astype(str).str.strip() != ""]
+    if df_v.empty:
+        return matches_grupo_1, matches_grupo_2, ids_vendas_casadas, idx_sk_casados
+    df_v["nsu_norm"] = df_v["nsu"].astype(str).str.strip().str.lstrip("0")
+
+    # 2. Agrupar vendas por (adquirente, nsu_norm) — soma das parcelas
+    vendas_agr = df_v.groupby(["adquirente", "nsu_norm"], as_index=False).agg(
+        total_venda=("valor_match", "sum"),
+        parcelas_total=("parcelas_total", "first"),
+        nsu_original=("nsu", "first"),
+        data_venda=("data_venda", "first"),
+    )
+
+    # 3. Para cada NSU único da venda, buscar títulos Sankhya com mesmo NSU
+    for _, venda_agr in vendas_agr.iterrows():
+        nsu_v = venda_agr["nsu_norm"]
+        adq_v = venda_agr["adquirente"]
+
+        # Todos os títulos Sankhya com esse NSU (podem ser várias parcelas)
+        titulos = df_sk_com_nsu[df_sk_com_nsu["nsu_norm"] == nsu_v]
+        if titulos.empty:
+            continue
+
+        # Casar cada parcela da venda com um título correspondente
+        # (motor casa por NSU, então NÃO precisa comparar datas nem valores exatos)
+        parcelas_venda = df_v[
+            (df_v["adquirente"] == adq_v) & (df_v["nsu_norm"] == nsu_v)
+        ].sort_values("parcela_atual")
+
+        # Ordenar títulos pelo desdob (parcela 1 → desdob mais antigo)
+        titulos_ord = titulos.sort_values("dt_vencimento")
+
+        # Pareamento sequencial parcela × desdob
+        parcelas_lst = list(parcelas_venda.iterrows())
+        titulos_lst = list(titulos_ord.iterrows())
+        n_par = min(len(parcelas_lst), len(titulos_lst))
+
+        for k in range(n_par):
+            _, parcela = parcelas_lst[k]
+            _, titulo = titulos_lst[k]
+            idx_sk = titulo["idx_sankhya"]
+            match = _montar_match(parcela, titulo, match_permissivo=False)
+            match["fonte_match"] = "nsu_direto"
+            idx_sk_casados.add(idx_sk)
+
+            if titulo["situacao"] == "em_aberto":
+                matches_grupo_1.append(match)
+            else:  # baixado_cartao
+                matches_grupo_2.append(match)
+
+        ids_vendas_casadas.add((adq_v, venda_agr["nsu_original"]))
+
+    return matches_grupo_1, matches_grupo_2, ids_vendas_casadas, idx_sk_casados
+
+
 def _matching_agregado_por_nota(
     df_vendas: pd.DataFrame,
     df_elegiveis: pd.DataFrame,
@@ -637,6 +736,41 @@ def rodar(
     matches_grupo_2 = []
     ambiguos = []
     titulos_casados_ids = set()
+    vendas_casadas_nsu = set()  # (adquirente, nsu) casadas pela Passada 0 (NSU direto)
+
+    # ==========================================================================
+    # PASSADA 0 · MATCH DIRETO POR NSU (novo — máxima precisão)
+    # ==========================================================================
+    # Quando o Sankhya exporta o campo "NSU" no Financeiro (integração TEF ativa),
+    # temos a chave universal para cruzar venda ↔ título sem depender de valor+data.
+    #
+    # Regras:
+    #   1. Só considera títulos Sankhya COM NSU preenchido
+    #   2. Para cada venda com NSU, agrupa parcelas por (adquirente, nsu) → soma valor bruto
+    #   3. Para cada NSU do Sankhya, agrupa desdobramentos por nsu → soma valor
+    #   4. Match único quando o NSU do adquirente = NSU do Sankhya
+    #   5. Se o mesmo NSU aparecer em N títulos Sankhya (parcelas), casa todos
+    #      com todas as parcelas correspondentes da venda
+    #
+    # Marca fonte_match = "nsu_direto" para o app diferenciar visualmente
+    matches_grupo_1_p0, matches_grupo_2_p0, ids_vendas_p0, idx_sk_p0 = _matching_por_nsu(
+        df_vendas, df_elegiveis
+    )
+    matches_grupo_1.extend(matches_grupo_1_p0)
+    matches_grupo_2.extend(matches_grupo_2_p0)
+    titulos_casados_ids.update(idx_sk_p0)
+    vendas_casadas_nsu.update(ids_vendas_p0)
+
+    # Vendas restantes para próximas passadas: as que NÃO foram casadas por NSU
+    def _chave_venda_p0(v):
+        return (v.get("adquirente"), v.get("nsu"))
+    if not df_vendas.empty:
+        df_vendas = df_vendas[
+            ~df_vendas.apply(lambda v: _chave_venda_p0(v) in ids_vendas_p0, axis=1)
+        ].copy()
+
+    # Títulos restantes para próximas passadas
+    df_elegiveis = df_elegiveis[~df_elegiveis["idx_sankhya"].isin(idx_sk_p0)].copy()
 
     # ==========================================================================
     # PASSADA A · AGREGADA por valor total (venda × nota)
