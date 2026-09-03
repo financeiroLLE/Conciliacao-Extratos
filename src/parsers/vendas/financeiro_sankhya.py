@@ -111,6 +111,8 @@ COLUNAS_SAIDA = [
     "modalidade_inferida",       # "debito" | "credito_avista" | "credito_parcelado" | None
     "esta_baixado",
     "esta_conciliado",
+    "nsu",                       # NSU da transação (novo — só preenchido para GETNET TEF quando exportado)
+    "nome_rede",                 # Rede do cartão informada pelo Sankhya (ex: "GETNET")
 ]
 
 
@@ -324,6 +326,20 @@ def ler(dados: bytes) -> ResultadoLeitura:
     sh = wb.sheet_by_index(0)
     datemode = wb.datemode
 
+    # ===== BLOCO NSU-FIRST — localiza colunas NSU / Nome rede dinamicamente =====
+    # Estas colunas são opcionais: quando a Débora ou Beatriz adicionam a coluna
+    # "NSU" e/ou "Nome rede" na grade do Sankhya antes de exportar, os índices
+    # podem variar. Buscamos pelo nome exato no cabeçalho (linha 2, índice 2).
+    col_nsu = None
+    col_nome_rede = None
+    if sh.nrows >= 3:
+        header_vals = [str(v).strip().lower() for v in sh.row_values(2)]
+        for idx, h in enumerate(header_vals):
+            if h == "nsu":
+                col_nsu = idx
+            elif h == "nome rede":
+                col_nome_rede = idx
+
     linhas = []
     ignoradas = 0
     empresas_set = set()
@@ -362,6 +378,20 @@ def ler(dados: bytes) -> ResultadoLeitura:
         chave_resumo = (top_baixa, top_baixa_desc, grp)
         resumo_top[chave_resumo] = resumo_top.get(chave_resumo, 0) + 1
 
+        # NSU e Nome rede (podem não existir se a Débora esqueceu de adicionar a coluna)
+        nsu_valor = ""
+        if col_nsu is not None and col_nsu < len(row):
+            raw = row[col_nsu]
+            # NSU no Sankhya vem como float (ex: 52170.0) — normaliza pra string sem .0
+            if raw is not None and str(raw).strip() != "":
+                try:
+                    nsu_valor = str(int(float(raw)))
+                except (ValueError, TypeError):
+                    nsu_valor = str(raw).strip()
+        nome_rede_valor = ""
+        if col_nome_rede is not None and col_nome_rede < len(row):
+            nome_rede_valor = str(row[col_nome_rede]).strip()
+
         linhas.append({
             "nro_unico": nro_unico,
             "nro_nota": nro_nota,
@@ -392,6 +422,8 @@ def ler(dados: bytes) -> ResultadoLeitura:
             "modalidade_inferida": mod,
             "esta_baixado": data_baixa is not None,
             "esta_conciliado": dt_conciliacao is not None,
+            "nsu": nsu_valor,
+            "nome_rede": nome_rede_valor,
         })
 
     df = pd.DataFrame(linhas, columns=COLUNAS_SAIDA)
