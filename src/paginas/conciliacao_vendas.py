@@ -1877,14 +1877,14 @@ def _render_topo_resultado(resultado):
         html_dif = (
             f'<div class="cv-card-diferenca">'
             f'<div class="cv-diferenca-label">Diferença entre adquirente e Sankhya</div>'
-            f'<div class="cv-diferenca-valor">{_fmt_moeda(abs(diff))} <span class="cv-diferenca-txt">a ser explicado</span></div>'
+            f'<div class="cv-diferenca-valor">{_fmt_moeda(abs(diff))} <span class="cv-diferenca-txt">a explicar via conciliação manual</span></div>'
             f'<div class="cv-diferenca-sub">'
             f'Adquirente: <b>{_fmt_moeda(tot_adq["total"])}</b> · '
             f'Sankhya elegível: <b>{_fmt_moeda(tot_sk["total"])}</b> ({tot_sk["total_n"]} títulos)'
             f'</div>'
             f'<div class="cv-diferenca-explic">'
-            f'Essa é a diferença bruta a explicar. Parte pode ser aguardando faturamento, '
-            f'parte já baixado no Sankhya, parte a criar via ligação manual.'
+            f'Vendas do adquirente sem título correspondente no Sankhya. '
+            f'Podem ser: aguardando faturamento, acordo comercial, adiantamento em período fechado ou troca/devolução.'
             f'</div>'
             f'</div>'
         )
@@ -1900,6 +1900,7 @@ def _render_topo_resultado(resultado):
 
     # ---- Barras por adquirente (mantidas — mostram NSU vs auto vs suas) ----
     linhas_partes = []
+    dados_adq = []  # para versão compacta
     for adq_key in ("getnet", "cielo"):
         d = kpis[adq_key]
         if d["total"] == 0:
@@ -1912,6 +1913,14 @@ def _render_topo_resultado(resultado):
         w_auto = max(0, min(pct_nsu + pct_auto, 100) - w_nsu)
         w_manuais = max(0, min(pct_total, 100) - w_nsu - w_auto)
         nome = _label_adquirente(adq_key)
+
+        dados_adq.append({
+            "nome": nome,
+            "pct": pct_total,
+            "w_nsu": w_nsu,
+            "w_auto": w_auto,
+            "w_manuais": w_manuais,
+        })
 
         partes_info = []
         if n_nsu > 0:
@@ -1940,38 +1949,82 @@ def _render_topo_resultado(resultado):
         )
 
     if linhas_partes:
-        # Legenda dinâmica conforme o que aparecer
-        tem_nsu = any(kpis[a].get("nsu", 0) > 0 for a in ("getnet","cielo"))
-        tem_manuais = any(kpis[a]["manuais"] > 0 for a in ("getnet","cielo"))
-        legenda_itens = []
-        if tem_nsu:
-            legenda_itens.append(
-                f'<span style="display:inline-block;width:10px;height:10px;background:{VERDE};border-radius:2px;vertical-align:middle;margin-right:4px;"></span>'
-                f'Casado por NSU (100% preciso)'
+        # -------- VERSÃO COMPACTA (sempre visível) --------
+        # Mostra Getnet X% · Cielo X% com micro-barras
+        info_compacta_partes = []
+        for da in dados_adq:
+            info_compacta_partes.append(
+                f'{da["nome"]} <span style="color:{VERDE};font-weight:600;">{da["pct"]:.1f}%</span>'
             )
-        legenda_itens.append(
-            f'<span style="display:inline-block;width:10px;height:10px;background:{AMARELO_ESCURO};border-radius:2px;vertical-align:middle;margin-right:4px;"></span>'
-            f'Auto por valor + data'
-        )
-        if tem_manuais:
-            legenda_itens.append(
-                f'<span style="display:inline-block;width:10px;height:10px;background:#0F6E56;border-radius:2px;vertical-align:middle;margin-right:4px;"></span>'
-                f'Resolvido por você'
-            )
-        legenda = (
-            f'<div style="font-size:10px;color:{TEXTO_MUTED};margin-top:8px;">'
-            + ' &nbsp; · &nbsp; '.join(legenda_itens)
-            + '</div>'
-        )
+        info_compacta = " · ".join(info_compacta_partes)
 
-        bloco_html = (
-            f'<div class="cv-adq-bloco">'
-            f'<div class="cv-adq-titulo">Conciliação por adquirente</div>'
-            f'{"".join(linhas_partes)}'
-            f'{legenda}'
+        micro_barras = []
+        for da in dados_adq:
+            micro_barras.append(
+                f'<div style="margin-top:6px;">'
+                f'<div style="font-size:10px;color:{TEXTO_MUTED};margin-bottom:2px;">{da["nome"]}</div>'
+                f'<div style="display:flex;height:4px;background:#F5F0DC;border-radius:2px;overflow:hidden;">'
+                f'<div style="width:{da["w_nsu"]:.1f}%;background:{VERDE};"></div>'
+                f'<div style="width:{da["w_auto"]:.1f}%;background:{AMARELO_ESCURO};"></div>'
+                f'<div style="width:{da["w_manuais"]:.1f}%;background:#0F6E56;"></div>'
+                f'</div>'
+                f'</div>'
+            )
+
+        bloco_compacto_html = (
+            f'<div class="cv-adq-bloco" style="padding:12px 16px;">'
+            f'<div style="display:flex; justify-content:space-between; align-items:center;">'
+            f'<div class="cv-adq-titulo" style="margin-bottom:0;">Conciliação por adquirente</div>'
+            f'<div style="font-size:12px;color:{AZUL_NAVY};font-weight:500;">{info_compacta}</div>'
+            f'</div>'
+            f'{"".join(micro_barras)}'
             f'</div>'
         )
-        st.markdown(bloco_html, unsafe_allow_html=True)
+        st.markdown(bloco_compacto_html, unsafe_allow_html=True)
+
+        # -------- BOTÃO EXPANDIR --------
+        expandir = st.session_state.get("cv_barra_adq_expandida", False)
+        seta = "▾" if expandir else "▸"
+        if st.button(
+            f"{seta} Ver detalhes por adquirente",
+            key="cv_toggle_barra_adq",
+            use_container_width=False,
+        ):
+            st.session_state["cv_barra_adq_expandida"] = not expandir
+            st.rerun()
+
+        # -------- VERSÃO EXPANDIDA (só se expandido) --------
+        if expandir:
+            tem_nsu = any(kpis[a].get("nsu", 0) > 0 for a in ("getnet","cielo"))
+            tem_manuais = any(kpis[a]["manuais"] > 0 for a in ("getnet","cielo"))
+            legenda_itens = []
+            if tem_nsu:
+                legenda_itens.append(
+                    f'<span style="display:inline-block;width:10px;height:10px;background:{VERDE};border-radius:2px;vertical-align:middle;margin-right:4px;"></span>'
+                    f'Casado por NSU (100% preciso)'
+                )
+            legenda_itens.append(
+                f'<span style="display:inline-block;width:10px;height:10px;background:{AMARELO_ESCURO};border-radius:2px;vertical-align:middle;margin-right:4px;"></span>'
+                f'Auto por valor + data'
+            )
+            if tem_manuais:
+                legenda_itens.append(
+                    f'<span style="display:inline-block;width:10px;height:10px;background:#0F6E56;border-radius:2px;vertical-align:middle;margin-right:4px;"></span>'
+                    f'Resolvido por você'
+                )
+            legenda = (
+                f'<div style="font-size:10px;color:{TEXTO_MUTED};margin-top:8px;">'
+                + ' &nbsp; · &nbsp; '.join(legenda_itens)
+                + '</div>'
+            )
+
+            bloco_html = (
+                f'<div class="cv-adq-bloco">'
+                f'{"".join(linhas_partes)}'
+                f'{legenda}'
+                f'</div>'
+            )
+            st.markdown(bloco_html, unsafe_allow_html=True)
 
 
 def _render_tarja_progresso(resultado, df_cielo, df_getnet):
@@ -2028,29 +2081,111 @@ def _render_tarja_progresso(resultado, df_cielo, df_getnet):
 
 
 def _render_pills(contadores: Dict[str, int]):
-    """5 pills clicáveis via st.button."""
-    ordem = [
-        ("a_analisar", "A analisar", contadores["a_analisar"]),
-        ("auto_conciliadas", "Conciliadas", contadores["auto_conciliadas"]),
-        ("compensadas", "Compensadas", contadores["compensadas"]),
-        ("aguardando", "Aguardando", contadores["aguardando"]),
-        ("devolucoes", "Devoluções", contadores["devolucoes"]),
-    ]
+    """Pills: 2 principais em destaque (A analisar + Conciliadas) + 'Ver mais'."""
     ativa = st.session_state.get("cv_pill_ativa", "a_analisar")
 
     st.markdown('<div style="margin: 16px 0 4px 0;"></div>', unsafe_allow_html=True)
-    cols = st.columns(5)
-    for i, (key, label, count) in enumerate(ordem):
-        with cols[i]:
-            is_ativa = (key == ativa)
-            texto = f"{label} · {count}"
+
+    # ---- Duas pills PRINCIPAIS em destaque ----
+    col_a, col_b = st.columns(2)
+
+    with col_a:
+        n = contadores["a_analisar"]
+        if st.button(
+            f"A analisar · {n}",
+            key="cv_pill_a_analisar",
+            type="primary" if ativa == "a_analisar" else "secondary",
+            use_container_width=True,
+        ):
+            st.session_state["cv_pill_ativa"] = "a_analisar"
+            st.rerun()
+
+    with col_b:
+        n = contadores["auto_conciliadas"]
+        if st.button(
+            f"Conciliadas · {n}",
+            key="cv_pill_auto_conciliadas",
+            type="primary" if ativa == "auto_conciliadas" else "secondary",
+            use_container_width=True,
+        ):
+            st.session_state["cv_pill_ativa"] = "auto_conciliadas"
+            st.rerun()
+
+    # ---- "Ver processadas automaticamente" (colapsável) ----
+    n_comp = contadores.get("compensadas", 0)
+    n_agu = contadores.get("aguardando", 0)
+    n_dev = contadores.get("devolucoes", 0)
+    total_secundarias = n_comp + n_agu + n_dev
+
+    # Se tiver devoluções, mostra alerta forçando expandir
+    tem_alerta_devolucao = n_dev > 0
+
+    expandido = st.session_state.get("cv_pills_secundarias_expandidas", False) or tem_alerta_devolucao
+
+    # Botão discreto pra expandir/colapsar
+    seta = "▾" if expandido else "▸"
+    label_toggle = f"{seta} Ver processadas automaticamente ({total_secundarias})"
+    if tem_alerta_devolucao:
+        label_toggle += f"  ⚠️ {n_dev} devoluções precisam de atenção"
+
+    col_toggle_a, col_toggle_b = st.columns([3, 1])
+    with col_toggle_a:
+        if st.button(
+            label_toggle,
+            key="cv_toggle_pills_secundarias",
+            use_container_width=False,
+        ):
+            st.session_state["cv_pills_secundarias_expandidas"] = not expandido
+            st.rerun()
+
+    # ---- Pills SECUNDÁRIAS (escondidas por padrão) ----
+    if expandido:
+        st.markdown(
+            f'<div style="background:{AZUL_NAVY_SUAVE}; padding:10px; border-radius:6px; margin-top:4px;">'
+            f'<div style="color:{TEXTO_MUTED}; font-size:11px; margin-bottom:6px;">'
+            f'Vendas já processadas pelo motor — acessíveis para auditoria'
+            f'</div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+        col1, col2, col3 = st.columns(3)
+
+        with col1:
+            label_comp = f"Compensadas · {n_comp}"
             if st.button(
-                texto,
-                key=f"cv_pill_{key}",
-                type="primary" if is_ativa else "secondary",
+                label_comp,
+                key="cv_pill_compensadas",
+                type="primary" if ativa == "compensadas" else "secondary",
                 use_container_width=True,
+                help="Vendas antigas já baixadas no Sankhya",
             ):
-                st.session_state["cv_pill_ativa"] = key
+                st.session_state["cv_pill_ativa"] = "compensadas"
+                st.rerun()
+
+        with col2:
+            label_agu = f"Aguardando · {n_agu}"
+            if st.button(
+                label_agu,
+                key="cv_pill_aguardando",
+                type="primary" if ativa == "aguardando" else "secondary",
+                use_container_width=True,
+                help="Vendas recentes esperando NF",
+            ):
+                st.session_state["cv_pill_ativa"] = "aguardando"
+                st.rerun()
+
+        with col3:
+            label_dev = f"Devoluções · {n_dev}"
+            if tem_alerta_devolucao:
+                label_dev = f"⚠️ Devoluções · {n_dev}"
+            if st.button(
+                label_dev,
+                key="cv_pill_devolucoes",
+                type="primary" if ativa == "devolucoes" else "secondary",
+                use_container_width=True,
+                help="Cancelamentos identificados",
+            ):
+                st.session_state["cv_pill_ativa"] = "devolucoes"
                 st.rerun()
 
 
