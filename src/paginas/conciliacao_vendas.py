@@ -1209,8 +1209,10 @@ def _agrupar_conciliadas_por_venda(df_g1: pd.DataFrame, ligacoes_desfeitas: set)
                 "nsu": row.get("nsu"),
                 "autorizacao": row.get("autorizacao"),
                 "data_prev_pagamento": row.get("data_prev_pagamento"),
+                "data_venda": row.get("data_venda"),
                 "nome_parceiro": row.get("sk_nome_parceiro"),
                 "empresa": row.get("sk_empresa_nome"),
+                "fonte_match": row.get("fonte_match"),
                 "valor_total": 0.0,
                 "parcelas": [],
             }
@@ -1343,9 +1345,9 @@ def _calcular_kpis_por_adquirente(resultado, df_cielo, df_getnet) -> Dict[str, D
       - valor_total / valor_resolvido: mesmo cálculo em R$
     """
     result = {
-        "getnet": {"total": 0, "auto": 0, "manuais": 0, "resolvido": 0, "pct": 0.0,
+        "getnet": {"total": 0, "auto": 0, "nsu": 0, "manuais": 0, "resolvido": 0, "pct": 0.0,
                    "valor_total": 0.0, "valor_resolvido": 0.0},
-        "cielo":  {"total": 0, "auto": 0, "manuais": 0, "resolvido": 0, "pct": 0.0,
+        "cielo":  {"total": 0, "auto": 0, "nsu": 0, "manuais": 0, "resolvido": 0, "pct": 0.0,
                    "valor_total": 0.0, "valor_resolvido": 0.0},
     }
 
@@ -1359,15 +1361,30 @@ def _calcular_kpis_por_adquirente(resultado, df_cielo, df_getnet) -> Dict[str, D
         col_valor = "valor_parcela_bruto" if "valor_parcela_bruto" in df_getnet.columns else "valor_bruto"
         result["getnet"]["valor_total"] = float(df_getnet[col_valor].sum())
 
-    # Auto-conciliadas pelo motor (G1 + G2)
+    # Auto-conciliadas pelo motor (G1 + G2), separando por fonte_match
     for df in (resultado.grupo_1_conciliadas, resultado.grupo_2_ja_baixadas):
         if df is None or df.empty:
             continue
-        counts = df["adquirente"].value_counts().to_dict()
-        for adq, n in counts.items():
+        # Separar por fonte_match: nsu_direto (novo) vs demais (auto tradicional)
+        if "fonte_match" in df.columns:
+            df_nsu = df[df["fonte_match"] == "nsu_direto"]
+            df_auto = df[df["fonte_match"] != "nsu_direto"]
+        else:
+            df_nsu = df.iloc[0:0]  # vazio
+            df_auto = df
+
+        # Contagens NSU (novo campo)
+        if not df_nsu.empty:
+            for adq, n in df_nsu["adquirente"].value_counts().items():
+                if adq in result:
+                    result[adq]["nsu"] = result[adq].get("nsu", 0) + int(n)
+
+        # Contagens auto tradicional
+        for adq, n in df_auto["adquirente"].value_counts().items():
             if adq in result:
                 result[adq]["auto"] += int(n)
-        # Somar valor auto
+
+        # Somar valor de todos os auto (nsu + tradicional)
         if "valor_match" in df.columns:
             for adq, sub in df.groupby("adquirente"):
                 if adq in result:
@@ -1414,7 +1431,7 @@ def _calcular_kpis_por_adquirente(resultado, df_cielo, df_getnet) -> Dict[str, D
 
     # Consolidar
     for adq, d in result.items():
-        d["resolvido"] = d["auto"] + d["manuais"]
+        d["resolvido"] = d["nsu"] + d["auto"] + d["manuais"]
         d["pct"] = round((d["resolvido"] / d["total"] * 100), 1) if d["total"] > 0 else 0.0
 
     return result
@@ -1724,29 +1741,34 @@ def _render_topo_resultado(resultado):
         )
         st.markdown(html2, unsafe_allow_html=True)
 
-    # Barras por adquirente — agora com auto + suas ações empilhadas
+    # Barras por adquirente — 3 partes empilhadas: NSU + auto + suas ações
     linhas_partes = []
     for adq_key in ("getnet", "cielo"):
         d = kpis[adq_key]
         if d["total"] == 0:
             continue
+        n_nsu = d.get("nsu", 0)
+        pct_nsu = round(n_nsu / d["total"] * 100, 1) if d["total"] > 0 else 0.0
         pct_auto = round(d["auto"] / d["total"] * 100, 1) if d["total"] > 0 else 0.0
         pct_total = d["pct"]
-        pct_auto_barra = min(pct_auto, 100)
-        pct_manuais_barra = max(0, min(pct_total, 100) - pct_auto_barra)
+        # Larguras das 3 fatias (todas somando ao pct_total)
+        w_nsu = min(pct_nsu, 100)
+        w_auto = max(0, min(pct_nsu + pct_auto, 100) - w_nsu)
+        w_manuais = max(0, min(pct_total, 100) - w_nsu - w_auto)
         nome = _label_adquirente(adq_key)
 
         # Info de contagem
+        partes_info = []
+        if n_nsu > 0:
+            partes_info.append(f'{n_nsu} NSU')
+        partes_info.append(f'{d["auto"]} auto')
         if d["manuais"] > 0:
-            info = (
-                f'{d["auto"]} auto + {d["manuais"]} suas = {d["resolvido"]} de {d["total"]} · '
-                f'<span class="cv-adq-pct">{pct_total:.1f}%</span>'
-            )
-        else:
-            info = (
-                f'{d["auto"]} de {d["total"]} · '
-                f'<span class="cv-adq-pct">{pct_total:.1f}%</span>'
-            )
+            partes_info.append(f'{d["manuais"]} suas')
+        info_prefix = " + ".join(partes_info)
+        info = (
+            f'{info_prefix} = {d["resolvido"]} de {d["total"]} · '
+            f'<span class="cv-adq-pct">{pct_total:.1f}%</span>'
+        )
 
         linhas_partes.append(
             f'<div class="cv-adq-linha">'
@@ -1755,24 +1777,37 @@ def _render_topo_resultado(resultado):
             f'<span class="cv-adq-info">{info}</span>'
             f'</div>'
             f'<div class="cv-adq-barra" style="display:flex;">'
-            f'<div class="cv-adq-barra-preenchida" style="width:{pct_auto_barra:.1f}%;background:{AMARELO_ESCURO};"></div>'
-            f'<div class="cv-adq-barra-preenchida" style="width:{pct_manuais_barra:.1f}%;background:{VERDE};"></div>'
+            f'<div class="cv-adq-barra-preenchida" style="width:{w_nsu:.1f}%;background:{VERDE};"></div>'
+            f'<div class="cv-adq-barra-preenchida" style="width:{w_auto:.1f}%;background:{AMARELO_ESCURO};"></div>'
+            f'<div class="cv-adq-barra-preenchida" style="width:{w_manuais:.1f}%;background:#0F6E56;"></div>'
             f'</div>'
             f'</div>'
         )
 
     if linhas_partes:
-        # Legenda só quando houver resoluções manuais
-        legenda = ""
-        if any(kpis[a]["manuais"] > 0 for a in ("getnet","cielo")):
-            legenda = (
-                f'<div style="font-size:10px;color:{TEXTO_MUTED};margin-top:8px;">'
-                f'<span style="display:inline-block;width:10px;height:10px;background:{AMARELO_ESCURO};border-radius:2px;vertical-align:middle;margin-right:4px;"></span>'
-                f'Automático pelo motor'
-                f'<span style="display:inline-block;width:10px;height:10px;background:{VERDE};border-radius:2px;vertical-align:middle;margin:0 4px 0 12px;"></span>'
-                f'Resolvido por você'
-                f'</div>'
+        # Legenda dinâmica conforme o que aparecer
+        tem_nsu = any(kpis[a].get("nsu", 0) > 0 for a in ("getnet","cielo"))
+        tem_manuais = any(kpis[a]["manuais"] > 0 for a in ("getnet","cielo"))
+        legenda_itens = []
+        if tem_nsu:
+            legenda_itens.append(
+                f'<span style="display:inline-block;width:10px;height:10px;background:{VERDE};border-radius:2px;vertical-align:middle;margin-right:4px;"></span>'
+                f'Casado por NSU (100% preciso)'
             )
+        legenda_itens.append(
+            f'<span style="display:inline-block;width:10px;height:10px;background:{AMARELO_ESCURO};border-radius:2px;vertical-align:middle;margin-right:4px;"></span>'
+            f'Auto por valor + data'
+        )
+        if tem_manuais:
+            legenda_itens.append(
+                f'<span style="display:inline-block;width:10px;height:10px;background:#0F6E56;border-radius:2px;vertical-align:middle;margin-right:4px;"></span>'
+                f'Resolvido por você'
+            )
+        legenda = (
+            f'<div style="font-size:10px;color:{TEXTO_MUTED};margin-top:8px;">'
+            + ' &nbsp; · &nbsp; '.join(legenda_itens)
+            + '</div>'
+        )
 
         bloco_html = (
             f'<div class="cv-adq-bloco">'
@@ -2942,15 +2977,27 @@ def _render_card_conciliada(grupo: Dict[str, Any], idx_card: int, mostrar_desfaz
             break
 
     # Tags
-    tags = [
-        f'<span class="cv-tag cv-tag-verde">✓ Ligado</span>',
+    fonte = grupo.get("fonte_match")
+    if fonte == "nsu_direto":
+        tags = [
+            f'<span class="cv-tag cv-tag-verde">✓ Casado por NSU</span>',
+        ]
+    else:
+        tags = [
+            f'<span class="cv-tag cv-tag-verde">✓ Ligado</span>',
+        ]
+    tags.extend([
         f'<span class="cv-tag cv-tag-adq">{_escape(adq)}</span>',
         f'<span class="cv-tag">{_escape(mod)} · {_escape(ban)}</span>',
-    ]
+    ])
     if n_parc > 1:
         tags.append(f'<span class="cv-tag">{n_parc} parcelas</span>')
     if nsu:
-        tags.append(f'<span class="cv-tag">Nº {_escape(nsu)}</span>')
+        # Destaque especial no chip NSU quando casamento veio por NSU direto
+        if fonte == "nsu_direto":
+            tags.append(f'<span class="cv-tag" style="background:#E8F5EC;color:#0F6E56;font-weight:600;">NSU {_escape(nsu)}</span>')
+        else:
+            tags.append(f'<span class="cv-tag">Nº {_escape(nsu)}</span>')
     # Tag extra quando NF confirmada pelo Cabeçalho
     if cab_dt_neg is not None:
         tags.append(f'<span class="cv-tag cv-tag-verde">✓ Nota confirmada</span>')
