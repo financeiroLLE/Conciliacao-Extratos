@@ -456,10 +456,13 @@ def puxar_extrato_df(
     """
     # Validação básica do formato
     conta_limpa = re.sub(r"\D", "", str(conta_formatada))
-    if len(conta_limpa) != 13:
+    # PDF Itaú BBA fala em 13 dígitos (XXXX00YYYYYZ), mas contas de mais de
+    # 5 dígitos existem. Aceita 12-14 e deixa a API responder se estiver errado.
+    if not (12 <= len(conta_limpa) <= 14):
         raise RuntimeError(
             f"Conta '{conta_formatada}' inválida. Formato esperado: "
-            "XXXX00YYYYYZ (13 dígitos = 4 agência + 00 + 5 conta + 1 DAC)."
+            "13 dígitos aproximados (agência + 00 + conta + DAC). "
+            f"Você passou {len(conta_limpa)} dígitos."
         )
 
     if data_fim < data_inicio:
