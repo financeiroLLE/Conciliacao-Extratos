@@ -56,6 +56,11 @@ def _render_bloco_nao_configurado():
 
 def _render_dialogo_puxar(contas_disponiveis: dict):
     """Formulário compacto para puxar extrato."""
+    apelidos = list(contas_disponiveis.keys())
+    if not apelidos:
+        st.warning("Nenhuma conta configurada em [itau.contas]")
+        return
+
     with st.form(key="frm_puxar_itau", clear_on_submit=False):
         col_data1, col_data2, col_conta = st.columns([1, 1, 2])
 
@@ -75,10 +80,6 @@ def _render_dialogo_puxar(contas_disponiveis: dict):
                 format="DD/MM/YYYY",
             )
         with col_conta:
-            apelidos = list(contas_disponiveis.keys())
-            if not apelidos:
-                st.warning("Nenhuma conta configurada em [itau.contas]")
-                return
             apelido_sel = st.selectbox(
                 "Conta",
                 options=apelidos,
@@ -92,22 +93,26 @@ def _render_dialogo_puxar(contas_disponiveis: dict):
             use_container_width=True,
         )
 
-        if submitted:
-            conta_numero = contas_disponiveis.get(apelido_sel)
-            if not conta_numero:
-                st.error("Conta inválida.")
-                return
-            _puxar_e_disponibilizar(
-                apelido=apelido_sel,
-                conta_numero=str(conta_numero),
-                data_inicio=data_inicio,
-                data_fim=data_fim,
-            )
+    # FORA do form: processar e mostrar download
+    if submitted:
+        conta_numero = contas_disponiveis.get(apelido_sel)
+        if not conta_numero:
+            st.error("Conta inválida.")
+            return
+        _puxar_e_guardar(
+            apelido=apelido_sel,
+            conta_numero=str(conta_numero),
+            data_inicio=data_inicio,
+            data_fim=data_fim,
+        )
+
+    # Sempre mostra o download se já tiver algo baixado
+    _render_download_se_disponivel()
 
 
-def _puxar_e_disponibilizar(apelido: str, conta_numero: str,
-                             data_inicio: date, data_fim: date):
-    """Faz a chamada real na API e cria arquivo em memória."""
+def _puxar_e_guardar(apelido: str, conta_numero: str,
+                     data_inicio: date, data_fim: date):
+    """Faz a chamada real na API e guarda em session_state."""
     with st.spinner(f"Puxando extrato Itaú · {apelido} · "
                     f"{data_inicio.strftime('%d/%m')} a {data_fim.strftime('%d/%m')}..."):
         try:
@@ -121,7 +126,6 @@ def _puxar_e_disponibilizar(apelido: str, conta_numero: str,
             st.error(f"❌ Falha ao puxar extrato Itaú: {e}")
             return
 
-    # Guarda em session_state para o resto do fluxo pegar
     st.session_state["itau_extrato_baixado"] = {
         "bytes": bytes_xlsx,
         "nome": nome_arquivo,
@@ -131,18 +135,32 @@ def _puxar_e_disponibilizar(apelido: str, conta_numero: str,
     }
     st.success(
         f"✓ Extrato {apelido} baixado ({len(bytes_xlsx):,} bytes). "
-        f"Arraste-o abaixo ou baixe pelo botão. "
-        "Nota: por limitação técnica do Streamlit, você precisa colocá-lo manualmente no upload."
+        f"Baixe pelo botão abaixo e arraste no campo de upload."
     )
-    # Botão de download
-    st.download_button(
-        "⬇  Baixar XLSX (para colocar no upload abaixo)",
-        data=bytes_xlsx,
-        file_name=nome_arquivo,
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        key="itau_baixar_arquivo",
-        use_container_width=True,
-    )
+
+
+def _render_download_se_disponivel():
+    """Se tem extrato baixado em memória, mostra botão de download."""
+    baixado = st.session_state.get("itau_extrato_baixado")
+    if not baixado:
+        return
+
+    col_dl, col_lmp = st.columns([3, 1])
+    with col_dl:
+        st.download_button(
+            f"⬇  Baixar {baixado['nome']}",
+            data=baixado["bytes"],
+            file_name=baixado["nome"],
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="itau_baixar_arquivo",
+            use_container_width=True,
+        )
+    with col_lmp:
+        if st.button("✖  Limpar", key="itau_limpar_baixado",
+                     use_container_width=True,
+                     help="Descarta o extrato baixado da memória"):
+            st.session_state.pop("itau_extrato_baixado", None)
+            st.rerun()
 
 
 def _render_botao_testar():
