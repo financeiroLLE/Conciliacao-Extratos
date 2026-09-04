@@ -711,6 +711,7 @@ def _garantir_estado_inicial():
 
 
 def _limpar_estado_completo():
+    st.session_state["cv_rodada_salva_id"] = None  # nova rodada zera o flag de salva
     for k in _SESSION_KEYS_IMPORTACAO + _SESSION_KEYS_MOTOR:
         if k == "cv_uploader_nonce":
             st.session_state[k] = st.session_state.get(k, 0) + 1
@@ -4004,7 +4005,7 @@ def _render_rodape_exportar(resultado, contadores):
 
     st.markdown(f'<div class="cv-rodape-info">{_escape(info_txt)}</div>', unsafe_allow_html=True)
 
-    col1, col2, col3 = st.columns([2, 2, 1])
+    col1, col2, col3, col4 = st.columns([2, 2, 1, 1])
 
     with col1:
         if _EXCEL_DISPONIVEL:
@@ -4036,16 +4037,136 @@ def _render_rodape_exportar(resultado, contadores):
             st.warning("Módulo de exportação Excel indisponível.")
 
     with col2:
+        # SALVAR RODADA · guarda arquivos + métricas no Supabase (60 dias)
+        rodada_salva_id = st.session_state.get("cv_rodada_salva_id")
+        if rodada_salva_id:
+            st.button(
+                "✓  Rodada salva",
+                key="cv_salvar_rodada_ok",
+                use_container_width=True,
+                disabled=True,
+                help=f"Rodada salva no histórico (ID: {rodada_salva_id[:8]}...)",
+            )
+        else:
+            if st.button(
+                "💾  Salvar rodada",
+                key="cv_salvar_rodada",
+                use_container_width=True,
+                help="Guarda arquivos brutos e resultado no histórico (60 dias)",
+            ):
+                _salvar_rodada_atual(resultado, contadores)
+
+    with col3:
         if st.button("↺  Nova rodada", key="cv_nova_rodada", use_container_width=True):
             _limpar_estado_completo()
             st.rerun()
 
-    with col3:
+    with col4:
         if st.button("🔄  Reprocessar", key="cv_reprocessar_motor",
                      help="Rodar motor novamente", use_container_width=True):
             _limpar_estado_motor()
             _rodar_motor()
             st.rerun()
+
+
+def _salvar_rodada_atual(resultado, contadores):
+    """Salva a rodada atual no Supabase (arquivos + métricas)."""
+    from src import rodadas as rd_mod
+
+    try:
+        # 1) Cria rodada
+        rd = rd_mod.criar_rodada(data_rodada=date.today(), modulo="vendas")
+
+        # 2) Sobe cada arquivo bruto que está em cv_uploads
+        uploads = st.session_state.get("cv_uploads", {}) or {}
+        arquivos_enviados = 0
+        for nome_arq, entry in uploads.items():
+            conteudo = entry.get("bytes")
+            if not conteudo:
+                continue
+            try:
+                rd_mod.upload_arquivo(
+                    rd.id,
+                    categoria="vendas",
+                    nome_arquivo=nome_arq,
+                    conteudo=conteudo,
+                    mime="application/vnd.ms-excel",
+                )
+                arquivos_enviados += 1
+            except Exception:
+                continue  # não bloqueia se um arquivo falhar
+
+        # 3) Sobe também o Excel do relatório
+        if _EXCEL_DISPONIVEL:
+            try:
+                excel_bytes = vendas_excel.gerar_excel(
+                    resultado=resultado,
+                    confirmadas_manual=st.session_state.get("cv_confirmadas_manual", {}),
+                    ligacoes_desfeitas=st.session_state.get("cv_ligacoes_desfeitas", set()),
+                    historico=st.session_state.get("cv_historico", []),
+                    contadores=contadores,
+                    df_cielo=st.session_state.get("cv_df_cielo"),
+                    df_getnet=st.session_state.get("cv_df_getnet_vendas"),
+                    df_sankhya=st.session_state.get("cv_df_sankhya"),
+                    tolerancia_dias=st.session_state.get("cv_tolerancia_dias", 2),
+                )
+                rd_mod.upload_arquivo(
+                    rd.id, categoria="resultado",
+                    nome_arquivo=f"conciliacao_{date.today().strftime('%Y-%m-%d')}.xlsx",
+                    conteudo=excel_bytes,
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+            except Exception:
+                pass
+
+        # 4) Atualiza métricas
+        df_cielo = st.session_state.get("cv_df_cielo")
+        df_getnet = st.session_state.get("cv_df_getnet_vendas")
+        tot_adq = _calcular_totais_adquirente(df_cielo, df_getnet)
+
+        # Métricas simples baseadas em vendas agrupadas
+        def _n_vendas_unicas(df):
+            if df is None or df.empty:
+                return 0
+            if "adquirente" in df.columns and "nsu" in df.columns:
+                return df[["adquirente", "nsu"]].drop_duplicates().shape[0]
+            return len(df)
+
+        vendas_conc = 0
+        val_conc = 0.0
+        for df in (resultado.grupo_1_conciliadas, resultado.grupo_2_ja_baixadas):
+            if df is None or df.empty:
+                continue
+            vendas_conc += _n_vendas_unicas(df)
+            if "valor_match" in df.columns and "nsu" in df.columns:
+                grp = df.groupby(["adquirente", "nsu"], as_index=False)["valor_match"].sum()
+                val_conc += float(grp["valor_match"].sum())
+
+        vendas_pend = _n_vendas_unicas(resultado.a_analisar_venda_sem_titulo) + _n_vendas_unicas(resultado.a_analisar_ambiguos)
+        val_pend = 0.0
+        for df in (resultado.a_analisar_venda_sem_titulo, resultado.a_analisar_ambiguos):
+            if df is None or df.empty or "valor_match" not in df.columns:
+                continue
+            if "nsu" in df.columns:
+                grp = df.groupby(["adquirente", "nsu"], as_index=False)["valor_match"].sum()
+                val_pend += float(grp["valor_match"].sum())
+
+        rd_mod.atualizar_metricas(
+            rd.id,
+            total_vendas_adq=tot_adq["total_n"],
+            valor_total_adq=tot_adq["total"],
+            conciliadas_n=vendas_conc,
+            valor_conciliado=val_conc,
+            pendentes_n=vendas_pend,
+            valor_pendente=val_pend,
+        )
+
+        st.session_state["cv_rodada_salva_id"] = rd.id
+        st.success(f"✓ Rodada salva no histórico ({arquivos_enviados} arquivo(s)). Disponível por 60 dias.")
+        st.rerun()
+
+    except Exception as e:
+        st.error(f"Erro ao salvar rodada: {e}")
 
 
 # ==============================================================================
@@ -4091,13 +4212,35 @@ def render_conciliacao_vendas():
     st.markdown(_CSS, unsafe_allow_html=True)
     _render_header()
 
+    # Sub-página "Histórico das minhas rodadas" (dentro do próprio módulo)
+    if st.session_state.get("cv_subpagina") == "historico":
+        from src.paginas import historico as pagina_historico_mod
+        # Botão voltar
+        col_voltar, _ = st.columns([1, 4])
+        with col_voltar:
+            if st.button("← Voltar", key="cv_hist_voltar", use_container_width=True):
+                st.session_state["cv_subpagina"] = None
+                st.rerun()
+        pagina_historico_mod.render_dialogo_confirmacao_delete()
+        pagina_historico_mod.render_pagina_historico()
+        return
+
     if st.session_state.get("cv_motor_resultado") is not None:
         _render_tela_resultado()
         return
 
     _render_aviso()
 
-    st.markdown('<div class="cv-secao-titulo">Enviar arquivos</div>', unsafe_allow_html=True)
+    # Link discreto pra abrir histórico das rodadas
+    col_upl, col_hist = st.columns([4, 1])
+    with col_upl:
+        st.markdown('<div class="cv-secao-titulo">Enviar arquivos</div>', unsafe_allow_html=True)
+    with col_hist:
+        st.markdown('<div style="height:24px;"></div>', unsafe_allow_html=True)
+        if st.button("📂 Minhas rodadas", key="cv_ver_historico", use_container_width=True,
+                     help="Ver rodadas anteriores salvas no histórico"):
+            st.session_state["cv_subpagina"] = "historico"
+            st.rerun()
 
     nonce = st.session_state["cv_uploader_nonce"]
     arquivos = st.file_uploader(
