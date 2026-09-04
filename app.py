@@ -39,6 +39,7 @@ from src.reports import (
     gerar_relatorio_excel_de_conta,
 )
 from src.paginas.conciliacao_vendas import render_conciliacao_vendas
+from src.api_bancos.ui_itau import _render_botao_puxar_itau
 
 
 # ============================================================
@@ -3619,6 +3620,9 @@ def tela_upload():
         section_title("EXTRATO BANCÁRIO")
         st.caption("Formato padronizado: Data, Histórico, Documento, Valor (R$). Aceita XLS, XLSX ou PDF do extrato bancário (Itaú, Sicredi, Bradesco, Caixa, Santander).")
         if modo == "1 conta por vez":
+            # ===== Puxar direto da API Itaú (opcional) ====================
+            _render_botao_puxar_itau()
+
             # v5.48: aceita VÁRIOS arquivos da MESMA conta (ex.: Itaú PISA salvo
             # por dia — 01, 02, 03...). Todos entram com o mesmo identificador e
             # o app junta tudo antes de conciliar. Proteções:
