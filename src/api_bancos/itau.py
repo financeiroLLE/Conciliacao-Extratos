@@ -28,6 +28,7 @@ import re
 import tempfile
 import threading
 import time
+import uuid
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any, Dict, List, Optional, Tuple
@@ -254,6 +255,7 @@ def _chamar_extrato(
         headers = {
             "Authorization": f"Bearer {token}",
             "Accept": "application/json",
+            "x-itau-correlationID": str(uuid.uuid4()),
         }
         params = {
             "type": "current_account",
