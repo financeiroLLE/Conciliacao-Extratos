@@ -4139,24 +4139,27 @@ def render_conciliacao_vendas():
     _render_header()
 
     esta_no_historico = st.session_state.get("cv_subpagina") == "historico"
+    esta_no_resultado = st.session_state.get("cv_motor_resultado") is not None
 
-    # Botão "← Voltar" — contexto define destino
-    col_back, _ = st.columns([1, 6])
-    with col_back:
-        if esta_no_historico:
-            label_voltar = "← Voltar"
-            help_voltar = "Voltar para a tela do módulo"
-        else:
-            label_voltar = "← Voltar ao Dashboard"
-            help_voltar = "Sair do módulo Conciliação de Vendas"
-
-        if st.button(label_voltar, key="cv_voltar_contextual",
-                     use_container_width=True, help=help_voltar):
+    # Botão "← Voltar" — volta uma etapa dentro do próprio módulo
+    # Só aparece quando faz sentido voltar (não aparece na tela de upload inicial)
+    if esta_no_historico or esta_no_resultado:
+        col_back, _ = st.columns([1, 6])
+        with col_back:
             if esta_no_historico:
-                st.session_state["cv_subpagina"] = None
+                help_voltar = "Voltar para a tela do módulo"
             else:
-                st.session_state["pagina"] = "Dashboard"
-            st.rerun()
+                help_voltar = "Voltar para a tela de upload (descarta o resultado atual)"
+
+            if st.button("← Voltar", key="cv_voltar_contextual",
+                         use_container_width=True, help=help_voltar):
+                if esta_no_historico:
+                    # Volta pra tela anterior (upload ou resultado, o que estiver ativo)
+                    st.session_state["cv_subpagina"] = None
+                else:
+                    # Voltar do resultado = descartar resultado e voltar pro upload
+                    _limpar_estado_motor()
+                st.rerun()
 
     # Sub-página "Histórico das minhas rodadas" (dentro do próprio módulo)
     if esta_no_historico:
