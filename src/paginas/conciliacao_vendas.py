@@ -3963,33 +3963,6 @@ def _render_rodape_exportar(resultado, contadores):
             _limpar_estado_completo()
             st.rerun()
 
-    # Link discreto para "Reprocessar do zero" (caso raro)
-    st.markdown('<div style="margin-top:8px;"></div>', unsafe_allow_html=True)
-    col_lnk, _ = st.columns([2, 3])
-    with col_lnk:
-        if st.session_state.get("cv_confirm_reprocessar_zero"):
-            st.warning("Reprocessar do zero apaga TODAS as suas ligações manuais desta rodada.")
-            col_sim, col_nao = st.columns(2)
-            with col_sim:
-                if st.button("Sim, apagar tudo", key="cv_conf_rprc_sim",
-                             type="primary", use_container_width=True):
-                    _limpar_estado_motor()
-                    _rodar_motor()
-                    st.session_state["cv_confirm_reprocessar_zero"] = False
-                    st.rerun()
-            with col_nao:
-                if st.button("Cancelar", key="cv_conf_rprc_nao",
-                             use_container_width=True):
-                    st.session_state["cv_confirm_reprocessar_zero"] = False
-                    st.rerun()
-        else:
-            if st.button("↺  Reprocessar do zero (apaga ações manuais)",
-                         key="cv_reprocessar_zero",
-                         use_container_width=False,
-                         help="Roda o motor descartando TODAS as suas ligações manuais desta rodada"):
-                st.session_state["cv_confirm_reprocessar_zero"] = True
-                st.rerun()
-
 
 def _reprocessar_preservando_manuais():
     """Roda o motor de novo MANTENDO ações manuais da usuária.
@@ -4165,15 +4138,29 @@ def render_conciliacao_vendas():
     st.markdown(_CSS, unsafe_allow_html=True)
     _render_header()
 
-    # Sub-página "Histórico das minhas rodadas" (dentro do próprio módulo)
-    if st.session_state.get("cv_subpagina") == "historico":
-        from src.paginas import historico as pagina_historico_mod
-        # Botão voltar discreto no canto
-        col_voltar, _ = st.columns([1, 6])
-        with col_voltar:
-            if st.button("← Voltar", key="cv_hist_voltar", use_container_width=True):
+    esta_no_historico = st.session_state.get("cv_subpagina") == "historico"
+
+    # Botão "← Voltar" — contexto define destino
+    col_back, _ = st.columns([1, 6])
+    with col_back:
+        if esta_no_historico:
+            label_voltar = "← Voltar"
+            help_voltar = "Voltar para a tela do módulo"
+        else:
+            label_voltar = "← Voltar ao Dashboard"
+            help_voltar = "Sair do módulo Conciliação de Vendas"
+
+        if st.button(label_voltar, key="cv_voltar_contextual",
+                     use_container_width=True, help=help_voltar):
+            if esta_no_historico:
                 st.session_state["cv_subpagina"] = None
-                st.rerun()
+            else:
+                st.session_state["pagina"] = "Dashboard"
+            st.rerun()
+
+    # Sub-página "Histórico das minhas rodadas" (dentro do próprio módulo)
+    if esta_no_historico:
+        from src.paginas import historico as pagina_historico_mod
         pagina_historico_mod.render_dialogo_confirmacao_delete()
         # Passa flag indicando origem: só mostra rodadas de vendas
         pagina_historico_mod.render_pagina_historico(modulo_fixo="vendas")
