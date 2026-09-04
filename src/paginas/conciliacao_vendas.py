@@ -1746,7 +1746,7 @@ def _render_kpis_importacao():
 # ==============================================================================
 
 def _render_topo_resultado(resultado):
-    """Cabeçalho + cards enxutos (adquirente + progresso + diferença) + barras."""
+    """Cabeçalho + card único integrado (adquirente + progresso + diferença)."""
     hoje = date.today()
     df_cielo = st.session_state.get("cv_df_cielo")
     df_getnet = st.session_state.get("cv_df_getnet_vendas")
@@ -1767,11 +1767,9 @@ def _render_topo_resultado(resultado):
     )
     st.markdown(header_html, unsafe_allow_html=True)
 
-    # ---- KPIs em VENDAS AGRUPADAS (não parcelas) ----
-    # Para a contagem casar com a pill "A analisar"
+    # ---- Contar VENDAS agrupadas (não parcelas) ----
     kpis = _calcular_kpis_por_adquirente(resultado, df_cielo, df_getnet)
 
-    # Contar VENDAS agrupadas (não parcelas)
     def _n_vendas_unicas(df):
         if df is None or df.empty:
             return 0
@@ -1779,9 +1777,6 @@ def _render_topo_resultado(resultado):
             return df[["adquirente", "nsu"]].drop_duplicates().shape[0]
         return len(df)
 
-    vendas_adq_total = _n_vendas_unicas(df_cielo) + _n_vendas_unicas(df_getnet)
-
-    # Vendas conciliadas (G1 + G2, agrupadas por venda)
     vendas_conciliadas = 0
     valor_conciliado = 0.0
     for df in (resultado.grupo_1_conciliadas, resultado.grupo_2_ja_baixadas):
@@ -1789,16 +1784,14 @@ def _render_topo_resultado(resultado):
             continue
         vendas_conciliadas += _n_vendas_unicas(df)
         if "valor_match" in df.columns:
-            # somar apenas a 1ª parcela de cada venda para não duplicar
-            grp = df.groupby(["adquirente", "nsu"], as_index=False)["valor_match"].sum() if "nsu" in df.columns else df
-            valor_conciliado += float(grp["valor_match"].sum())
+            if "nsu" in df.columns:
+                grp = df.groupby(["adquirente", "nsu"], as_index=False)["valor_match"].sum()
+                valor_conciliado += float(grp["valor_match"].sum())
 
-    # Vendas pendentes (sem par + ambíguos, agrupadas)
     vendas_sem_par = _n_vendas_unicas(resultado.a_analisar_venda_sem_titulo)
     vendas_ambiguas = _n_vendas_unicas(resultado.a_analisar_ambiguos)
     vendas_pendentes = vendas_sem_par + vendas_ambiguas
 
-    # Recalcular valor pendente com base em vendas únicas
     valor_pendente = 0.0
     for df in (resultado.a_analisar_venda_sem_titulo, resultado.a_analisar_ambiguos):
         if df is None or df.empty or "valor_match" not in df.columns:
@@ -1806,102 +1799,11 @@ def _render_topo_resultado(resultado):
         if "nsu" in df.columns:
             grp = df.groupby(["adquirente", "nsu"], as_index=False)["valor_match"].sum()
             valor_pendente += float(grp["valor_match"].sum())
-        else:
-            valor_pendente += float(df["valor_match"].sum())
 
     pct_resolvido = (valor_conciliado / tot_adq["total"] * 100) if tot_adq["total"] > 0 else 0.0
 
-    # ---- Card 1: VENDAS DOS ADQUIRENTES ----
-    col1, col2 = st.columns(2)
-
-    with col1:
-        # Detalhe Getnet / Cielo em R$
-        det_getnet = (
-            f'<div class="cv-detalhe-adq">'
-            f'<span class="cv-detalhe-bullet" style="background:{AMARELO};"></span>'
-            f'<span class="cv-detalhe-nome">Getnet</span>'
-            f'<span class="cv-detalhe-n">{tot_adq["getnet_n"]} vendas</span>'
-            f'<span class="cv-detalhe-valor">{_fmt_moeda(tot_adq["getnet_total"])}</span>'
-            f'</div>'
-        ) if tot_adq["getnet_total"] > 0 else ""
-
-        det_cielo = (
-            f'<div class="cv-detalhe-adq">'
-            f'<span class="cv-detalhe-bullet" style="background:#0071FE;"></span>'
-            f'<span class="cv-detalhe-nome">Cielo</span>'
-            f'<span class="cv-detalhe-n">{tot_adq["cielo_n"]} vendas</span>'
-            f'<span class="cv-detalhe-valor">{_fmt_moeda(tot_adq["cielo_total"])}</span>'
-            f'</div>'
-        ) if tot_adq["cielo_total"] > 0 else ""
-
-        html1 = (
-            f'<div class="cv-balanco-card">'
-            f'<div class="cv-balanco-label">Vendas dos adquirentes</div>'
-            f'<div class="cv-balanco-valor">{_fmt_moeda(tot_adq["total"])}</div>'
-            f'<div class="cv-balanco-sub">{tot_adq["total_n"]} vendas no período</div>'
-            f'<div class="cv-detalhe-adq-wrap">{det_getnet}{det_cielo}</div>'
-            f'</div>'
-        )
-        st.markdown(html1, unsafe_allow_html=True)
-
-    # ---- Card 2: PROGRESSO DA CONCILIAÇÃO ----
-    with col2:
-        det_conciliado = (
-            f'<div class="cv-detalhe-adq">'
-            f'<span class="cv-detalhe-bullet" style="background:{VERDE};"></span>'
-            f'<span class="cv-detalhe-nome" style="color:{VERDE};">Conciliado</span>'
-            f'<span class="cv-detalhe-n">{vendas_conciliadas} vendas</span>'
-            f'<span class="cv-detalhe-valor" style="color:{VERDE};">{_fmt_moeda(valor_conciliado)}</span>'
-            f'</div>'
-        )
-        det_pendente = (
-            f'<div class="cv-detalhe-adq">'
-            f'<span class="cv-detalhe-bullet" style="background:{VERMELHO};"></span>'
-            f'<span class="cv-detalhe-nome" style="color:{VERMELHO};">Falta atrelar</span>'
-            f'<span class="cv-detalhe-n">{vendas_pendentes} vendas</span>'
-            f'<span class="cv-detalhe-valor" style="color:{VERMELHO};">{_fmt_moeda(valor_pendente)}</span>'
-            f'</div>'
-        ) if vendas_pendentes > 0 else ""
-
-        html2 = (
-            f'<div class="cv-balanco-card" style="border-left:4px solid {VERDE};">'
-            f'<div class="cv-balanco-label" style="color:{VERDE};">Progresso da conciliação</div>'
-            f'<div class="cv-balanco-valor">{pct_resolvido:.1f}%</div>'
-            f'<div class="cv-balanco-sub">Do valor total das vendas do adquirente</div>'
-            f'<div class="cv-detalhe-adq-wrap">{det_conciliado}{det_pendente}</div>'
-            f'</div>'
-        )
-        st.markdown(html2, unsafe_allow_html=True)
-
-    # ---- Card 3 (largura total): DIFERENÇA ADQUIRENTE vs SANKHYA ----
-    if abs(diff) >= 0.01:
-        html_dif = (
-            f'<div class="cv-card-diferenca">'
-            f'<div class="cv-diferenca-label">Diferença entre adquirente e Sankhya</div>'
-            f'<div class="cv-diferenca-valor">{_fmt_moeda(abs(diff))} <span class="cv-diferenca-txt">a explicar via conciliação manual</span></div>'
-            f'<div class="cv-diferenca-sub">'
-            f'Adquirente: <b>{_fmt_moeda(tot_adq["total"])}</b> · '
-            f'Sankhya elegível: <b>{_fmt_moeda(tot_sk["total"])}</b> ({tot_sk["total_n"]} títulos)'
-            f'</div>'
-            f'<div class="cv-diferenca-explic">'
-            f'Vendas do adquirente sem título correspondente no Sankhya. '
-            f'Podem ser: aguardando faturamento, acordo comercial, adiantamento em período fechado ou troca/devolução.'
-            f'</div>'
-            f'</div>'
-        )
-        st.markdown(html_dif, unsafe_allow_html=True)
-    else:
-        html_dif = (
-            f'<div class="cv-card-diferenca cv-card-diferenca-ok">'
-            f'<div class="cv-diferenca-label" style="color:{VERDE};">Adquirente e Sankhya</div>'
-            f'<div class="cv-diferenca-valor" style="color:{VERDE};">✓ Bate ao centavo</div>'
-            f'</div>'
-        )
-        st.markdown(html_dif, unsafe_allow_html=True)
-
-    # ---- Barras por adquirente (mantidas — mostram NSU vs auto vs suas) ----
-    linhas_partes = []
-    dados_adq = []  # para versão compacta
+    # ---- Preparar HTML das barras Getnet/Cielo (dentro do card) ----
+    barras_html_partes = []
     for adq_key in ("getnet", "cielo"):
         d = kpis[adq_key]
         if d["total"] == 0:
@@ -1915,117 +1817,95 @@ def _render_topo_resultado(resultado):
         w_manuais = max(0, min(pct_total, 100) - w_nsu - w_auto)
         nome = _label_adquirente(adq_key)
 
-        dados_adq.append({
-            "nome": nome,
-            "pct": pct_total,
-            "w_nsu": w_nsu,
-            "w_auto": w_auto,
-            "w_manuais": w_manuais,
-        })
-
         partes_info = []
         if n_nsu > 0:
             partes_info.append(f'{n_nsu} NSU')
         partes_info.append(f'{d["auto"]} auto')
         if d["manuais"] > 0:
             partes_info.append(f'{d["manuais"]} suas')
-        info_prefix = " + ".join(partes_info)
-        info = (
-            f'{info_prefix} = {d["resolvido"]} de {d["total"]} · '
-            f'<span class="cv-adq-pct">{pct_total:.1f}%</span>'
-        )
+        info_txt = " + ".join(partes_info)
 
-        linhas_partes.append(
-            f'<div class="cv-adq-linha">'
-            f'<div class="cv-adq-linha-topo">'
-            f'<span class="cv-adq-nome">{nome}</span>'
-            f'<span class="cv-adq-info">{info}</span>'
+        barras_html_partes.append(
+            f'<div style="margin-top:6px;">'
+            f'<div style="display:flex;justify-content:space-between;font-size:11px;">'
+            f'<span style="color:{AZUL_NAVY};">{nome} '
+            f'<b style="color:{VERDE};">{pct_total:.1f}%</b></span>'
+            f'<span style="color:{TEXTO_MUTED};">{info_txt}</span>'
             f'</div>'
-            f'<div class="cv-adq-barra" style="display:flex;">'
-            f'<div class="cv-adq-barra-preenchida" style="width:{w_nsu:.1f}%;background:{VERDE};"></div>'
-            f'<div class="cv-adq-barra-preenchida" style="width:{w_auto:.1f}%;background:{AMARELO_ESCURO};"></div>'
-            f'<div class="cv-adq-barra-preenchida" style="width:{w_manuais:.1f}%;background:#0F6E56;"></div>'
+            f'<div style="display:flex;height:5px;background:#F5F0DC;border-radius:3px;overflow:hidden;margin-top:3px;">'
+            f'<div style="width:{w_nsu:.1f}%;background:{VERDE};"></div>'
+            f'<div style="width:{w_auto:.1f}%;background:{AMARELO_ESCURO};"></div>'
+            f'<div style="width:{w_manuais:.1f}%;background:#0F6E56;"></div>'
             f'</div>'
             f'</div>'
         )
+    barras_html = "".join(barras_html_partes)
 
-    if linhas_partes:
-        # -------- VERSÃO COMPACTA (sempre visível) --------
-        # Mostra Getnet X% · Cielo X% com micro-barras
-        info_compacta_partes = []
-        for da in dados_adq:
-            info_compacta_partes.append(
-                f'{da["nome"]} <span style="color:{VERDE};font-weight:600;">{da["pct"]:.1f}%</span>'
-            )
-        info_compacta = " · ".join(info_compacta_partes)
-
-        micro_barras = []
-        for da in dados_adq:
-            micro_barras.append(
-                f'<div style="margin-top:6px;">'
-                f'<div style="font-size:10px;color:{TEXTO_MUTED};margin-bottom:2px;">{da["nome"]}</div>'
-                f'<div style="display:flex;height:4px;background:#F5F0DC;border-radius:2px;overflow:hidden;">'
-                f'<div style="width:{da["w_nsu"]:.1f}%;background:{VERDE};"></div>'
-                f'<div style="width:{da["w_auto"]:.1f}%;background:{AMARELO_ESCURO};"></div>'
-                f'<div style="width:{da["w_manuais"]:.1f}%;background:#0F6E56;"></div>'
-                f'</div>'
-                f'</div>'
-            )
-
-        bloco_compacto_html = (
-            f'<div class="cv-adq-bloco" style="padding:12px 16px;">'
-            f'<div style="display:flex; justify-content:space-between; align-items:center;">'
-            f'<div class="cv-adq-titulo" style="margin-bottom:0;">Conciliação por adquirente</div>'
-            f'<div style="font-size:12px;color:{AZUL_NAVY};font-weight:500;">{info_compacta}</div>'
-            f'</div>'
-            f'{"".join(micro_barras)}'
+    # ---- Diferença linha compacta ----
+    if abs(diff) >= 0.01:
+        dif_html = (
+            f'<div style="margin-top:12px;padding-top:10px;border-top:1px solid #EEE;font-size:11px;color:{TEXTO_MUTED};">'
+            f'<span style="color:#F0AD00;font-weight:600;">Diferença R$ {_fmt_moeda(abs(diff)).replace("R$ ", "")}</span>'
+            f' · aguardando faturamento, acordo comercial, adiantamento em período fechado ou troca/devolução'
             f'</div>'
         )
-        st.markdown(bloco_compacto_html, unsafe_allow_html=True)
+    else:
+        dif_html = (
+            f'<div style="margin-top:12px;padding-top:10px;border-top:1px solid #EEE;font-size:11px;color:{VERDE};font-weight:600;">'
+            f'✓ Adquirente e Sankhya batem ao centavo'
+            f'</div>'
+        )
 
-        # -------- BOTÃO EXPANDIR --------
-        expandir = st.session_state.get("cv_barra_adq_expandida", False)
-        seta = "▾" if expandir else "▸"
-        if st.button(
-            f"{seta} Ver detalhes por adquirente",
-            key="cv_toggle_barra_adq",
-            use_container_width=False,
-        ):
-            st.session_state["cv_barra_adq_expandida"] = not expandir
-            st.rerun()
+    # ---- Card único integrado ----
+    detalhes_adq_html = ""
+    if tot_adq["getnet_total"] > 0:
+        detalhes_adq_html += (
+            f'<div style="display:flex;align-items:center;padding:3px 0;font-size:12px;">'
+            f'<span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:{AMARELO};margin-right:8px;"></span>'
+            f'<span style="color:{AZUL_NAVY};font-weight:500;flex:1;">Getnet '
+            f'<span style="color:{TEXTO_MUTED};font-weight:400;">· {tot_adq["getnet_n"]}</span></span>'
+            f'<span style="color:{AZUL_NAVY};font-weight:600;">{_fmt_moeda(tot_adq["getnet_total"])}</span>'
+            f'</div>'
+        )
+    if tot_adq["cielo_total"] > 0:
+        detalhes_adq_html += (
+            f'<div style="display:flex;align-items:center;padding:3px 0;font-size:12px;">'
+            f'<span style="display:inline-block;width:8px;height:8px;border-radius:2px;background:#0071FE;margin-right:8px;"></span>'
+            f'<span style="color:{AZUL_NAVY};font-weight:500;flex:1;">Cielo '
+            f'<span style="color:{TEXTO_MUTED};font-weight:400;">· {tot_adq["cielo_n"]}</span></span>'
+            f'<span style="color:{AZUL_NAVY};font-weight:600;">{_fmt_moeda(tot_adq["cielo_total"])}</span>'
+            f'</div>'
+        )
 
-        # -------- VERSÃO EXPANDIDA (só se expandido) --------
-        if expandir:
-            tem_nsu = any(kpis[a].get("nsu", 0) > 0 for a in ("getnet","cielo"))
-            tem_manuais = any(kpis[a]["manuais"] > 0 for a in ("getnet","cielo"))
-            legenda_itens = []
-            if tem_nsu:
-                legenda_itens.append(
-                    f'<span style="display:inline-block;width:10px;height:10px;background:{VERDE};border-radius:2px;vertical-align:middle;margin-right:4px;"></span>'
-                    f'Casado por NSU (100% preciso)'
-                )
-            legenda_itens.append(
-                f'<span style="display:inline-block;width:10px;height:10px;background:{AMARELO_ESCURO};border-radius:2px;vertical-align:middle;margin-right:4px;"></span>'
-                f'Auto por valor + data'
-            )
-            if tem_manuais:
-                legenda_itens.append(
-                    f'<span style="display:inline-block;width:10px;height:10px;background:#0F6E56;border-radius:2px;vertical-align:middle;margin-right:4px;"></span>'
-                    f'Resolvido por você'
-                )
-            legenda = (
-                f'<div style="font-size:10px;color:{TEXTO_MUTED};margin-top:8px;">'
-                + ' &nbsp; · &nbsp; '.join(legenda_itens)
-                + '</div>'
-            )
-
-            bloco_html = (
-                f'<div class="cv-adq-bloco">'
-                f'{"".join(linhas_partes)}'
-                f'{legenda}'
-                f'</div>'
-            )
-            st.markdown(bloco_html, unsafe_allow_html=True)
+    # Card único com 2 colunas + rodapé de diferença
+    card_html = (
+        f'<div style="background:#FFFFFF;border-radius:8px;padding:16px 20px;border-left:4px solid {VERDE};margin-bottom:12px;">'
+        f'<div style="display:flex;gap:24px;">'
+        # COLUNA ESQUERDA — VENDAS DOS ADQUIRENTES
+        f'<div style="flex:1;">'
+        f'<div style="font-size:9px;color:#7A6800;letter-spacing:1px;font-weight:600;text-transform:uppercase;margin-bottom:6px;">Vendas dos adquirentes</div>'
+        f'<div style="font-size:20px;color:{AZUL_NAVY};font-weight:600;line-height:1.1;">{_fmt_moeda(tot_adq["total"])}</div>'
+        f'<div style="font-size:11px;color:{TEXTO_MUTED};margin-top:2px;">{tot_adq["total_n"]} vendas no período</div>'
+        f'<div style="margin-top:10px;">{detalhes_adq_html}</div>'
+        f'</div>'
+        # DIVISÓRIA
+        f'<div style="width:1px;background:#EEE;"></div>'
+        # COLUNA DIREITA — PROGRESSO
+        f'<div style="flex:1;">'
+        f'<div style="font-size:9px;color:{VERDE};letter-spacing:1px;font-weight:600;text-transform:uppercase;margin-bottom:6px;">Progresso da conciliação</div>'
+        f'<div style="font-size:20px;color:{VERDE};font-weight:600;line-height:1.1;">{pct_resolvido:.1f}%</div>'
+        f'<div style="font-size:11px;color:{TEXTO_MUTED};margin-top:2px;">'
+        f'<span style="color:{VERDE};font-weight:600;">{_fmt_moeda(valor_conciliado)}</span> conciliado · '
+        f'<span style="color:{VERMELHO};font-weight:600;">{_fmt_moeda(valor_pendente)}</span> falta atrelar'
+        f'</div>'
+        f'<div style="margin-top:6px;">{barras_html}</div>'
+        f'</div>'
+        f'</div>'
+        # RODAPÉ - DIFERENÇA
+        f'{dif_html}'
+        f'</div>'
+    )
+    st.markdown(card_html, unsafe_allow_html=True)
 
 
 def _render_tarja_progresso(resultado, df_cielo, df_getnet):
@@ -2404,11 +2284,20 @@ def _render_card_ambiguo(venda: pd.Series, idx_card: int):
         chave_venda = _chave_venda_original(venda)
         chave_str = "|".join(str(x) for x in chave_venda)
         venda_dict = venda.to_dict() if hasattr(venda, "to_dict") else dict(venda)
+
+        # Container visual "atrelado" ao card cinza acima
+        st.markdown(
+            '<div style="background:#F5F5F5;border:1px solid #E0E0E0;border-top:none;'
+            'border-radius:0 0 8px 8px;padding:12px 16px;margin-top:-8px;margin-bottom:12px;">'
+            '<div style="font-size:11px;color:#666;margin-bottom:8px;">'
+            'Escolha qual candidata é a certa:'
+            '</div>',
+            unsafe_allow_html=True,
+        )
         cols = st.columns(len(candidatas) + 1)
         for i, cand in enumerate(candidatas):
             with cols[i]:
                 classe = cand.get("classe", "?")
-                # Formato C: data completa + Nº Único (quebra em 2 linhas se necessário)
                 venc_txt = _fmt_data_br(cand.get("dt_vencimento"))
                 nro_unico = cand.get("nro_unico")
                 nro_unico_txt = ""
@@ -2441,7 +2330,8 @@ def _render_card_ambiguo(venda: pd.Series, idx_card: int):
                              type="primary", use_container_width=True):
                     _acao_escolher_candidata(chave_str, cand, venda_dict=venda_dict)
                     st.rerun()
-        st.markdown('<div style="margin-bottom:6px;"></div>', unsafe_allow_html=True)
+
+        st.markdown('</div>', unsafe_allow_html=True)
 
 
 def _render_card_venda_sem_titulo(venda: pd.Series, idx_card: int, hoje: date):
@@ -4005,7 +3895,8 @@ def _render_rodape_exportar(resultado, contadores):
 
     st.markdown(f'<div class="cv-rodape-info">{_escape(info_txt)}</div>', unsafe_allow_html=True)
 
-    col1, col2, col3, col4 = st.columns([2, 2, 1, 1])
+    # 4 colunas de largura IGUAL para alinhamento consistente
+    col1, col2, col3, col4 = st.columns(4)
 
     with col1:
         if _EXCEL_DISPONIVEL:
@@ -4023,7 +3914,7 @@ def _render_rodape_exportar(resultado, contadores):
                 )
                 nome_arq = f"conciliacao_vendas_{date.today().strftime('%Y%m%d')}.xlsx"
                 st.download_button(
-                    "⬇  Exportar Excel (8 abas)",
+                    "⬇  Excel",
                     data=excel_bytes,
                     file_name=nome_arq,
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -4034,14 +3925,13 @@ def _render_rodape_exportar(resultado, contadores):
             except Exception as e:
                 st.error(f"Falha ao gerar Excel: {e}")
         else:
-            st.warning("Módulo de exportação Excel indisponível.")
+            st.warning("Excel indisponível")
 
     with col2:
-        # SALVAR RODADA · guarda arquivos + métricas no Supabase (60 dias)
         rodada_salva_id = st.session_state.get("cv_rodada_salva_id")
         if rodada_salva_id:
             st.button(
-                "✓  Rodada salva",
+                "✓  Salva",
                 key="cv_salvar_rodada_ok",
                 use_container_width=True,
                 disabled=True,
@@ -4057,16 +3947,79 @@ def _render_rodape_exportar(resultado, contadores):
                 _salvar_rodada_atual(resultado, contadores)
 
     with col3:
-        if st.button("↺  Nova rodada", key="cv_nova_rodada", use_container_width=True):
-            _limpar_estado_completo()
+        # REPROCESSAR = preservar ações manuais (bug corrigido)
+        if st.button("🔄  Reprocessar",
+                     key="cv_reprocessar_motor",
+                     help="Roda o motor de novo preservando suas ligações manuais",
+                     use_container_width=True):
+            _reprocessar_preservando_manuais()
             st.rerun()
 
     with col4:
-        if st.button("🔄  Reprocessar", key="cv_reprocessar_motor",
-                     help="Rodar motor novamente", use_container_width=True):
-            _limpar_estado_motor()
-            _rodar_motor()
+        if st.button("↺  Nova rodada",
+                     key="cv_nova_rodada",
+                     help="Descarta esta rodada e começa outra",
+                     use_container_width=True):
+            _limpar_estado_completo()
             st.rerun()
+
+    # Link discreto para "Reprocessar do zero" (caso raro)
+    st.markdown('<div style="margin-top:8px;"></div>', unsafe_allow_html=True)
+    col_lnk, _ = st.columns([2, 3])
+    with col_lnk:
+        if st.session_state.get("cv_confirm_reprocessar_zero"):
+            st.warning("Reprocessar do zero apaga TODAS as suas ligações manuais desta rodada.")
+            col_sim, col_nao = st.columns(2)
+            with col_sim:
+                if st.button("Sim, apagar tudo", key="cv_conf_rprc_sim",
+                             type="primary", use_container_width=True):
+                    _limpar_estado_motor()
+                    _rodar_motor()
+                    st.session_state["cv_confirm_reprocessar_zero"] = False
+                    st.rerun()
+            with col_nao:
+                if st.button("Cancelar", key="cv_conf_rprc_nao",
+                             use_container_width=True):
+                    st.session_state["cv_confirm_reprocessar_zero"] = False
+                    st.rerun()
+        else:
+            if st.button("↺  Reprocessar do zero (apaga ações manuais)",
+                         key="cv_reprocessar_zero",
+                         use_container_width=False,
+                         help="Roda o motor descartando TODAS as suas ligações manuais desta rodada"):
+                st.session_state["cv_confirm_reprocessar_zero"] = True
+                st.rerun()
+
+
+def _reprocessar_preservando_manuais():
+    """Roda o motor de novo MANTENDO ações manuais da usuária.
+
+    Preserva: cv_confirmadas_manual, cv_lig_persistidas, cv_ligacoes_desfeitas,
+              cv_historico, cv_pill_ativa, cv_busca_auto.
+    """
+    # Salva o que a usuária fez
+    preserv = {
+        "cv_confirmadas_manual": dict(st.session_state.get("cv_confirmadas_manual", {}) or {}),
+        "cv_lig_persistidas": dict(st.session_state.get("cv_lig_persistidas", {}) or {}),
+        "cv_ligacoes_desfeitas": set(st.session_state.get("cv_ligacoes_desfeitas", set()) or []),
+        "cv_historico": list(st.session_state.get("cv_historico", []) or []),
+        "cv_pill_ativa": st.session_state.get("cv_pill_ativa", "a_analisar"),
+        "cv_busca_auto": st.session_state.get("cv_busca_auto", ""),
+    }
+
+    # Limpa só o resultado do motor
+    st.session_state["cv_motor_resultado"] = None
+    st.session_state["cv_df_sankhya_classificado"] = None
+    st.session_state["cv_desfazer_pendente"] = None
+    st.session_state["cv_busca_aberta"] = {}
+    st.session_state["cv_busca_texto"] = {}
+
+    # Roda o motor
+    _rodar_motor()
+
+    # Restaura as ações manuais
+    for k, v in preserv.items():
+        st.session_state[k] = v
 
 
 def _salvar_rodada_atual(resultado, contadores):
@@ -4215,14 +4168,15 @@ def render_conciliacao_vendas():
     # Sub-página "Histórico das minhas rodadas" (dentro do próprio módulo)
     if st.session_state.get("cv_subpagina") == "historico":
         from src.paginas import historico as pagina_historico_mod
-        # Botão voltar
-        col_voltar, _ = st.columns([1, 4])
+        # Botão voltar discreto no canto
+        col_voltar, _ = st.columns([1, 6])
         with col_voltar:
             if st.button("← Voltar", key="cv_hist_voltar", use_container_width=True):
                 st.session_state["cv_subpagina"] = None
                 st.rerun()
         pagina_historico_mod.render_dialogo_confirmacao_delete()
-        pagina_historico_mod.render_pagina_historico()
+        # Passa flag indicando origem: só mostra rodadas de vendas
+        pagina_historico_mod.render_pagina_historico(modulo_fixo="vendas")
         return
 
     if st.session_state.get("cv_motor_resultado") is not None:
