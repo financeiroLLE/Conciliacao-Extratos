@@ -112,12 +112,25 @@ def _injetar_css():
 # ==============================================================================
 # RENDER
 # ==============================================================================
-def render_pagina_historico():
-    """Página principal do Histórico."""
+def render_pagina_historico(modulo_fixo: str = None):
+    """Página principal do Histórico.
+
+    Args:
+        modulo_fixo: se informado ('vendas' ou 'bancario'), oculta o filtro de
+                     módulo e mostra só rodadas daquele tipo. Útil quando a
+                     página é aberta de dentro de um módulo específico.
+    """
     _injetar_css()
 
+    if modulo_fixo == "vendas":
+        titulo = "Histórico das suas conciliações de vendas"
+    elif modulo_fixo == "bancario":
+        titulo = "Histórico das suas conciliações bancárias"
+    else:
+        titulo = "Histórico de rodadas"
+
     st.markdown(
-        '<div class="hist-cabecalho">Histórico de rodadas</div>',
+        f'<div class="hist-cabecalho">{titulo}</div>',
         unsafe_allow_html=True,
     )
     st.markdown(
@@ -126,17 +139,24 @@ def render_pagina_historico():
     )
 
     # ---- Filtros ----
-    col_f1, col_f2, col_f3 = st.columns([2, 2, 1])
-    with col_f1:
-        modulo = st.selectbox(
-            "Módulo",
-            options=["Todos", "vendas", "bancario"],
-            index=0,
-            key="hist_filtro_modulo",
-        )
+    if modulo_fixo:
+        # Sem dropdown de módulo — já está fixado pelo contexto
+        col_f2, col_f3 = st.columns([3, 1])
+        modulo = modulo_fixo
+    else:
+        col_f1, col_f2, col_f3 = st.columns([2, 2, 1])
+        with col_f1:
+            modulo_sel = st.selectbox(
+                "Módulo",
+                options=["Todos", "vendas", "bancario"],
+                index=0,
+                key="hist_filtro_modulo",
+            )
+            modulo = None if modulo_sel == "Todos" else modulo_sel
+
     with col_f2:
         incluir_arq = st.checkbox(
-            "Mostrar rodadas arquivadas (expiradas)",
+            "Mostrar arquivadas (expiradas)",
             value=False,
             key="hist_incluir_arq",
         )
@@ -147,7 +167,7 @@ def render_pagina_historico():
     # ---- Buscar rodadas ----
     try:
         rodadas = rd_mod.listar_rodadas(
-            modulo=None if modulo == "Todos" else modulo,
+            modulo=modulo,
             incluir_arquivadas=incluir_arq,
             limite=50,
         )
