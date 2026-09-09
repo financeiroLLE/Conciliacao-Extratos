@@ -5,13 +5,21 @@ Adiciona um bloco visual acima do file_uploader do módulo bancário.
 Se credenciais não estiverem configuradas, mostra explicação clara.
 Se configuradas, mostra botões "Testar conexão" e "Puxar extrato".
 
-Gera arquivo XLSX temporário compatível com o parser atual do app.
+FLUXO NOVO (sem download intermediário):
+  1. Débora escolhe conta + período e clica em "Puxar extrato".
+  2. A API responde e o arquivo é injetado em
+     st.session_state["itau_arquivos_api"] como um objeto UploadedFile-like.
+  3. O app.py mescla essa lista com os arquivos do file_uploader nativo,
+     tratando os dois iguais no pipeline de conciliação.
+  4. O nome do Sankhya correspondente (ex.: "ITAU PISA") é guardado em
+     st.session_state["itau_nome_sankhya_sugerido"] para autopreencher o
+     identificador da conta.
 """
 
 from __future__ import annotations
 
-import io
 from datetime import date, timedelta
+from typing import Iterable, List
 
 import streamlit as st
 
@@ -25,6 +33,96 @@ AMARELO = "#FFCC00"
 AZUL_NAVY = "#0A1730"
 VERDE = "#2E7D4F"
 VERMELHO = "#A32D2D"
+
+
+# ==============================================================================
+# ARQUIVO EM MEMÓRIA — IMITA UploadedFile DO STREAMLIT
+# ==============================================================================
+class _ArquivoAPIItau:
+    """Emula st.runtime.uploaded_file_manager.UploadedFile.
+
+    Tem os atributos e métodos que o resto do app espera de um arquivo
+    vindo do file_uploader: .name, .type, .size, .getvalue(), .read(),
+    .seek(), .tell(). Assim entra transparente no pipeline existente.
+    """
+
+    _MIME_XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+    def __init__(self, nome: str, dados: bytes, mime: str = "") -> None:
+        self.name = nome
+        self.type = mime or self._MIME_XLSX
+        self.size = len(dados)
+        self._data = bytes(dados)
+        self._pos = 0
+        # marcador para o app identificar (se precisar) que veio da API
+        self.origem_api = "itau"
+
+    def getvalue(self) -> bytes:
+        return self._data
+
+    def read(self, n: int = -1) -> bytes:
+        if n is None or n < 0:
+            data = self._data[self._pos:]
+            self._pos = len(self._data)
+        else:
+            data = self._data[self._pos:self._pos + n]
+            self._pos += len(data)
+        return data
+
+    def seek(self, pos: int, whence: int = 0) -> int:
+        if whence == 0:
+            self._pos = max(0, int(pos))
+        elif whence == 1:
+            self._pos = max(0, self._pos + int(pos))
+        elif whence == 2:
+            self._pos = max(0, len(self._data) + int(pos))
+        return self._pos
+
+    def tell(self) -> int:
+        return self._pos
+
+    def close(self) -> None:  # compat com file-like protocol
+        pass
+
+    def __repr__(self) -> str:
+        return f"<_ArquivoAPIItau name={self.name!r} size={self.size}>"
+
+
+# ==============================================================================
+# HELPERS DE ESTADO
+# ==============================================================================
+_CHAVE_ARQS = "itau_arquivos_api"
+_CHAVE_NOME_SANKHYA = "itau_nome_sankhya_sugerido"
+
+
+def _arquivos_api_na_sessao() -> List[_ArquivoAPIItau]:
+    lst = st.session_state.get(_CHAVE_ARQS)
+    if not isinstance(lst, list):
+        return []
+    # segurança: só retornar instâncias corretas (protege contra outras origens)
+    return [x for x in lst if isinstance(x, _ArquivoAPIItau)]
+
+
+def _adicionar_arquivo_api(arq: _ArquivoAPIItau, nome_sankhya: str = "") -> None:
+    """Adiciona arquivo à lista, deduplicando pelo (name + size)."""
+    atuais = _arquivos_api_na_sessao()
+    chave_novo = (arq.name, arq.size)
+    ja_existe = any((x.name, x.size) == chave_novo for x in atuais)
+    if not ja_existe:
+        atuais.append(arq)
+    st.session_state[_CHAVE_ARQS] = atuais
+    if nome_sankhya:
+        st.session_state[_CHAVE_NOME_SANKHYA] = nome_sankhya
+
+
+def _remover_arquivo_api(indice: int) -> None:
+    atuais = _arquivos_api_na_sessao()
+    if 0 <= indice < len(atuais):
+        atuais.pop(indice)
+    st.session_state[_CHAVE_ARQS] = atuais
+    # Se ficou sem nenhum arquivo, também limpa a sugestão de nome
+    if not atuais:
+        st.session_state.pop(_CHAVE_NOME_SANKHYA, None)
 
 
 def _credenciais_configuradas() -> bool:
@@ -41,7 +139,10 @@ def _credenciais_configuradas() -> bool:
         return False
 
 
-def _render_bloco_nao_configurado():
+# ==============================================================================
+# BLOCOS VISUAIS
+# ==============================================================================
+def _render_bloco_nao_configurado() -> None:
     """Bloco explicativo se credenciais faltarem."""
     st.markdown(
         f'<div style="background:#F5F5F5;border-left:3px solid #999;'
@@ -54,7 +155,7 @@ def _render_bloco_nao_configurado():
     )
 
 
-def _render_dialogo_puxar(contas_disponiveis: dict):
+def _render_dialogo_puxar(contas_disponiveis: dict) -> None:
     """Formulário compacto para puxar extrato."""
     apelidos = list(contas_disponiveis.keys())
     if not apelidos:
@@ -80,11 +181,18 @@ def _render_dialogo_puxar(contas_disponiveis: dict):
                 format="DD/MM/YYYY",
             )
         with col_conta:
+            def _fmt_opcao(x: str) -> str:
+                reg = contas_disponiveis.get(x, {})
+                num = reg.get("conta", "")
+                nome_sk = reg.get("nome_sankhya", "")
+                extra = f" · {nome_sk}" if nome_sk else ""
+                return f"{x} ({num}){extra}"
+
             apelido_sel = st.selectbox(
                 "Conta",
                 options=apelidos,
                 key="itau_conta_sel",
-                format_func=lambda x: f"{x} ({contas_disponiveis[x]})",
+                format_func=_fmt_opcao,
             )
 
         submitted = st.form_submit_button(
@@ -93,26 +201,36 @@ def _render_dialogo_puxar(contas_disponiveis: dict):
             use_container_width=True,
         )
 
-    # FORA do form: processar e mostrar download
+    # FORA do form: processar (nao há mais download — vai direto pro uploader)
     if submitted:
-        conta_numero = contas_disponiveis.get(apelido_sel)
+        reg = contas_disponiveis.get(apelido_sel) or {}
+        conta_numero = reg.get("conta", "")
+        nome_sankhya = reg.get("nome_sankhya", "")
         if not conta_numero:
-            st.error("Conta inválida.")
+            st.error("Conta inválida — verifique o cadastro em [itau.contas] no Secrets.")
             return
-        _puxar_e_guardar(
+        _puxar_e_injetar_no_uploader(
             apelido=apelido_sel,
             conta_numero=str(conta_numero),
+            nome_sankhya=nome_sankhya,
             data_inicio=data_inicio,
             data_fim=data_fim,
         )
 
-    # Sempre mostra o download se já tiver algo baixado
-    _render_download_se_disponivel()
 
+def _puxar_e_injetar_no_uploader(
+    apelido: str,
+    conta_numero: str,
+    nome_sankhya: str,
+    data_inicio: date,
+    data_fim: date,
+) -> None:
+    """Chama a API e injeta o arquivo resultante direto no uploader do app.
 
-def _puxar_e_guardar(apelido: str, conta_numero: str,
-                     data_inicio: date, data_fim: date):
-    """Faz a chamada real na API e guarda em session_state."""
+    Sem download intermediário, sem re-arrastar. O arquivo passa a existir
+    em st.session_state["itau_arquivos_api"] como um _ArquivoAPIItau, e o
+    app.py mescla essa lista com o file_uploader nativo.
+    """
     with st.spinner(f"Puxando extrato Itaú · {apelido} · "
                     f"{data_inicio.strftime('%d/%m')} a {data_fim.strftime('%d/%m')}..."):
         try:
@@ -126,44 +244,63 @@ def _puxar_e_guardar(apelido: str, conta_numero: str,
             st.error(f"❌ Falha ao puxar extrato Itaú: {e}")
             return
 
-    st.session_state["itau_extrato_baixado"] = {
-        "bytes": bytes_xlsx,
-        "nome": nome_arquivo,
-        "apelido": apelido,
-        "conta": conta_numero,
-        "periodo": (data_inicio, data_fim),
-    }
+    arq = _ArquivoAPIItau(nome=nome_arquivo, dados=bytes_xlsx)
+    _adicionar_arquivo_api(arq, nome_sankhya=nome_sankhya)
+
+    aviso_nome = ""
+    if not nome_sankhya:
+        aviso_nome = (
+            "  ⚠️ Sem `nome_sankhya` cadastrado para esta conta — "
+            "o identificador vai precisar ser escolhido manualmente. "
+            "Cadastre em Secrets → [itau.contas." + apelido + "]."
+        )
     st.success(
-        f"✓ Extrato {apelido} baixado ({len(bytes_xlsx):,} bytes). "
-        f"Baixe pelo botão abaixo e arraste no campo de upload."
+        f"✓ Extrato {apelido} carregado ({arq.size:,} bytes)."
+        + aviso_nome
     )
+    # rerun para o uploader do app.py enxergar o novo arquivo já
+    st.rerun()
 
 
-def _render_download_se_disponivel():
-    """Se tem extrato baixado em memória, mostra botão de download."""
-    baixado = st.session_state.get("itau_extrato_baixado")
-    if not baixado:
+def _render_lista_arquivos_api() -> None:
+    """Mostra, logo abaixo do expansor, os arquivos que estão vindos da API
+    (com botão para remover). Fica visível mesmo com o expansor colapsado,
+    para que a Débora sempre veja o que está pronto para conciliar.
+    """
+    arqs = _arquivos_api_na_sessao()
+    if not arqs:
         return
 
-    col_dl, col_lmp = st.columns([3, 1])
-    with col_dl:
-        st.download_button(
-            f"⬇  Baixar {baixado['nome']}",
-            data=baixado["bytes"],
-            file_name=baixado["nome"],
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            key="itau_baixar_arquivo",
-            use_container_width=True,
-        )
-    with col_lmp:
-        if st.button("✖  Limpar", key="itau_limpar_baixado",
-                     use_container_width=True,
-                     help="Descarta o extrato baixado da memória"):
-            st.session_state.pop("itau_extrato_baixado", None)
-            st.rerun()
+    nome_sk = st.session_state.get(_CHAVE_NOME_SANKHYA, "")
+    rotulo_sk = f" · identificador: **{nome_sk}**" if nome_sk else ""
+    st.markdown(
+        f'<div style="margin:6px 0 2px;font-size:11.5px;color:#9fb3d6;">'
+        f'📡 <b>Arquivos vindos da API Itaú</b>{rotulo_sk}'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+    for i, arq in enumerate(arqs):
+        col_nome, col_x = st.columns([12, 1])
+        with col_nome:
+            st.markdown(
+                f'<div style="background:#0b2560;border-radius:6px;'
+                f'padding:6px 12px;margin-bottom:4px;color:#eaf0fb;'
+                f'font-size:12px;display:flex;align-items:center;gap:8px;">'
+                f'<span style="background:#EC7000;color:#fff;font-size:10px;'
+                f'font-weight:700;padding:2px 8px;border-radius:4px;">ITAÚ · API</span>'
+                f'<span>{arq.name}</span>'
+                f'<span style="color:#9fb3d6;">· {arq.size:,} bytes</span>'
+                f'</div>',
+                unsafe_allow_html=True,
+            )
+        with col_x:
+            if st.button("✖", key=f"rm_api_itau_{i}",
+                         help="Remover este arquivo (para puxar de novo, use o expansor acima)"):
+                _remover_arquivo_api(i)
+                st.rerun()
 
 
-def _render_botao_testar():
+def _render_botao_testar() -> None:
     """Botão que só testa se as credenciais estão OK (sem puxar dados)."""
     if st.button("🧪  Testar conexão Itaú",
                  key="itau_testar",
@@ -178,7 +315,7 @@ def _render_botao_testar():
             st.error(f"❌ {resultado['mensagem']}")
 
 
-def render():
+def render() -> None:
     """Renderiza o bloco completo (chamado do app.py)."""
     if not _credenciais_configuradas():
         _render_bloco_nao_configurado()
@@ -195,17 +332,34 @@ def render():
 
         if not contas:
             st.warning(
-                "Nenhuma conta cadastrada. Adicione no Secrets:\n"
-                "```\n[itau.contas]\nprincipal = \"002300788615\"\n```"
+                "Nenhuma conta cadastrada. Adicione no Secrets no formato novo:\n"
+                "```\n"
+                "[itau.contas.principal]\n"
+                "conta = \"002300788615\"\n"
+                "nome_sankhya = \"ITAU PISA\"\n"
+                "```"
             )
             return
 
         _render_dialogo_puxar(contas)
 
+    # FORA do expansor — sempre visível quando tem arquivos carregados
+    _render_lista_arquivos_api()
+
 
 # ==============================================================================
 # API CHAMADA DO app.py
 # ==============================================================================
-def _render_botao_puxar_itau():
+def _render_botao_puxar_itau() -> None:
     """Wrapper para o app.py chamar (evita renomeação lá)."""
     render()
+
+
+def arquivos_api_atuais() -> List[_ArquivoAPIItau]:
+    """Exposto para o app.py mesclar com o file_uploader nativo."""
+    return _arquivos_api_na_sessao()
+
+
+def nome_sankhya_sugerido() -> str:
+    """Exposto para o app.py autopreencher o identificador da conta."""
+    return str(st.session_state.get(_CHAVE_NOME_SANKHYA, "")).strip()
