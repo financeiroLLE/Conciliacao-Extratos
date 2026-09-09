@@ -39,7 +39,11 @@ from src.reports import (
     gerar_relatorio_excel_de_conta,
 )
 from src.paginas.conciliacao_vendas import render_conciliacao_vendas
-from src.api_bancos.ui_itau import _render_botao_puxar_itau
+from src.api_bancos.ui_itau import (
+    _render_botao_puxar_itau,
+    arquivos_api_atuais,
+    nome_sankhya_sugerido,
+)
 
 
 # ============================================================
@@ -3642,6 +3646,12 @@ def tela_upload():
             if _arqs_single and not isinstance(_arqs_single, list):
                 _arqs_single = [_arqs_single]
             _arqs_single = _arqs_single or []
+            # v5.80: arquivos vindos da API do Itaú entram junto com os arrastados
+            # manualmente — mesmo tratamento no pipeline (dedup por conteúdo abaixo
+            # já resolve se por acaso o mesmo arquivo aparecer duas vezes).
+            _arqs_api_itau = arquivos_api_atuais()
+            if _arqs_api_itau:
+                _arqs_single = list(_arqs_api_itau) + _arqs_single
             # dedup por conteúdo (mesmo arquivo subido em duplicata)
             if _arqs_single:
                 import hashlib as _hl_single
@@ -3667,8 +3677,12 @@ def tela_upload():
             # v5.8: auto-preenche o nome da conta a partir do nome do arquivo.
             # v5.9: e, quando dá, LÊ a conta do cabeçalho do próprio extrato
             # (banco + agência + conta), pra não depender do nome do arquivo.
+            # v5.80: se o extrato veio da API do Itaú, o nome_sankhya cadastrado
+            # no Secrets é a fonte mais confiável (ex.: "ITAU PISA") — sobrescreve
+            # tudo, porque a API já sabe qual conta está sendo puxada.
             nome_default = ""
             conta_det = None
+            _nome_sankhya_api = nome_sankhya_sugerido()
             if arquivo_banco is not None:
                 nome_default = arquivo_banco.name.rsplit(".", 1)[0].strip()
                 try:
@@ -3801,6 +3815,11 @@ def tela_upload():
                 # pré-seleciona (a lista continua na tela para trocar).
                 if idx_match is None and len(contas_sankhya) == 1:
                     idx_match = 0
+                # v5.80: se o extrato veio da API do Itaú, o nome_sankhya
+                # cadastrado no Secrets é o critério mais forte de todos —
+                # substitui qualquer palpite anterior.
+                if _nome_sankhya_api and _nome_sankhya_api in contas_sankhya:
+                    idx_match = contas_sankhya.index(_nome_sankhya_api)
                 idx_default = idx_match if idx_match is not None else len(opcoes) - 1
                 escolha = st.selectbox(
                     "Extrato Bancário (identificador da conta)",
@@ -3823,9 +3842,12 @@ def tela_upload():
                     "Suba o relatório do Sankhya ao lado para escolher a conta "
                     "numa lista. Por enquanto, digite o identificador."
                 )
+                # v5.80: se a API do Itaú sugeriu um nome, ele tem prioridade
+                # sobre o palpite baseado no nome do arquivo.
+                _valor_input = _nome_sankhya_api or nome_default
                 nome_conta = st.text_input(
                     "Extrato Bancário (identificador da conta)",
-                    value=nome_default,
+                    value=_valor_input,
                     placeholder="ex: Bradesco-CC-12345",
                     key="conta_single",
                     help="Rótulo único da conta. Mínimo 3 caracteres.",
