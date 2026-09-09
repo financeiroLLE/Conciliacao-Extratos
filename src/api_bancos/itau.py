@@ -12,7 +12,9 @@ Credenciais são lidas de st.secrets["itau"]:
   - client_secret
   - certificado_crt (PEM completo, com BEGIN/END CERTIFICATE)
   - chave_privada_key (PEM completo, com BEGIN/END PRIVATE KEY)
-  - contas.{apelido} (formato XXXX00YYYYYZ = agência + 00 + conta + DAC)
+  - contas.{apelido}.conta         (formato XXXX00YYYYYZ = agência + 00 + conta + DAC)
+  - contas.{apelido}.nome_sankhya  (texto exato da coluna "Descrição" do relatório
+                                     Sankhya — ex.: "ITAU PISA")
 
 Ambiente:
   Produção  · sts.itau.com.br + account-statement.api.itau.com
@@ -121,11 +123,40 @@ def _remover_arquivos(*paths: str) -> None:
 # ==============================================================================
 # CONFIG A PARTIR DE st.secrets
 # ==============================================================================
+def _normalizar_conta_registro(valor: Any) -> Dict[str, str]:
+    """Normaliza o valor de [itau.contas.<apelido>] em dict {conta, nome_sankhya}.
+
+    Aceita dois formatos por compatibilidade:
+      (novo)   [itau.contas.principal]
+               conta = "002300788615"
+               nome_sankhya = "ITAU PISA"
+
+      (antigo) [itau.contas]
+               principal = "002300788615"
+               → nome_sankhya = "" (autopreenchimento não vai rodar)
+    """
+    if isinstance(valor, dict):
+        return {
+            "conta": str(valor.get("conta", "")).strip(),
+            "nome_sankhya": str(valor.get("nome_sankhya", "")).strip(),
+        }
+    # Formato antigo: valor simples (só o número da conta)
+    return {"conta": str(valor).strip(), "nome_sankhya": ""}
+
+
 def _obter_config() -> Dict[str, Any]:
     """Lê credenciais de st.secrets['itau'].
 
     Retorna dict com: client_id, client_secret, cert_pem, key_pem,
-                      ambiente ('prod'|'homol'), contas (dict).
+                      ambiente ('prod'|'homol'), contas (dict aninhado).
+
+    Formato de `contas`:
+        {
+          "principal": {"conta": "002300788615", "nome_sankhya": "ITAU PISA"},
+          "king":      {"conta": "0034...",      "nome_sankhya": "ITAU KING"},
+          ...
+        }
+
     Lança RuntimeError se algo faltar.
     """
     import streamlit as st
@@ -148,12 +179,16 @@ def _obter_config() -> Dict[str, Any]:
     if ambiente not in ("prod", "homol"):
         raise RuntimeError(f"Ambiente Itaú inválido: {ambiente}. Use 'prod' ou 'homol'.")
 
-    contas = {}
+    contas: Dict[str, Dict[str, str]] = {}
     if "contas" in sec:
         try:
-            contas = dict(sec["contas"])
+            bruto = dict(sec["contas"])
         except Exception:
-            contas = {}
+            bruto = {}
+        for apelido, valor in bruto.items():
+            registro = _normalizar_conta_registro(valor)
+            if registro["conta"]:
+                contas[str(apelido)] = registro
 
     return {
         "client_id": str(sec["client_id"]).strip(),
@@ -171,7 +206,7 @@ def _obter_config() -> Dict[str, Any]:
 def _obter_access_token(config: Dict[str, Any]) -> str:
     """Faz OAuth2 client_credentials com mTLS. Retorna access_token.
 
-    Usa cache em memória de 4 minutos (token dura 5 min).
+    Usa cache em memória de ~4 minutos (token dura 5 min).
     """
     cache_key = f"{config['ambiente']}:{config['client_id']}"
     agora = datetime.utcnow()
@@ -431,12 +466,21 @@ def testar_conexao() -> Dict[str, Any]:
         return {"ok": False, "mensagem": str(e), "ambiente": ""}
 
 
-def listar_contas() -> Dict[str, str]:
-    """Retorna dict {apelido: numero_conta} configurado no Secrets."""
+def listar_contas() -> Dict[str, Dict[str, str]]:
+    """Retorna dict {apelido: {conta, nome_sankhya}} configurado no Secrets."""
     try:
         return _obter_config()["contas"]
     except Exception:
         return {}
+
+
+def obter_nome_sankhya(apelido: str) -> str:
+    """Retorna o nome_sankhya cadastrado para o apelido, ou string vazia se não achar."""
+    contas = listar_contas()
+    reg = contas.get(str(apelido))
+    if not reg:
+        return ""
+    return str(reg.get("nome_sankhya", "")).strip()
 
 
 def puxar_extrato_df(
