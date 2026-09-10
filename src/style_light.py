@@ -39,14 +39,24 @@ v6.5 (11/09/2026) — pós quinto deploy:
     exatamente com o topo do card da logo no sidebar.
 
 v6.6 (11/09/2026) — pós sexto deploy:
-  - Namespace .cv-* (Conciliação de Vendas) inteiro pintado em ESQUEMA
-    NAVY: cards KPI e cards de candidatas ficam com fundo navy escuro,
-    valores em amarelo (destaque), tags e botões coerentes. Antes ficava
-    amarelo apagado sobre amarelo apagado — ilegível.
-  - Menu do sidebar: reforço no contraste dos itens NÃO-ATIVOS quando
-    outro item está selecionado (evita virarem fantasmas).
-  - Modal "Clear caches" e outros dialogs nativos do Streamlit:
-    fundo navy escuro, botão principal amarelo.
+  - Namespace .cv-* inteiro em navy escuro.
+  - Menu do sidebar: contraste reforçado.
+  - Modal "Clear caches" navy.
+
+v6.7 (11/09/2026) — pós sétimo deploy:
+  - Datepicker (calendário): fundo navy com texto branco, dia selecionado
+    amarelo. Antes: datas quase invisíveis sobre fundo branco.
+  - Selectbox de conta e outros: texto legível (branco navy no dropdown
+    aberto e no valor selecionado).
+  - KPIs do Resumo Executivo (.lle-kpi): fundo NAVY (era branco com borda
+    amarela), altura reduzida — cards ficaram menores. Valores em amarelo,
+    labels em cinza claro. Consistente com KPIs do módulo Conciliação
+    de Vendas.
+  - Cards do dashboard (opa-card-*, opa-chip, opa-excecoes-*): mesmo
+    esquema navy.
+  - Rodapé de conferência do Detalhamento ("Rodapé do Sankhya", "Extrato
+    do banco", "Diferença") — dentro de card amarelo com texto navy
+    legível. Antes: inline-styles em cores claras sobre fundo branco.
 """
 from __future__ import annotations
 
@@ -228,28 +238,116 @@ html body .lle-header .lle-subtitle * {{
     opacity: 0.95 !important;
 }}
 
-/* KPIs / cards de indicador do dashboard */
+/* KPIs / cards de indicador do dashboard — v6.7: navy escuro consistente
+   com módulo Conciliação de Vendas. Padding reduzido — antes ficavam imensos. */
 html body .lle-kpi {{
-    background: {_BG_CARD} !important;
-    border: 2px solid {_AMARELO} !important;
+    background: linear-gradient(135deg, {_NAVY_SIDEBAR} 0%, {_NAVY_SIDEBAR_2} 100%) !important;
+    border: 1px solid {_NAVY_SIDEBAR} !important;
+    border-left: 3px solid {_AMARELO} !important;
     border-radius: 10px !important;
-    box-shadow: 0 3px 12px rgba(250,195,24,0.10) !important;
+    box-shadow: 0 3px 12px rgba(15,31,70,0.15) !important;
+    padding: 14px 16px !important;
+    min-height: unset !important;
+    height: auto !important;
 }}
 html body .lle-kpi .lle-kpi-label,
-html body .lle-kpi .lle-kpi-label * {{
-    color: {_TEXTO2} !important;
-    -webkit-text-fill-color: {_TEXTO2} !important;
+html body .lle-kpi .lle-kpi-label *,
+html body .lle-kpi .lle-kpi-sub-label,
+html body .lle-kpi .lle-kpi-sub-label * {{
+    color: {_AMARELO} !important;
+    -webkit-text-fill-color: {_AMARELO} !important;
+    font-size: 10px !important;
+    font-weight: 700 !important;
+    letter-spacing: 1px !important;
+    text-transform: uppercase !important;
 }}
 html body .lle-kpi .lle-kpi-value,
-html body .lle-kpi .lle-kpi-value * {{
-    color: {_NAVY} !important;
-    -webkit-text-fill-color: {_NAVY} !important;
-    font-weight: 700 !important;
+html body .lle-kpi .lle-kpi-value *,
+html body .lle-kpi .lle-kpi-sub-valor,
+html body .lle-kpi .lle-kpi-sub-valor * {{
+    color: #FFFFFF !important;
+    -webkit-text-fill-color: #FFFFFF !important;
+    font-weight: 800 !important;
 }}
 html body .lle-kpi .lle-kpi-suffix,
-html body .lle-kpi .lle-kpi-suffix * {{
-    color: {_TEXTO2} !important;
-    -webkit-text-fill-color: {_TEXTO2} !important;
+html body .lle-kpi .lle-kpi-suffix *,
+html body .lle-kpi .lle-kpi-sub-stack {{
+    color: {_SB_TEXTO2} !important;
+    -webkit-text-fill-color: {_SB_TEXTO2} !important;
+}}
+html body .lle-kpi-row {{
+    gap: 12px !important;
+}}
+
+/* Cards opa-* do dashboard/detalhamento — mesmo esquema navy */
+html body .opa-card-conciliado,
+html body .opa-card-secundario,
+html body .opa-card-ancora,
+html body .opa-card-donut {{
+    background: linear-gradient(135deg, {_NAVY_SIDEBAR} 0%, {_NAVY_SIDEBAR_2} 100%) !important;
+    border: 1px solid {_NAVY_SIDEBAR} !important;
+    border-left: 3px solid {_AMARELO} !important;
+    border-radius: 10px !important;
+    box-shadow: 0 3px 12px rgba(15,31,70,0.15) !important;
+    color: #FFFFFF !important;
+}}
+html body .opa-card-conciliado *,
+html body .opa-card-secundario *,
+html body .opa-card-ancora *,
+html body .opa-card-donut * {{
+    color: {_SB_TEXTO} !important;
+    -webkit-text-fill-color: {_SB_TEXTO} !important;
+}}
+html body .opa-card-conciliado-valor,
+html body .opa-card-secundario-valor,
+html body .opa-card-ancora-valor,
+html body .opa-card-sec-valor,
+html body .opa-card-donut-pct {{
+    color: #FFFFFF !important;
+    -webkit-text-fill-color: #FFFFFF !important;
+    font-weight: 800 !important;
+}}
+html body .opa-card-conciliado-label,
+html body .opa-card-secundario-label,
+html body .opa-card-ancora-label,
+html body .opa-card-sec-label,
+html body .opa-card-donut-label,
+html body .opa-card-sec-head {{
+    color: {_AMARELO} !important;
+    -webkit-text-fill-color: {_AMARELO} !important;
+    font-weight: 700 !important;
+}}
+html body .opa-card-sec-icon {{
+    background: {_AMARELO} !important;
+    color: {_NAVY} !important;
+}}
+
+/* Chips e exceções */
+html body .opa-chip {{
+    background: rgba(255,255,255,0.08) !important;
+    border: 1px solid rgba(255,255,255,0.12) !important;
+    color: {_SB_TEXTO} !important;
+}}
+html body .opa-chip-label {{
+    color: {_AMARELO} !important;
+    -webkit-text-fill-color: {_AMARELO} !important;
+}}
+html body .opa-chip-valor {{
+    color: #FFFFFF !important;
+    -webkit-text-fill-color: #FFFFFF !important;
+    font-weight: 700 !important;
+}}
+html body .opa-chip-icon {{
+    color: {_AMARELO} !important;
+}}
+html body .opa-excecoes-head {{
+    background: transparent !important;
+    border-top: 1px dashed {_AMARELO_SUAVE} !important;
+}}
+html body .opa-excecoes-head-label {{
+    color: {_AMARELO} !important;
+    -webkit-text-fill-color: {_AMARELO} !important;
+    font-weight: 700 !important;
 }}
 
 /* ---------- 2) SIDEBAR: navy escuro ---------- */
@@ -987,6 +1085,157 @@ html body .cv-rodape-info {{
 /* Wrapper de botão de busca */
 html body .cv-btn-busca-wrapper {{
     margin: 8px 0 !important;
+}}
+
+/* ============================================================================
+   v6.7 · DATEPICKER (calendário) — navy escuro com destaque amarelo
+   ============================================================================ */
+html body [data-baseweb="calendar"],
+html body [data-baseweb="datepicker"],
+html body [data-baseweb="popover"] [data-baseweb="calendar"] {{
+    background: {_NAVY_SIDEBAR} !important;
+    border: 1px solid {_AMARELO} !important;
+    border-radius: 8px !important;
+    color: #FFFFFF !important;
+    box-shadow: 0 6px 24px rgba(0,0,0,0.35) !important;
+}}
+html body [data-baseweb="calendar"] * {{
+    color: #FFFFFF !important;
+    -webkit-text-fill-color: #FFFFFF !important;
+}}
+/* Cabeçalho (mês/ano) e setas */
+html body [data-baseweb="calendar"] div[role="button"] {{
+    color: {_AMARELO} !important;
+    -webkit-text-fill-color: {_AMARELO} !important;
+    font-weight: 700 !important;
+}}
+/* Nomes dos dias da semana (Su Mo Tu We Th Fr Sa) */
+html body [data-baseweb="calendar"] div[role="grid"] > div:first-child *,
+html body [data-baseweb="calendar"] div[role="rowheader"] * {{
+    color: {_AMARELO} !important;
+    -webkit-text-fill-color: {_AMARELO} !important;
+    font-weight: 700 !important;
+    opacity: 0.85 !important;
+}}
+/* Dias do mês */
+html body [data-baseweb="calendar"] [role="gridcell"] {{
+    color: #FFFFFF !important;
+    -webkit-text-fill-color: #FFFFFF !important;
+}}
+html body [data-baseweb="calendar"] [role="gridcell"] * {{
+    color: inherit !important;
+    -webkit-text-fill-color: inherit !important;
+}}
+html body [data-baseweb="calendar"] [role="gridcell"][aria-disabled="true"] {{
+    color: {_SB_TEXTO3} !important;
+    -webkit-text-fill-color: {_SB_TEXTO3} !important;
+    opacity: 0.5 !important;
+}}
+/* Dia selecionado — amarelo com texto navy */
+html body [data-baseweb="calendar"] [aria-selected="true"],
+html body [data-baseweb="calendar"] [aria-pressed="true"] {{
+    background: {_AMARELO} !important;
+    color: {_NAVY} !important;
+    -webkit-text-fill-color: {_NAVY} !important;
+    border-radius: 50% !important;
+    font-weight: 800 !important;
+}}
+html body [data-baseweb="calendar"] [aria-selected="true"] *,
+html body [data-baseweb="calendar"] [aria-pressed="true"] * {{
+    color: {_NAVY} !important;
+    -webkit-text-fill-color: {_NAVY} !important;
+}}
+
+/* Selectbox (Conta) — quando aberto e valor selecionado */
+html body [data-baseweb="select"] {{
+    background: {_BG_CARD} !important;
+}}
+html body [data-baseweb="select"] > div {{
+    color: {_TEXTO} !important;
+    -webkit-text-fill-color: {_TEXTO} !important;
+    background: {_BG_CARD} !important;
+}}
+html body [data-baseweb="select"] input {{
+    color: {_TEXTO} !important;
+    -webkit-text-fill-color: {_TEXTO} !important;
+}}
+html body [data-baseweb="select"] [data-baseweb="tag"],
+html body [data-baseweb="select"] span {{
+    color: {_TEXTO} !important;
+    -webkit-text-fill-color: {_TEXTO} !important;
+}}
+/* Dropdown do selectbox aberto — fundo navy escuro para as opções */
+html body [data-baseweb="popover"] [data-baseweb="menu"] {{
+    background: {_NAVY_SIDEBAR} !important;
+    border: 1px solid {_AMARELO} !important;
+}}
+html body [data-baseweb="popover"] [data-baseweb="menu"] li,
+html body [data-baseweb="popover"] [data-baseweb="menu"] * {{
+    color: #FFFFFF !important;
+    -webkit-text-fill-color: #FFFFFF !important;
+}}
+html body [data-baseweb="popover"] [data-baseweb="menu"] li[aria-selected="true"],
+html body [data-baseweb="popover"] [data-baseweb="menu"] li:hover {{
+    background: rgba(250,195,24,0.15) !important;
+    color: {_AMARELO} !important;
+    -webkit-text-fill-color: {_AMARELO} !important;
+}}
+
+/* ============================================================================
+   v6.7 · RODAPÉ DE CONFERÊNCIA DO DETALHAMENTO (Rodapé do Sankhya)
+   Os inline styles do app antigo pintavam textos em cores claras sobre
+   fundo branco. Meu CSS com !important vence o inline (que não tem
+   !important) por especificidade. Aqui, além disso, pinto o CONTAINER
+   pai como amarelo claro, para o rodapé ficar dentro de um card amarelo.
+   ============================================================================ */
+/* Container do rodapé — capturar por td com color específica que o app usa */
+html body .block-container td[style*="color:#FAC318"] {{
+    color: {_NAVY} !important;
+    -webkit-text-fill-color: {_NAVY} !important;
+    font-weight: 700 !important;
+}}
+html body .block-container td[style*="color:#cdd9f2"],
+html body .block-container td[style*="color:#9fb3d6"],
+html body .block-container td[style*="color:#eaf0fb"] {{
+    color: {_TEXTO} !important;
+    -webkit-text-fill-color: {_TEXTO} !important;
+}}
+/* Bordas escuras que o app antigo colocava (border-top: 1px solid #163062)
+   — trocar por cor visível no fundo claro */
+html body .block-container td[style*="border-top:1px solid #163062"],
+html body .block-container tr[style*="border-top"] td {{
+    border-top: 1px solid {_AMARELO_SUAVE} !important;
+}}
+/* Cabeçalhos da tabela (Crédito, Débito, Movimentação total) */
+html body .block-container th[style*="color:#9fb3d6"],
+html body .block-container th {{
+    color: {_TEXTO2} !important;
+    -webkit-text-fill-color: {_TEXTO2} !important;
+    font-weight: 700 !important;
+}}
+/* Envolvendo a tabela de rodapé com um card amarelo:
+   como o app renderiza sem classe custom, pego pela estrutura */
+html body .block-container [data-testid="stMarkdownContainer"]:has(> table) {{
+    background: #FFFDEE !important;
+    border: 2px solid {_AMARELO} !important;
+    border-radius: 10px !important;
+    padding: 14px !important;
+    box-shadow: 0 3px 12px rgba(250,195,24,0.10) !important;
+}}
+html body .block-container [data-testid="stMarkdownContainer"] table {{
+    color: {_TEXTO} !important;
+    -webkit-text-fill-color: {_TEXTO} !important;
+    background: transparent !important;
+}}
+html body .block-container [data-testid="stMarkdownContainer"] table td,
+html body .block-container [data-testid="stMarkdownContainer"] table th {{
+    color: {_TEXTO} !important;
+    -webkit-text-fill-color: {_TEXTO} !important;
+}}
+html body .block-container [data-testid="stMarkdownContainer"] table span[style*="color:#7ee0a6"] {{
+    color: {_VERDE if False else "#0F8C3B"} !important;
+    -webkit-text-fill-color: #0F8C3B !important;
+    font-weight: 800 !important;
 }}
 
 /* ============================================================================
