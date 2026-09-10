@@ -692,6 +692,55 @@ html body .block-container [data-testid="stFileUploader"] section {{
 html body .block-container [data-testid="stFileUploader"] * {{
     color: {_TEXTO} !important;
 }}
+/* v6.9: botão "Upload" dentro do file_uploader — antes ficava navy sobre
+   navy (texto invisível). Agora: fundo amarelo, texto navy peso 700. */
+html body .block-container [data-testid="stFileUploader"] button,
+html body .block-container [data-testid="stFileUploaderDropzone"] button,
+html body .block-container [data-testid="stBaseButton-secondary"][data-testid*="FileUploader"],
+html body .block-container [data-testid="stFileUploader"] section button {{
+    background: {_AMARELO} !important;
+    color: {_NAVY} !important;
+    -webkit-text-fill-color: {_NAVY} !important;
+    border: 1px solid {_NAVY} !important;
+    font-weight: 700 !important;
+    box-shadow: 0 2px 6px rgba(250,195,24,0.25) !important;
+}}
+html body .block-container [data-testid="stFileUploader"] button *,
+html body .block-container [data-testid="stFileUploader"] section button * {{
+    color: {_NAVY} !important;
+    -webkit-text-fill-color: {_NAVY} !important;
+    font-weight: 700 !important;
+}}
+html body .block-container [data-testid="stFileUploader"] button:hover,
+html body .block-container [data-testid="stFileUploader"] section button:hover {{
+    background: #FFD54B !important;
+    transform: translateY(-1px) !important;
+}}
+/* Ícone SVG dentro do botão Upload (se houver) */
+html body .block-container [data-testid="stFileUploader"] button svg,
+html body .block-container [data-testid="stFileUploader"] section button svg {{
+    fill: {_NAVY} !important;
+    color: {_NAVY} !important;
+}}
+
+/* v6.9: card ITAÚ · API (.arqcard-itau) — fundo navy escuro para o
+   texto claro ficar legível no tema light. */
+html body .arqcard-itau {{
+    background: linear-gradient(135deg, {_NAVY_SIDEBAR} 0%, {_NAVY_SIDEBAR_2} 100%) !important;
+    border: 1px solid {_NAVY_SIDEBAR} !important;
+    border-left: 3px solid {_ITAU_LARANJA if False else "#EC7000"} !important;
+    color: #FFFFFF !important;
+}}
+html body .arqcard-itau * {{
+    color: {_SB_TEXTO} !important;
+    -webkit-text-fill-color: {_SB_TEXTO} !important;
+}}
+html body .arqcard-itau b,
+html body .arqcard-itau strong {{
+    color: {_AMARELO} !important;
+    -webkit-text-fill-color: {_AMARELO} !important;
+    font-weight: 700 !important;
+}}
 
 /* Botão Executar e outros primaries do corpo */
 html body .block-container .stButton > button[kind="primary"] {{
