@@ -438,56 +438,39 @@ def _render_lista_arquivos_api() -> None:
     metricas = st.session_state.get(_CHAVE_METRICAS) or {}
     qtd_lancamentos = int(metricas.get("qtd", -1))  # -1 = desconhecido (sessão antiga)
     volume_valor = float(metricas.get("volume", 0.0))
-    total_credito = float(metricas.get("total_credito", 0.0))
-    total_debito = float(metricas.get("total_debito", 0.0))
-
-    def _fmt_brl(v: float) -> str:
-        return f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
     for i, arq in enumerate(arqs):
         col_card, col_x = st.columns([25, 1])
         with col_card:
-            # v5.85: mostra volume movimentado (|créditos| + |débitos|),
-            # que é a métrica que o Sankhya usa como referência.
+            # v5.87: card enxuto — mostra apenas a quantidade de lançamentos.
+            # Volume/crédito/débito continuam calculados em session_state para
+            # uso futuro (auditoria, relatórios), mas não são exibidos aqui.
             if qtd_lancamentos < 0:
                 info_qtd = f'{arq.size:,} bytes'
             elif qtd_lancamentos == 0:
                 info_qtd = (
                     f'<span style="color:#F6BF13;font-weight:700;">'
-                    f'⚠ 0 lançamentos</span> · {arq.size:,} bytes'
+                    f'⚠ 0 lançamentos</span>'
                 )
             else:
                 info_qtd = (
                     f'<span style="color:#0F8C3B;font-weight:700;">'
-                    f'{qtd_lancamentos} lançamentos · '
-                    f'movimentação {_fmt_brl(volume_valor)}</span>'
+                    f'{qtd_lancamentos} lançamentos</span>'
                 )
 
-            # v5.85: quando tem qtd > 0, mostra também créditos e débitos
-            # separados (uma linha extra) — útil pra bater os totais.
-            info_cred_deb = ""
-            if qtd_lancamentos > 0:
-                info_cred_deb = (
-                    f'<div style="color:#9fb3d6;font-size:10.5px;margin-top:2px;">'
-                    f'<span style="color:#0F8C3B;">+ {_fmt_brl(total_credito)} crédito</span> · '
-                    f'<span style="color:#C0392B;">- {_fmt_brl(total_debito)} débito</span>'
-                    f'</div>'
-                )
-
+            # v5.87: card enxuto — só nome_sankhya + qtd, sem cred/deb.
             if nome_sk:
                 linha2 = (
                     f'<div style="color:#9fb3d6;font-size:11px;margin-top:2px;">'
                     f'conta · '
                     f'<b style="color:#eaf0fb;">{nome_sk}</b> · '
                     f'{info_qtd}</div>'
-                    f'{info_cred_deb}'
                 )
             else:
                 linha2 = (
                     f'<div style="color:#9fb3d6;font-size:11px;margin-top:2px;">'
                     f'{info_qtd} · '
                     f'<span style="color:#FAC318;">sem nome_sankhya cadastrado</span></div>'
-                    f'{info_cred_deb}'
                 )
 
             st.markdown(
@@ -509,24 +492,20 @@ def _render_lista_arquivos_api() -> None:
                 _remover_arquivo_api(i)
                 st.rerun()
 
-    # v5.85: só detecta problema real quando NENHUM lançamento vem,
-    # OU quando volume movimentado é zero (aí sim é bug). Soma bruta ~ 0
-    # com volume > 0 é COMPORTAMENTO NORMAL (créditos ≈ débitos) —
-    # não deve gerar alerta.
+    # v5.87: modo debug só aparece quando tem problema REAL (0 lançamentos
+    # ou volume zero com linhas). Em operação normal, o card fica limpo.
+    # Se um dia der problema, os botões voltam automaticamente.
     parece_problema = arqs and (
         qtd_lancamentos == 0
         or (qtd_lancamentos > 0 and volume_valor < 0.01)
     )
-    if arqs:
+    if parece_problema and arqs:
         arq0 = arqs[0]
-        if parece_problema:
-            st.warning(
-                "⚠️ **Extrato sem movimentação lida da API.** Zero "
-                "lançamentos ou volume zero — algo está errado. "
-                "Use os botões abaixo para diagnosticar."
-            )
-        # v5.85: botões de conferência ficam disponíveis SEMPRE (útil
-        # pra auditoria), mas discretos e sem alerta quando está tudo ok.
+        st.warning(
+            "⚠️ **Extrato sem movimentação lida da API.** Zero "
+            "lançamentos ou volume zero — algo está errado. "
+            "Use os botões abaixo para diagnosticar."
+        )
         col_dl, col_dbg = st.columns([1, 1])
         with col_dl:
             st.download_button(
@@ -538,11 +517,7 @@ def _render_lista_arquivos_api() -> None:
                 use_container_width=True,
             )
         with col_dbg:
-            # v5.85: expander só abre por padrão quando tem problema REAL
-            with st.expander(
-                "🔧  Debug técnico — JSON bruto da API",
-                expanded=bool(parece_problema),
-            ):
+            with st.expander("🔧  Debug técnico — JSON bruto da API", expanded=True):
                 dbg = api_itau.obter_ultimo_debug()
                 st.write(f"**Conta consultada:** `{dbg.get('conta','?')}`")
                 st.write(f"**Período:** {dbg.get('periodo','?')}")
@@ -556,7 +531,6 @@ def _render_lista_arquivos_api() -> None:
                 payloads = dbg.get("payloads") or []
                 if payloads:
                     payload0 = payloads[0]
-                    # tenta extrair só um event para ficar legível
                     primeiro_event = None
                     try:
                         data_bloco = payload0.get("data")
@@ -578,7 +552,7 @@ def _render_lista_arquivos_api() -> None:
                     else:
                         st.caption(
                             "Não encontrei events[] no formato esperado. "
-                            "Payload inteiro abaixo (procure a chave onde ficam os lançamentos):"
+                            "Payload inteiro abaixo:"
                         )
                         st.json(payload0)
                 else:
