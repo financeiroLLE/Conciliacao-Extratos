@@ -4079,12 +4079,17 @@ def tela_upload():
     )
 
     st.divider()
-    section_title("PENDÊNCIAS DE DIAS ANTERIORES (OPCIONAL)")
-    arquivo_pendencias = st.file_uploader(
-        "Relatório anterior (lê a aba 'Pendências Consolidadas')",
-        type=["xlsx"],
-        key="pendencias",
-    )
+    # v6.3: bloco de pendências colapsado por padrão — a maioria das rodadas
+    # não usa este arquivo, então economiza espaço vertical na tela.
+    with st.expander(
+        "📋  PENDÊNCIAS DE DIAS ANTERIORES (opcional) · clique para expandir",
+        expanded=False,
+    ):
+        arquivo_pendencias = st.file_uploader(
+            "Relatório anterior (lê a aba 'Pendências Consolidadas')",
+            type=["xlsx"],
+            key="pendencias",
+        )
 
     st.divider()
 
