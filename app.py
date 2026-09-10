@@ -42,6 +42,7 @@ from src.paginas.conciliacao_vendas import render_conciliacao_vendas
 from src.api_bancos.ui_itau import (
     _render_botao_puxar_itau,
     arquivos_api_atuais,
+    eh_arquivo_api_itau,
     nome_sankhya_sugerido,
 )
 
@@ -3680,10 +3681,29 @@ def tela_upload():
             # v5.80: se o extrato veio da API do Itaú, o nome_sankhya cadastrado
             # no Secrets é a fonte mais confiável (ex.: "ITAU PISA") — sobrescreve
             # tudo, porque a API já sabe qual conta está sendo puxada.
+            # v5.81: pular a detecção por cabeçalho quando o arquivo é da API
+            # (não tem cabeçalho de banco/agência/conta — sempre daria "NÃO
+            # IDENTIFICADO", que confunde). Mostrar selo ITAÚ · API no lugar.
             nome_default = ""
             conta_det = None
             _nome_sankhya_api = nome_sankhya_sugerido()
-            if arquivo_banco is not None:
+            _arq_veio_da_api = arquivo_banco is not None and eh_arquivo_api_itau(arquivo_banco)
+            if arquivo_banco is not None and _arq_veio_da_api:
+                nome_default = _nome_sankhya_api or arquivo_banco.name.rsplit(".", 1)[0].strip()
+                _rotulo_api = (
+                    f'<b>{_nome_sankhya_api}</b>' if _nome_sankhya_api
+                    else '<span style="color:#FAC318;">sem nome_sankhya cadastrado nos Secrets</span>'
+                )
+                st.markdown(
+                    f'<div style="display:flex;align-items:center;gap:12px;background:#0b2560;'
+                    f'border-radius:10px;border-left:6px solid #EC7000;padding:9px 13px;margin:2px 0 8px;">'
+                    f'<span style="background:#EC7000;color:#fff;font-size:11px;font-weight:700;'
+                    f'letter-spacing:.03em;padding:3px 11px;border-radius:6px;">ITAÚ · API</span>'
+                    f'<span style="color:#eaf0fb;font-size:12.5px;">'
+                    f'conta cadastrada · {_rotulo_api}</span></div>',
+                    unsafe_allow_html=True,
+                )
+            elif arquivo_banco is not None:
                 nome_default = arquivo_banco.name.rsplit(".", 1)[0].strip()
                 try:
                     import io as _io_det
@@ -3821,13 +3841,24 @@ def tela_upload():
                 if _nome_sankhya_api and _nome_sankhya_api in contas_sankhya:
                     idx_match = contas_sankhya.index(_nome_sankhya_api)
                 idx_default = idx_match if idx_match is not None else len(opcoes) - 1
+                # v5.81: quando o arquivo veio da API do Itaú, trava o campo
+                # (a conta é conhecida com certeza — para trocar, remover o
+                # arquivo da API acima antes).
+                _travar_identificador = bool(_arq_veio_da_api and _nome_sankhya_api)
+                _label_ident = "Extrato Bancário (identificador da conta)"
+                if _travar_identificador:
+                    _label_ident += " — vindo da API"
                 escolha = st.selectbox(
-                    "Extrato Bancário (identificador da conta)",
+                    _label_ident,
                     opcoes,
                     index=idx_default,
                     key="conta_single_sel",
+                    disabled=_travar_identificador,
                     help="Nomes lidos do Sankhya. Escolha o da conta deste extrato "
-                    "— assim casa sem erro de digitação.",
+                    "— assim casa sem erro de digitação."
+                    if not _travar_identificador else
+                    "Preenchido pelo cadastro da conta no Secrets. Para trocar, "
+                    "remova o arquivo da API acima.",
                 )
                 if escolha == _OPCAO_DIGITAR:
                     nome_conta = st.text_input(
@@ -3844,13 +3875,24 @@ def tela_upload():
                 )
                 # v5.80: se a API do Itaú sugeriu um nome, ele tem prioridade
                 # sobre o palpite baseado no nome do arquivo.
+                # v5.81: quando o arquivo veio da API do Itaú, trava o campo
+                # (a conta é conhecida com certeza — para trocar, remover o
+                # arquivo da API acima antes).
                 _valor_input = _nome_sankhya_api or nome_default
+                _travar_identificador = bool(_arq_veio_da_api and _nome_sankhya_api)
+                _label_ident = "Extrato Bancário (identificador da conta)"
+                if _travar_identificador:
+                    _label_ident += " — vindo da API"
                 nome_conta = st.text_input(
-                    "Extrato Bancário (identificador da conta)",
+                    _label_ident,
                     value=_valor_input,
                     placeholder="ex: Bradesco-CC-12345",
                     key="conta_single",
-                    help="Rótulo único da conta. Mínimo 3 caracteres.",
+                    disabled=_travar_identificador,
+                    help="Rótulo único da conta. Mínimo 3 caracteres."
+                    if not _travar_identificador else
+                    "Preenchido pelo cadastro da conta no Secrets. Para trocar, "
+                    "remova o arquivo da API acima.",
                 ).strip()
             # v5.48: TODOS os arquivos entram com o MESMO identificador — o
             # pipeline concatena os extratos (ex.: diários) antes de conciliar.
