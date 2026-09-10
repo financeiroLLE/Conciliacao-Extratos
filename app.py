@@ -45,6 +45,7 @@ from src.api_bancos.ui_itau import (
     eh_arquivo_api_itau,
     nome_sankhya_sugerido,
 )
+from src.style_light import render_style_override
 
 
 # ============================================================
@@ -1611,6 +1612,13 @@ table {{ color: {CORES["branco"]}; }}
 </style>
 """
 )
+
+
+# v6.0 — Fase A do redesign: override do visual (sidebar navy + corpo
+# branco + bordas amarelas). Colocado DEPOIS do CSS grande antigo para
+# vencer pela ordem no DOM. Para reverter, comente esta linha e remova
+# o import de src.style_light acima.
+render_style_override()
 
 
 # ============================================================
