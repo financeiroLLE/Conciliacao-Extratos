@@ -1,11 +1,16 @@
 [theme]
-# v5.38: tema ESCURO nativo. Antes o app rodava no tema claro padrão e "pintava"
-# de escuro só por CSS — então componentes nativos (menu de coluna do dataframe,
-# cabeçalho de expander, etc.) nasciam BRANCOS e o texto branco sumia neles.
-# Com o tema escuro nativo, esses componentes já vêm legíveis. As cores batem
-# com a paleta CORES do app.py pra não destoar.
-base = "dark"
+# v6.0 — Fase A do redesign: light theme com paleta institucional LLE.
+# Sidebar continua navy escura (via CSS override em src/style_light.py) —
+# só o corpo do app passa a ter fundo claro.
+#
+# Para reverter ao tema escuro antigo, restaurar as linhas abaixo (comentadas):
+#   base = "dark"
+#   primaryColor = "#FAC318"
+#   backgroundColor = "#0A1F4D"
+#   secondaryBackgroundColor = "#0E2456"
+#   textColor = "#FFFFFF"
+base = "light"
 primaryColor = "#FAC318"
-backgroundColor = "#0A1F4D"
-secondaryBackgroundColor = "#0E2456"
-textColor = "#FFFFFF"
+backgroundColor = "#F5F7FB"
+secondaryBackgroundColor = "#FFFFFF"
+textColor = "#1A2547"
