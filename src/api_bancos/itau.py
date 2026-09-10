@@ -134,12 +134,20 @@ def _normalizar_conta_registro(valor: Any) -> Dict[str, str]:
       (antigo) [itau.contas]
                principal = "002300788615"
                → nome_sankhya = "" (autopreenchimento não vai rodar)
+
+    IMPORTANTE: uma sub-tabela TOML lida via st.secrets NÃO é instance de dict
+    puro — vem como AttrDict do Streamlit. Por isso checamos pela interface
+    (hasattr get) em vez de isinstance(dict), senão o formato novo cai no
+    ramo antigo e a str(AttrDict) polui o dropdown com o dict inteiro.
     """
-    if isinstance(valor, dict):
-        return {
-            "conta": str(valor.get("conta", "")).strip(),
-            "nome_sankhya": str(valor.get("nome_sankhya", "")).strip(),
-        }
+    if hasattr(valor, "get") and not isinstance(valor, (str, bytes)):
+        try:
+            return {
+                "conta": str(valor.get("conta", "") or "").strip(),
+                "nome_sankhya": str(valor.get("nome_sankhya", "") or "").strip(),
+            }
+        except Exception:
+            pass
     # Formato antigo: valor simples (só o número da conta)
     return {"conta": str(valor).strip(), "nome_sankhya": ""}
 
