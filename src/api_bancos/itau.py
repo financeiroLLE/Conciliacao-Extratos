@@ -368,11 +368,45 @@ def _chamar_extrato(
 def _extrair_lancamentos(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
     """Extrai lista plana de lançamentos do JSON retornado pelo Itaú.
 
-    O formato do PDF mostra:
-    { "data": [ { "events": [ { "id", "type", "operation", "date": {...},
-                                "literal": {...}, "value", ... } ] } ] }
+    Formato REAL confirmado em produção (v5.84 — validado com payload
+    de conta corrente Itaú BBA em 10/09/2026):
+      {
+        "data": [
+          {
+            "events": [
+              {
+                "type": "agrupamento" | "individual",
+                "operation": "C" | "D",
+                "code": "877171758",
+                "date": {"event": "2026-08-10T23:59:59...-03:00",
+                         "accounting": "2026-08-10"},
+                "literal": {"shortened": "SISPAG SALARIOS"},
+                "amount": {"value": -14964.83, "currency": "BRL"},
+                "number_events": 3
+              },
+              ...
+            ],
+            "balances": [ ... saldos por dia (ignorar) ... ]
+          }
+        ],
+        "pagination": {...}
+      }
 
-    Retorna lista de dicts com campos: data, valor, historico, documento, tipo.
+    Descobertas importantes:
+      - O VALOR fica em amount.value (não em value direto).
+      - O valor JÁ VEM COM SINAL (débitos são negativos). NÃO reaplicar
+        o sinal pela operation — se aplicar, débitos viram positivos.
+      - O código do lançamento fica em code (não em id/reference).
+      - Só tem literal.shortened; literal.complete raramente aparece.
+      - "balances" NÃO são lançamentos — ignorados (o Streamlit já
+        separava a chave, mas confirmando aqui).
+
+    Fallback: mantém tolerância ao formato antigo (value no topo,
+    id como documento) para não quebrar se algum banco puxar de outro
+    endpoint ou se o Itaú mudar de novo.
+
+    Retorna lista de dicts com: data, valor, historico, documento,
+    tipo_operacao, estorno, tip.
     """
     lancamentos: List[Dict[str, Any]] = []
     data_bloco = payload.get("data")
@@ -386,7 +420,7 @@ def _extrair_lancamentos(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
     for grupo in data_bloco:
         events = grupo.get("events") or []
         for ev in events:
-            # Data — pode estar em ev["date"]["event"] ou ev["date"]["accounting"]
+            # ---- Data (accounting > event) ------------------------------
             dt_dict = ev.get("date") or {}
             dt_str = dt_dict.get("accounting") or dt_dict.get("event") or ""
             try:
@@ -398,26 +432,38 @@ def _extrair_lancamentos(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
                 except Exception:
                     dt = None
 
-            # Valor + operação (C=crédito, D=débito)
-            valor_raw = ev.get("value")
-            try:
-                valor = float(valor_raw) if valor_raw is not None else 0.0
-            except (TypeError, ValueError):
-                valor = 0.0
+            # ---- Valor (amount.value é onde o Itaú BBA guarda) ---------
+            valor = 0.0
+            amount = ev.get("amount")
+            if isinstance(amount, dict) and amount.get("value") is not None:
+                try:
+                    valor = float(amount["value"])
+                except (TypeError, ValueError):
+                    valor = 0.0
+            else:
+                # Fallback: formato antigo (documentação) — value no topo
+                valor_raw = ev.get("value")
+                try:
+                    valor = float(valor_raw) if valor_raw is not None else 0.0
+                except (TypeError, ValueError):
+                    valor = 0.0
+
             operacao = str(ev.get("operation", "")).upper()
+            # Só forçar sinal se o valor veio positivo e operation="D"
+            # (defesa contra bancos que entregam sempre positivo). Se o
+            # valor já veio negativo, respeitar — o Itaú BBA faz isso.
             if operacao == "D" and valor > 0:
                 valor = -valor
 
-            # Histórico — literal.complete tem descrição longa; shortened é curto
+            # ---- Histórico -------------------------------------------
             lit = ev.get("literal") or {}
             historico = lit.get("complete") or lit.get("shortened") or ""
-            # tip é dica adicional (o que aquele código significa)
             tip = lit.get("tip") or ""
 
-            # Documento — id (identificador único do lançamento) ou reference
-            documento = ev.get("id") or ev.get("reference") or ""
+            # ---- Documento (code no Itaú BBA; id/reference nos outros) --
+            documento = ev.get("code") or ev.get("id") or ev.get("reference") or ""
 
-            # Estorno?
+            # ---- Estorno --------------------------------------------
             estorno = bool(ev.get("reversal"))
 
             lancamentos.append({
@@ -425,7 +471,7 @@ def _extrair_lancamentos(payload: Dict[str, Any]) -> List[Dict[str, Any]]:
                 "valor": valor,
                 "historico": str(historico).strip(),
                 "documento": str(documento).strip(),
-                "tipo_operacao": operacao,  # C ou D
+                "tipo_operacao": operacao,
                 "estorno": estorno,
                 "tip": tip,
             })
