@@ -140,6 +140,7 @@ def eh_arquivo_api_itau(arquivo) -> bool:
 # ==============================================================================
 _CHAVE_ARQS = "itau_arquivos_api"
 _CHAVE_NOME_SANKHYA = "itau_nome_sankhya_sugerido"
+_CHAVE_METRICAS = "itau_metricas_ultimo_puxar"  # v5.83: qtd lançamentos + soma
 
 
 def _arquivos_api_na_sessao() -> List[_ArquivoAPIItau]:
@@ -167,9 +168,10 @@ def _remover_arquivo_api(indice: int) -> None:
     if 0 <= indice < len(atuais):
         atuais.pop(indice)
     st.session_state[_CHAVE_ARQS] = atuais
-    # Se ficou sem nenhum arquivo, também limpa a sugestão de nome
+    # Se ficou sem nenhum arquivo, também limpa a sugestão de nome e métricas
     if not atuais:
         st.session_state.pop(_CHAVE_NOME_SANKHYA, None)
+        st.session_state.pop(_CHAVE_METRICAS, None)
 
 
 def _credenciais_configuradas() -> bool:
@@ -302,10 +304,20 @@ def _puxar_e_injetar_no_uploader(
     Sem download intermediário, sem re-arrastar. O arquivo passa a existir
     em st.session_state["itau_arquivos_api"] como um _ArquivoAPIItau, e o
     app.py mescla essa lista com o file_uploader nativo.
+
+    v5.83: guarda o DataFrame resultante em session_state para o card
+    mostrar quantos lançamentos foram carregados e a soma R$ — assim
+    a Débora enxerga na hora se veio vazio.
     """
     with st.spinner(f"Puxando extrato Itaú · {apelido} · "
                     f"{data_inicio.strftime('%d/%m')} a {data_fim.strftime('%d/%m')}..."):
         try:
+            # v5.83: puxa DF primeiro (para saber qtd e soma), depois monta XLSX
+            df = api_itau.puxar_extrato_df(
+                conta_formatada=conta_numero,
+                data_inicio=data_inicio,
+                data_fim=data_fim,
+            )
             bytes_xlsx, nome_arquivo = api_itau.puxar_extrato_xlsx(
                 conta_formatada=conta_numero,
                 data_inicio=data_inicio,
@@ -318,6 +330,19 @@ def _puxar_e_injetar_no_uploader(
 
     arq = _ArquivoAPIItau(nome=nome_arquivo, dados=bytes_xlsx)
     _adicionar_arquivo_api(arq, nome_sankhya=nome_sankhya)
+
+    # v5.83: guarda métricas para o card mostrar
+    try:
+        qtd = int(len(df))
+        soma = float(df["valor"].sum()) if qtd > 0 and "valor" in df.columns else 0.0
+    except Exception:
+        qtd, soma = 0, 0.0
+    st.session_state[_CHAVE_METRICAS] = {
+        "qtd": qtd,
+        "soma": soma,
+        "apelido": apelido,
+        "periodo": f"{data_inicio.strftime('%d/%m/%Y')} a {data_fim.strftime('%d/%m/%Y')}",
+    }
 
     if not nome_sankhya:
         st.warning(
@@ -384,20 +409,39 @@ def _render_lista_arquivos_api() -> None:
         unsafe_allow_html=True,
     )
 
+    metricas = st.session_state.get(_CHAVE_METRICAS) or {}
+    qtd_lancamentos = int(metricas.get("qtd", -1))  # -1 = desconhecido (sessão antiga)
+    soma_valor = float(metricas.get("soma", 0.0))
+
     for i, arq in enumerate(arqs):
         col_card, col_x = st.columns([25, 1])
         with col_card:
+            # v5.83: informação de qtd + soma bem visível
+            if qtd_lancamentos < 0:
+                info_qtd = f'{arq.size:,} bytes'
+            elif qtd_lancamentos == 0:
+                info_qtd = (
+                    f'<span style="color:#F6BF13;font-weight:700;">'
+                    f'⚠ 0 lançamentos</span> · {arq.size:,} bytes'
+                )
+            else:
+                soma_str = f"R$ {soma_valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                info_qtd = (
+                    f'<span style="color:#0F8C3B;font-weight:700;">'
+                    f'{qtd_lancamentos} lançamentos · {soma_str}</span> · {arq.size:,} bytes'
+                )
+
             if nome_sk:
                 linha2 = (
                     f'<div style="color:#9fb3d6;font-size:11px;margin-top:2px;">'
-                    f'conta cadastrada · '
+                    f'conta · '
                     f'<b style="color:#eaf0fb;">{nome_sk}</b> · '
-                    f'{arq.size:,} bytes</div>'
+                    f'{info_qtd}</div>'
                 )
             else:
                 linha2 = (
                     f'<div style="color:#9fb3d6;font-size:11px;margin-top:2px;">'
-                    f'{arq.size:,} bytes · '
+                    f'{info_qtd} · '
                     f'<span style="color:#FAC318;">sem nome_sankhya cadastrado</span></div>'
                 )
 
@@ -419,6 +463,44 @@ def _render_lista_arquivos_api() -> None:
                          help="Remover este arquivo (para puxar de novo, abra o expansor acima)"):
                 _remover_arquivo_api(i)
                 st.rerun()
+
+    # v5.83: se veio vazio, oferecer botões de diagnóstico
+    if qtd_lancamentos == 0 and arqs:
+        arq0 = arqs[0]
+        st.warning(
+            "⚠️ **Extrato veio vazio da API.** Isso pode ser: (1) o formato do "
+            "JSON que o Itaú entrega difere do que o parser espera, ou (2) a "
+            "conta realmente não teve movimento no período consultado. Use os "
+            "botões abaixo para diagnosticar — mande o print do debug para o "
+            "responsável técnico."
+        )
+        col_dl, col_dbg = st.columns([1, 1])
+        with col_dl:
+            st.download_button(
+                "⬇  Baixar cópia do XLSX (para conferir)",
+                data=arq0.getvalue(),
+                file_name=arq0.name,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key=f"dbg_baixar_{arq0.name}",
+                use_container_width=True,
+            )
+        with col_dbg:
+            with st.expander("🔧  Debug técnico — JSON bruto da API", expanded=False):
+                dbg = api_itau.obter_ultimo_debug()
+                st.write(f"**Conta consultada:** `{dbg.get('conta','?')}`")
+                st.write(f"**Período:** {dbg.get('periodo','?')}")
+                st.write(f"**URL base:** `{dbg.get('url_base','?')}`")
+                st.write(f"**HTTP status por página:** {dbg.get('http_status') or []}")
+                if dbg.get("erro"):
+                    st.write(f"**Erro:** {dbg['erro']}")
+                st.write(f"**Nº de páginas retornadas:** {len(dbg.get('payloads') or [])}")
+                st.write("---")
+                st.write("**Payload bruto da 1ª página:**")
+                payloads = dbg.get("payloads") or []
+                if payloads:
+                    st.json(payloads[0])
+                else:
+                    st.warning("Nenhum payload retornado pela API.")
 
 
 def _render_botao_testar() -> None:
