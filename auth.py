@@ -413,19 +413,20 @@ def render_sidebar_usuario(nome: str, username: str = "", perfil: str = "") -> N
         unsafe_allow_html=True,
     )
 
-    # Botão Sair pequeno azul-navy — container próprio pra escopar CSS
+    # Botão Sair — v6.4/v6.5: usa st.button manual + auth_supabase.sign_out()
+    # em vez de stauth.Authenticate().logout(location="sidebar").
+    # Motivo: com location="sidebar" o botão era renderizado FORA do
+    # container `lle_sair`, quebrando o CSS que tenta colar ele no card
+    # do usuário. Chamando sign_out() diretamente, o botão fica GARANTIDAMENTE
+    # dentro do container e o CSS `.st-key-lle_sair` pega direito.
     with st.container(key="lle_sair"):
-        cfg = _config_do_secrets() or {}
-        try:
-            _autenticador = stauth.Authenticate(
-                credentials=cfg.get("credentials", {"usernames": {}}),
-                cookie_name=cfg.get("cookie_name", "conciliacao_lle_auth"),
-                cookie_key=cfg.get("cookie_key", "SEM_CHAVE"),
-                cookie_expiry_days=int(cfg.get("cookie_expiry_days", 1)),
-            )
-            _autenticador.logout("→  Sair", location="sidebar", key="btn_logout_lle")
-        except Exception:
-            if st.button("→  Sair", key="btn_logout_manual"):
-                for k in ("authentication_status", "name", "username"):
-                    st.session_state.pop(k, None)
-                st.rerun()
+        if st.button("→  Sair", key="btn_sair_lle", use_container_width=True):
+            try:
+                from src.auth_supabase import sign_out as _supabase_sign_out
+                _supabase_sign_out()
+            except Exception:
+                pass
+            # limpa também chaves legadas do stauth (defesa)
+            for k in ("authentication_status", "name", "username"):
+                st.session_state.pop(k, None)
+            st.rerun()
