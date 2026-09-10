@@ -49,9 +49,12 @@ ITAU_LARANJA = "#EC7000"
 class _ArquivoAPIItau:
     """Emula st.runtime.uploaded_file_manager.UploadedFile.
 
-    Tem os atributos e métodos que o resto do app espera de um arquivo
-    vindo do file_uploader: .name, .type, .size, .getvalue(), .read(),
-    .seek(), .tell(). Assim entra transparente no pipeline existente.
+    Implementa a interface file-like completa que pandas/openpyxl esperam:
+    .name, .type, .size, .mode, .closed, .getvalue(), .read(), .seek(),
+    .tell(), .seekable(), .readable(), .writable(), .flush(), .close().
+    Assim entra transparente no pipeline existente (v5.82: adicionados
+    seekable/readable/writable/flush/mode que faltavam — sem eles, o
+    openpyxl quebrava com "object has no attribute 'seekable'").
     """
 
     _MIME_XLSX = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -60,13 +63,16 @@ class _ArquivoAPIItau:
         self.name = nome
         self.type = mime or self._MIME_XLSX
         self.size = len(dados)
+        self.mode = "rb"                # openpyxl/pandas consultam isso
         self._data = bytes(dados)
         self._pos = 0
+        self._closed = False
         # marcador para o app identificar que veio da API (pula detecção
         # de banco por cabeçalho, que não faz sentido para arquivo gerado
         # a partir de JSON da API)
         self.origem_api = "itau"
 
+    # --- leitura ---
     def getvalue(self) -> bytes:
         return self._data
 
@@ -79,6 +85,10 @@ class _ArquivoAPIItau:
             self._pos += len(data)
         return data
 
+    def readable(self) -> bool:
+        return True
+
+    # --- posicionamento ---
     def seek(self, pos: int, whence: int = 0) -> int:
         if whence == 0:
             self._pos = max(0, int(pos))
@@ -91,8 +101,30 @@ class _ArquivoAPIItau:
     def tell(self) -> int:
         return self._pos
 
-    def close(self) -> None:  # compat com file-like protocol
+    def seekable(self) -> bool:
+        return True
+
+    # --- escrita (não suportada, mas o protocolo pede o método) ---
+    def writable(self) -> bool:
+        return False
+
+    def flush(self) -> None:
         pass
+
+    # --- lifecycle ---
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
+    def close(self) -> None:
+        self._closed = True
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        self.close()
+        return False
 
     def __repr__(self) -> str:
         return f"<_ArquivoAPIItau name={self.name!r} size={self.size}>"
@@ -300,7 +332,10 @@ def _puxar_e_injetar_no_uploader(
 def _render_lista_arquivos_api() -> None:
     """Mostra, logo abaixo do expansor, os arquivos vindos da API — cada
     um em um card compacto com o nome_sankhya embutido (para o usuário
-    conferir antes de conciliar). Botão X remove o arquivo.
+    conferir antes de conciliar). Botão X integrado visualmente ao card.
+
+    v5.82: o botão X passa a ficar DENTRO do card visualmente, colado à
+    direita, sem gap, formando um único bloco (via CSS scoped por classe).
     """
     arqs = _arquivos_api_na_sessao()
     if not arqs:
@@ -308,11 +343,50 @@ def _render_lista_arquivos_api() -> None:
 
     nome_sk = st.session_state.get(_CHAVE_NOME_SANKHYA, "")
 
+    # CSS uma única vez por render — estiliza o botão X para casar com o card
+    st.markdown(
+        """
+        <style>
+        div[data-testid="stHorizontalBlock"]:has(> div .arqcard-itau) {
+            gap: 0 !important;
+        }
+        div[data-testid="stHorizontalBlock"]:has(> div .arqcard-itau) button[kind="secondary"] {
+            background: #0b2560 !important;
+            border: 1px solid #1e3b7a !important;
+            border-left: none !important;
+            border-radius: 0 8px 8px 0 !important;
+            color: #9fb3d6 !important;
+            height: 62px !important;
+            font-size: 15px !important;
+            font-weight: 700 !important;
+            margin: 4px 0 !important;
+        }
+        div[data-testid="stHorizontalBlock"]:has(> div .arqcard-itau) button[kind="secondary"]:hover {
+            color: #ff6b6b !important;
+            border-color: #ff6b6b !important;
+        }
+        .arqcard-itau {
+            background: linear-gradient(90deg, rgba(236,112,0,.10), transparent 45%);
+            border: 1px solid #1e3b7a;
+            border-left: 3px solid #EC7000;
+            border-right: none;
+            border-radius: 8px 0 0 8px;
+            padding: 12px 14px;
+            margin: 4px 0;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            min-height: 62px;
+            box-sizing: border-box;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
     for i, arq in enumerate(arqs):
         col_card, col_x = st.columns([25, 1])
         with col_card:
-            # Card: [tag ITAÚ · API]  [nome do arquivo]  [conta · NOME_SANKHYA · tamanho]
-            linha2 = ""
             if nome_sk:
                 linha2 = (
                     f'<div style="color:#9fb3d6;font-size:11px;margin-top:2px;">'
@@ -328,10 +402,7 @@ def _render_lista_arquivos_api() -> None:
                 )
 
             st.markdown(
-                f'<div style="background:linear-gradient(90deg,rgba(236,112,0,.10),transparent 45%);'
-                f'border:1px solid #1e3b7a;border-left:3px solid {ITAU_LARANJA};'
-                f'border-radius:8px;padding:10px 14px;margin:4px 0;'
-                f'display:flex;align-items:center;gap:12px;">'
+                f'<div class="arqcard-itau">'
                 f'<span style="background:{ITAU_LARANJA};color:#fff;font-size:10px;'
                 f'font-weight:700;padding:3px 9px;border-radius:4px;'
                 f'letter-spacing:.03em;white-space:nowrap;">ITAÚ · API</span>'
