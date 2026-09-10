@@ -692,33 +692,66 @@ html body .block-container [data-testid="stFileUploader"] section {{
 html body .block-container [data-testid="stFileUploader"] * {{
     color: {_TEXTO} !important;
 }}
-/* v6.9: botão "Upload" dentro do file_uploader — antes ficava navy sobre
-   navy (texto invisível). Agora: fundo amarelo, texto navy peso 700. */
+/* v6.10: botão "Upload" dentro do file_uploader — reforço extra com
+   seletores por key (banco_single, banco_multi, pendencias, banco_hist,
+   c70_capa/sk/fat, dash_hist) para vencer o CSS antigo que estilizava
+   o uploader do banco de forma mais específica. Também aumentei o
+   tamanho do botão (padding + font-size). */
 html body .block-container [data-testid="stFileUploader"] button,
 html body .block-container [data-testid="stFileUploaderDropzone"] button,
 html body .block-container [data-testid="stBaseButton-secondary"][data-testid*="FileUploader"],
-html body .block-container [data-testid="stFileUploader"] section button {{
+html body .block-container [data-testid="stFileUploader"] section button,
+html body .block-container .st-key-banco_single button,
+html body .block-container .st-key-banco_multi button,
+html body .block-container .st-key-pendencias button,
+html body .block-container .st-key-sistema button,
+html body .block-container .st-key-adquirente button,
+html body .block-container .st-key-c70_capa button,
+html body .block-container .st-key-c70_sk button,
+html body .block-container .st-key-c70_fat button,
+html body .block-container .st-key-dash_hist button,
+html body .block-container [class*="st-key"] [data-testid="stFileUploader"] button,
+html body [data-testid="stFileUploaderDropzone"] > button,
+html body [data-testid="stFileUploader"] > section > button {{
     background: {_AMARELO} !important;
+    background-color: {_AMARELO} !important;
     color: {_NAVY} !important;
     -webkit-text-fill-color: {_NAVY} !important;
-    border: 1px solid {_NAVY} !important;
+    border: 2px solid {_NAVY} !important;
     font-weight: 700 !important;
+    font-size: 13px !important;
+    padding: 10px 22px !important;
+    min-height: 40px !important;
     box-shadow: 0 2px 6px rgba(250,195,24,0.25) !important;
 }}
 html body .block-container [data-testid="stFileUploader"] button *,
-html body .block-container [data-testid="stFileUploader"] section button * {{
+html body .block-container [data-testid="stFileUploader"] section button *,
+html body [data-testid="stFileUploader"] > section > button *,
+html body [data-testid="stFileUploaderDropzone"] > button * {{
     color: {_NAVY} !important;
     -webkit-text-fill-color: {_NAVY} !important;
     font-weight: 700 !important;
+    fill: {_NAVY} !important;
 }}
 html body .block-container [data-testid="stFileUploader"] button:hover,
-html body .block-container [data-testid="stFileUploader"] section button:hover {{
+html body .block-container [data-testid="stFileUploader"] section button:hover,
+html body [data-testid="stFileUploaderDropzone"] > button:hover,
+html body [data-testid="stFileUploader"] > section > button:hover {{
     background: #FFD54B !important;
+    background-color: #FFD54B !important;
     transform: translateY(-1px) !important;
 }}
-/* Ícone SVG dentro do botão Upload (se houver) */
+/* Ícone SVG dentro do botão Upload */
 html body .block-container [data-testid="stFileUploader"] button svg,
-html body .block-container [data-testid="stFileUploader"] section button svg {{
+html body .block-container [data-testid="stFileUploader"] section button svg,
+html body [data-testid="stFileUploader"] > section > button svg,
+html body [data-testid="stFileUploaderDropzone"] > button svg {{
+    fill: {_NAVY} !important;
+    color: {_NAVY} !important;
+    -webkit-text-fill-color: {_NAVY} !important;
+}}
+html body .block-container [data-testid="stFileUploader"] button svg *,
+html body [data-testid="stFileUploader"] > section > button svg * {{
     fill: {_NAVY} !important;
     color: {_NAVY} !important;
 }}
