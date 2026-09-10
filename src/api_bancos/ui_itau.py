@@ -464,16 +464,28 @@ def _render_lista_arquivos_api() -> None:
                 _remover_arquivo_api(i)
                 st.rerun()
 
-    # v5.83: se veio vazio, oferecer botões de diagnóstico
-    if qtd_lancamentos == 0 and arqs:
+    # v5.83.1: mostra debug SEMPRE que tem arquivo da API (enquanto estamos
+    # investigando o parser). Depois de tudo funcionar, remover este bloco.
+    # Detecta "problema" quando: 0 lançamentos, OU soma = 0 mas tem linhas.
+    parece_problema = arqs and (
+        qtd_lancamentos == 0
+        or (qtd_lancamentos > 0 and abs(soma_valor) < 0.01)
+    )
+    if arqs:
         arq0 = arqs[0]
-        st.warning(
-            "⚠️ **Extrato veio vazio da API.** Isso pode ser: (1) o formato do "
-            "JSON que o Itaú entrega difere do que o parser espera, ou (2) a "
-            "conta realmente não teve movimento no período consultado. Use os "
-            "botões abaixo para diagnosticar — mande o print do debug para o "
-            "responsável técnico."
-        )
+        if parece_problema:
+            if qtd_lancamentos == 0:
+                st.warning(
+                    "⚠️ **Extrato veio vazio da API.** Zero lançamentos. "
+                    "Use os botões abaixo para diagnosticar."
+                )
+            else:
+                st.warning(
+                    f"⚠️ **{qtd_lancamentos} lançamentos foram lidos, mas a "
+                    f"soma dos valores deu R$ 0,00.** O parser está pegando "
+                    "as linhas, mas o campo do valor está sendo lido errado. "
+                    "Use os botões abaixo para eu ver o formato real do JSON."
+                )
         col_dl, col_dbg = st.columns([1, 1])
         with col_dl:
             st.download_button(
@@ -485,7 +497,11 @@ def _render_lista_arquivos_api() -> None:
                 use_container_width=True,
             )
         with col_dbg:
-            with st.expander("🔧  Debug técnico — JSON bruto da API", expanded=False):
+            # v5.83.1: expander aberto por padrão quando tem problema
+            with st.expander(
+                "🔧  Debug técnico — JSON bruto da API",
+                expanded=bool(parece_problema),
+            ):
                 dbg = api_itau.obter_ultimo_debug()
                 st.write(f"**Conta consultada:** `{dbg.get('conta','?')}`")
                 st.write(f"**Período:** {dbg.get('periodo','?')}")
@@ -495,10 +511,35 @@ def _render_lista_arquivos_api() -> None:
                     st.write(f"**Erro:** {dbg['erro']}")
                 st.write(f"**Nº de páginas retornadas:** {len(dbg.get('payloads') or [])}")
                 st.write("---")
-                st.write("**Payload bruto da 1ª página:**")
+                st.write("**Payload bruto da 1ª página (primeiro `event` completo):**")
                 payloads = dbg.get("payloads") or []
                 if payloads:
-                    st.json(payloads[0])
+                    payload0 = payloads[0]
+                    # tenta extrair só um event para ficar legível
+                    primeiro_event = None
+                    try:
+                        data_bloco = payload0.get("data")
+                        if isinstance(data_bloco, dict):
+                            data_bloco = [data_bloco]
+                        if data_bloco:
+                            events = (data_bloco[0] or {}).get("events") or []
+                            if events:
+                                primeiro_event = events[0]
+                    except Exception:
+                        pass
+
+                    if primeiro_event is not None:
+                        st.caption("Um único lançamento (chaves = nomes dos campos que a API usa):")
+                        st.json(primeiro_event)
+                        st.caption("Estrutura completa da 1ª página (colapsável):")
+                        with st.expander("Ver payload inteiro"):
+                            st.json(payload0)
+                    else:
+                        st.caption(
+                            "Não encontrei events[] no formato esperado. "
+                            "Payload inteiro abaixo (procure a chave onde ficam os lançamentos):"
+                        )
+                        st.json(payload0)
                 else:
                     st.warning("Nenhum payload retornado pela API.")
 
