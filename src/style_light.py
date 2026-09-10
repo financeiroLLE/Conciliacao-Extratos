@@ -1088,62 +1088,122 @@ html body .cv-btn-busca-wrapper {{
 }}
 
 /* ============================================================================
-   v6.7 · DATEPICKER (calendário) — navy escuro com destaque amarelo
+   v6.8 · DATEPICKER (calendário) — navy escuro TODO, incluindo cabeçalho
    ============================================================================ */
-html body [data-baseweb="calendar"],
-html body [data-baseweb="datepicker"],
-html body [data-baseweb="popover"] [data-baseweb="calendar"] {{
+/* Popover do datepicker (o container que abre) — fundo navy inteiro */
+html body [data-baseweb="popover"]:has([data-baseweb="calendar"]),
+html body [data-baseweb="popover"] > div:has([data-baseweb="calendar"]) {{
+    background: {_NAVY_SIDEBAR} !important;
+}}
+html body [data-baseweb="calendar"] {{
     background: {_NAVY_SIDEBAR} !important;
     border: 1px solid {_AMARELO} !important;
     border-radius: 8px !important;
     color: #FFFFFF !important;
     box-shadow: 0 6px 24px rgba(0,0,0,0.35) !important;
+    padding: 8px !important;
 }}
 html body [data-baseweb="calendar"] * {{
     color: #FFFFFF !important;
     -webkit-text-fill-color: #FFFFFF !important;
+    background-color: transparent !important;
 }}
-/* Cabeçalho (mês/ano) e setas */
-html body [data-baseweb="calendar"] div[role="button"] {{
+
+/* CABEÇALHO do calendário (mês/ano + setas) — v6.8: força fundo navy
+   e texto amarelo. O componente padrão vinha branco sobre branco. */
+html body [data-baseweb="calendar"] > div:first-child,
+html body [data-baseweb="calendar"] [data-baseweb="calendar-header"] {{
+    background: {_NAVY_SIDEBAR} !important;
+    color: {_AMARELO} !important;
+    padding: 6px 10px !important;
+    border-bottom: 1px solid rgba(250,195,24,0.20) !important;
+    margin-bottom: 4px !important;
+}}
+html body [data-baseweb="calendar"] > div:first-child *,
+html body [data-baseweb="calendar"] [data-baseweb="calendar-header"] * {{
     color: {_AMARELO} !important;
     -webkit-text-fill-color: {_AMARELO} !important;
     font-weight: 700 !important;
 }}
-/* Nomes dos dias da semana (Su Mo Tu We Th Fr Sa) */
-html body [data-baseweb="calendar"] div[role="grid"] > div:first-child *,
-html body [data-baseweb="calendar"] div[role="rowheader"] * {{
+/* Setas de navegação (< e >) */
+html body [data-baseweb="calendar"] button {{
+    background: transparent !important;
+    color: {_AMARELO} !important;
+    -webkit-text-fill-color: {_AMARELO} !important;
+    border: none !important;
+}}
+html body [data-baseweb="calendar"] button:hover {{
+    background: rgba(250,195,24,0.15) !important;
+}}
+html body [data-baseweb="calendar"] button svg,
+html body [data-baseweb="calendar"] button svg * {{
+    fill: {_AMARELO} !important;
+    color: {_AMARELO} !important;
+}}
+
+/* Nomes dos dias da semana (Su Mo Tu We Th Fr Sa) — v6.8: força
+   fundo navy e texto amarelo (antes vinham num retângulo cinza) */
+html body [data-baseweb="calendar"] div[role="rowheader"],
+html body [data-baseweb="calendar"] div[role="columnheader"],
+html body [data-baseweb="calendar"] div[role="grid"] > div:first-child {{
+    background: {_NAVY_SIDEBAR} !important;
+    color: {_AMARELO} !important;
+}}
+html body [data-baseweb="calendar"] div[role="rowheader"] *,
+html body [data-baseweb="calendar"] div[role="columnheader"] *,
+html body [data-baseweb="calendar"] div[role="grid"] > div:first-child * {{
     color: {_AMARELO} !important;
     -webkit-text-fill-color: {_AMARELO} !important;
     font-weight: 700 !important;
-    opacity: 0.85 !important;
+    background: transparent !important;
+    opacity: 0.9 !important;
 }}
-/* Dias do mês */
+/* Fallback: qualquer div com background cinza claro dentro do calendário */
+html body [data-baseweb="calendar"] div[style*="background"] {{
+    background: {_NAVY_SIDEBAR} !important;
+}}
+
+/* Dias do mês (números) */
 html body [data-baseweb="calendar"] [role="gridcell"] {{
     color: #FFFFFF !important;
     -webkit-text-fill-color: #FFFFFF !important;
+    background: transparent !important;
 }}
 html body [data-baseweb="calendar"] [role="gridcell"] * {{
     color: inherit !important;
     -webkit-text-fill-color: inherit !important;
+    background: transparent !important;
 }}
 html body [data-baseweb="calendar"] [role="gridcell"][aria-disabled="true"] {{
     color: {_SB_TEXTO3} !important;
     -webkit-text-fill-color: {_SB_TEXTO3} !important;
     opacity: 0.5 !important;
 }}
-/* Dia selecionado — amarelo com texto navy */
+/* Dia hoje — destaca com borda amarela suave (sem fundo) */
+html body [data-baseweb="calendar"] [aria-current="date"]:not([aria-selected="true"]) {{
+    border: 1px solid {_AMARELO_SUAVE} !important;
+    border-radius: 50% !important;
+}}
+/* Dia SELECIONADO — bolinha amarela com número NAVY DENTRO
+   Sobrescrevemos os inherit=amarelo genéricos com navy explícito. */
 html body [data-baseweb="calendar"] [aria-selected="true"],
-html body [data-baseweb="calendar"] [aria-pressed="true"] {{
+html body [data-baseweb="calendar"] [aria-pressed="true"],
+html body [data-baseweb="calendar"] [role="gridcell"][aria-selected="true"] {{
     background: {_AMARELO} !important;
+    background-color: {_AMARELO} !important;
     color: {_NAVY} !important;
     -webkit-text-fill-color: {_NAVY} !important;
     border-radius: 50% !important;
     font-weight: 800 !important;
 }}
 html body [data-baseweb="calendar"] [aria-selected="true"] *,
-html body [data-baseweb="calendar"] [aria-pressed="true"] * {{
+html body [data-baseweb="calendar"] [aria-pressed="true"] *,
+html body [data-baseweb="calendar"] [role="gridcell"][aria-selected="true"] * {{
     color: {_NAVY} !important;
     -webkit-text-fill-color: {_NAVY} !important;
+    background: transparent !important;
+    background-color: transparent !important;
+    font-weight: 800 !important;
 }}
 
 /* Selectbox (Conta) — quando aberto e valor selecionado */
