@@ -14,6 +14,13 @@ FLUXO NOVO (sem download intermediário):
   4. O nome do Sankhya correspondente (ex.: "ITAU PISA") é guardado em
      st.session_state["itau_nome_sankhya_sugerido"] para autopreencher o
      identificador da conta.
+
+LAYOUT v5.81:
+  - Depois de puxar, o expansor colapsa sozinho (para não poluir a tela).
+  - Um selo verde "✓ N arquivo(s) puxado(s)" aparece acima do expansor,
+    para você saber que rolou sem precisar reabrir.
+  - O card do arquivo da API mostra o nome_sankhya embutido (ex.: "ITAU PISA")
+    para conferência antes de rodar a conciliação.
 """
 
 from __future__ import annotations
@@ -33,6 +40,7 @@ AMARELO = "#FFCC00"
 AZUL_NAVY = "#0A1730"
 VERDE = "#2E7D4F"
 VERMELHO = "#A32D2D"
+ITAU_LARANJA = "#EC7000"
 
 
 # ==============================================================================
@@ -54,7 +62,9 @@ class _ArquivoAPIItau:
         self.size = len(dados)
         self._data = bytes(dados)
         self._pos = 0
-        # marcador para o app identificar (se precisar) que veio da API
+        # marcador para o app identificar que veio da API (pula detecção
+        # de banco por cabeçalho, que não faz sentido para arquivo gerado
+        # a partir de JSON da API)
         self.origem_api = "itau"
 
     def getvalue(self) -> bytes:
@@ -86,6 +96,11 @@ class _ArquivoAPIItau:
 
     def __repr__(self) -> str:
         return f"<_ArquivoAPIItau name={self.name!r} size={self.size}>"
+
+
+def eh_arquivo_api_itau(arquivo) -> bool:
+    """Helper para o app.py distinguir arquivos da API dos arrastados manualmente."""
+    return isinstance(arquivo, _ArquivoAPIItau) or getattr(arquivo, "origem_api", "") == "itau"
 
 
 # ==============================================================================
@@ -155,6 +170,22 @@ def _render_bloco_nao_configurado() -> None:
     )
 
 
+def _render_selo_puxado(qtd: int) -> None:
+    """Selo verde acima do expansor confirmando que puxou (para
+    o usuário saber sem precisar reabrir o expansor colapsado)."""
+    if qtd <= 0:
+        return
+    plural = "s" if qtd > 1 else ""
+    st.markdown(
+        f'<div style="display:inline-block;background:{VERDE};color:#fff;'
+        f'padding:3px 10px;border-radius:4px;font-size:10.5px;font-weight:700;'
+        f'letter-spacing:.03em;margin:0 0 6px;">'
+        f'✓ {qtd} EXTRATO{plural.upper()} PUXADO{plural.upper()} DA API'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
 def _render_dialogo_puxar(contas_disponiveis: dict) -> None:
     """Formulário compacto para puxar extrato."""
     apelidos = list(contas_disponiveis.keys())
@@ -182,9 +213,14 @@ def _render_dialogo_puxar(contas_disponiveis: dict) -> None:
             )
         with col_conta:
             def _fmt_opcao(x: str) -> str:
-                reg = contas_disponiveis.get(x, {})
-                num = reg.get("conta", "")
-                nome_sk = reg.get("nome_sankhya", "")
+                reg = contas_disponiveis.get(x, {}) or {}
+                num = ""
+                nome_sk = ""
+                try:
+                    num = str(reg.get("conta", "") or "")
+                    nome_sk = str(reg.get("nome_sankhya", "") or "")
+                except Exception:
+                    num = str(reg)
                 extra = f" · {nome_sk}" if nome_sk else ""
                 return f"{x} ({num}){extra}"
 
@@ -201,17 +237,21 @@ def _render_dialogo_puxar(contas_disponiveis: dict) -> None:
             use_container_width=True,
         )
 
-    # FORA do form: processar (nao há mais download — vai direto pro uploader)
+    # FORA do form: processar (não há mais download — vai direto pro uploader)
     if submitted:
         reg = contas_disponiveis.get(apelido_sel) or {}
-        conta_numero = reg.get("conta", "")
-        nome_sankhya = reg.get("nome_sankhya", "")
+        try:
+            conta_numero = str(reg.get("conta", "") or "")
+            nome_sankhya = str(reg.get("nome_sankhya", "") or "")
+        except Exception:
+            conta_numero = str(reg)
+            nome_sankhya = ""
         if not conta_numero:
             st.error("Conta inválida — verifique o cadastro em [itau.contas] no Secrets.")
             return
         _puxar_e_injetar_no_uploader(
             apelido=apelido_sel,
-            conta_numero=str(conta_numero),
+            conta_numero=conta_numero,
             nome_sankhya=nome_sankhya,
             data_inicio=data_inicio,
             data_fim=data_fim,
@@ -247,55 +287,65 @@ def _puxar_e_injetar_no_uploader(
     arq = _ArquivoAPIItau(nome=nome_arquivo, dados=bytes_xlsx)
     _adicionar_arquivo_api(arq, nome_sankhya=nome_sankhya)
 
-    aviso_nome = ""
     if not nome_sankhya:
-        aviso_nome = (
-            "  ⚠️ Sem `nome_sankhya` cadastrado para esta conta — "
+        st.warning(
+            f"⚠️ Sem `nome_sankhya` cadastrado para a conta '{apelido}' — "
             "o identificador vai precisar ser escolhido manualmente. "
-            "Cadastre em Secrets → [itau.contas." + apelido + "]."
+            f"Cadastre em Secrets → [itau.contas.{apelido}]."
         )
-    st.success(
-        f"✓ Extrato {apelido} carregado ({arq.size:,} bytes)."
-        + aviso_nome
-    )
-    # rerun para o uploader do app.py enxergar o novo arquivo já
+    # rerun para o app.py enxergar o novo arquivo e para o expansor colapsar
     st.rerun()
 
 
 def _render_lista_arquivos_api() -> None:
-    """Mostra, logo abaixo do expansor, os arquivos que estão vindos da API
-    (com botão para remover). Fica visível mesmo com o expansor colapsado,
-    para que a Débora sempre veja o que está pronto para conciliar.
+    """Mostra, logo abaixo do expansor, os arquivos vindos da API — cada
+    um em um card compacto com o nome_sankhya embutido (para o usuário
+    conferir antes de conciliar). Botão X remove o arquivo.
     """
     arqs = _arquivos_api_na_sessao()
     if not arqs:
         return
 
     nome_sk = st.session_state.get(_CHAVE_NOME_SANKHYA, "")
-    rotulo_sk = f" · identificador: **{nome_sk}**" if nome_sk else ""
-    st.markdown(
-        f'<div style="margin:6px 0 2px;font-size:11.5px;color:#9fb3d6;">'
-        f'📡 <b>Arquivos vindos da API Itaú</b>{rotulo_sk}'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
+
     for i, arq in enumerate(arqs):
-        col_nome, col_x = st.columns([12, 1])
-        with col_nome:
+        col_card, col_x = st.columns([25, 1])
+        with col_card:
+            # Card: [tag ITAÚ · API]  [nome do arquivo]  [conta · NOME_SANKHYA · tamanho]
+            linha2 = ""
+            if nome_sk:
+                linha2 = (
+                    f'<div style="color:#9fb3d6;font-size:11px;margin-top:2px;">'
+                    f'conta cadastrada · '
+                    f'<b style="color:#eaf0fb;">{nome_sk}</b> · '
+                    f'{arq.size:,} bytes</div>'
+                )
+            else:
+                linha2 = (
+                    f'<div style="color:#9fb3d6;font-size:11px;margin-top:2px;">'
+                    f'{arq.size:,} bytes · '
+                    f'<span style="color:#FAC318;">sem nome_sankhya cadastrado</span></div>'
+                )
+
             st.markdown(
-                f'<div style="background:#0b2560;border-radius:6px;'
-                f'padding:6px 12px;margin-bottom:4px;color:#eaf0fb;'
-                f'font-size:12px;display:flex;align-items:center;gap:8px;">'
-                f'<span style="background:#EC7000;color:#fff;font-size:10px;'
-                f'font-weight:700;padding:2px 8px;border-radius:4px;">ITAÚ · API</span>'
-                f'<span>{arq.name}</span>'
-                f'<span style="color:#9fb3d6;">· {arq.size:,} bytes</span>'
-                f'</div>',
+                f'<div style="background:linear-gradient(90deg,rgba(236,112,0,.10),transparent 45%);'
+                f'border:1px solid #1e3b7a;border-left:3px solid {ITAU_LARANJA};'
+                f'border-radius:8px;padding:10px 14px;margin:4px 0;'
+                f'display:flex;align-items:center;gap:12px;">'
+                f'<span style="background:{ITAU_LARANJA};color:#fff;font-size:10px;'
+                f'font-weight:700;padding:3px 9px;border-radius:4px;'
+                f'letter-spacing:.03em;white-space:nowrap;">ITAÚ · API</span>'
+                f'<div style="flex:1;overflow:hidden;">'
+                f'<div style="color:#eaf0fb;font-size:12px;font-weight:600;'
+                f'overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">'
+                f'{arq.name}</div>'
+                f'{linha2}'
+                f'</div></div>',
                 unsafe_allow_html=True,
             )
         with col_x:
             if st.button("✖", key=f"rm_api_itau_{i}",
-                         help="Remover este arquivo (para puxar de novo, use o expansor acima)"):
+                         help="Remover este arquivo (para puxar de novo, abra o expansor acima)"):
                 _remover_arquivo_api(i)
                 st.rerun()
 
@@ -316,12 +366,21 @@ def _render_botao_testar() -> None:
 
 
 def render() -> None:
-    """Renderiza o bloco completo (chamado do app.py)."""
+    """Renderiza o bloco completo (chamado do app.py).
+
+    Sem arquivos vindos da API → expansor colapsado (usuário abre e puxa).
+    Com arquivos → expansor colapsado + selo verde acima + card do arquivo abaixo.
+    """
     if not _credenciais_configuradas():
         _render_bloco_nao_configurado()
         return
 
-    # Container discreto
+    arqs_atuais = _arquivos_api_na_sessao()
+
+    # Selo acima do expansor (só quando já tem arquivo puxado)
+    _render_selo_puxado(len(arqs_atuais))
+
+    # Container principal — colapsado por padrão para não poluir
     with st.expander("🏦  Puxar extrato Itaú direto da API (opcional)",
                      expanded=False):
         contas = api_itau.listar_contas()
