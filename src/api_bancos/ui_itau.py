@@ -172,6 +172,9 @@ def _remover_arquivo_api(indice: int) -> None:
     if not atuais:
         st.session_state.pop(_CHAVE_NOME_SANKHYA, None)
         st.session_state.pop(_CHAVE_METRICAS, None)
+        # v5.86: e limpa também os widgets do identificador (senão fica travado)
+        for _k in ("conta_single", "conta_single_sel", "conta_single_novo"):
+            st.session_state.pop(_k, None)
 
 
 def _credenciais_configuradas() -> bool:
@@ -365,6 +368,14 @@ def _puxar_e_injetar_no_uploader(
             "o identificador vai precisar ser escolhido manualmente. "
             f"Cadastre em Secrets → [itau.contas.{apelido}]."
         )
+
+    # v5.86: reset dos widgets do identificador de conta no app.py.
+    # O Streamlit prioriza st.session_state[key] sobre o value= do widget,
+    # então se o campo já foi renderizado vazio antes, ele continua vazio
+    # mesmo com nome_sankhya novo. Removendo as chaves, o value= volta a valer.
+    for _k in ("conta_single", "conta_single_sel", "conta_single_novo"):
+        st.session_state.pop(_k, None)
+
     # rerun para o app.py enxergar o novo arquivo e para o expansor colapsar
     st.rerun()
 
