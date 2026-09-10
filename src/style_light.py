@@ -16,6 +16,15 @@ v6.2 (11/09/2026) — pós segundo deploy:
     badge amarelo pequeno, botão Sair colado ao card (sem o gap grande).
   - Especificidade REFORÇADA em todos os seletores (html body + !important
     duplo em partes críticas) para vencer o CSS antigo por especificidade.
+
+v6.3 (11/09/2026) — pós terceiro deploy:
+  - Captions do corpo ("Formato padronizado...", "Só pra contas que recebem
+    cartão...") agora em cinza médio legível. Antes ficavam brancas sobre
+    branco por CSS antigo com maior especificidade — reforço via múltiplos
+    seletores (stCaption, stCaptionContainer, small, .stCaption).
+  - Botão Sair: agora VISUALMENTE colado ao card do usuário. O container
+    do Sair fica com border-top zero e margin-top negativo, formando um
+    bloco único com .lle-user-block acima.
 """
 from __future__ import annotations
 
@@ -121,12 +130,21 @@ html body .block-container [data-testid="stMarkdownContainer"] h6 {{
     -webkit-text-fill-color: {_TEXTO} !important;
 }}
 
-/* Captions e small */
+/* Captions e small — reforço v6.3 (múltiplos seletores para vencer o
+   CSS antigo que pintava branco sobre branco) */
 html body .block-container [data-testid="stCaption"],
 html body .block-container [data-testid="stCaption"] *,
-html body .block-container small {{
+html body .block-container [data-testid="stCaptionContainer"],
+html body .block-container [data-testid="stCaptionContainer"] *,
+html body .block-container .stCaption,
+html body .block-container .stCaption *,
+html body .block-container small,
+html body .block-container small *,
+html body .block-container [data-testid="stMarkdownContainer"] small,
+html body .block-container [data-testid="stMarkdownContainer"] small * {{
     color: {_TEXTO2} !important;
     -webkit-text-fill-color: {_TEXTO2} !important;
+    opacity: 1 !important;
 }}
 
 /* Textos dentro de radio individual (opções "1 conta por vez", "Várias contas") */
@@ -225,12 +243,15 @@ html body [data-testid="stSidebar"] .lle-sidebar-tagline {{
 }}
 
 /* ---------- 2.1) BLOCO DO USUÁRIO — avatar amarelo + halo, cargo badge ---------- */
+/* v6.3: bordas inferiores retas, para o botão Sair encaixar visualmente
+   como se fossem UM bloco só. */
 html body [data-testid="stSidebar"] .lle-user-block {{
-    background: linear-gradient(180deg, rgba(255,255,255,0.04) 0%, transparent 100%) !important;
-    border: 1px solid rgba(255,255,255,0.06) !important;
-    border-radius: 10px !important;
+    background: linear-gradient(180deg, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0.02) 100%) !important;
+    border: 1px solid rgba(255,255,255,0.08) !important;
+    border-bottom: none !important;
+    border-radius: 10px 10px 0 0 !important;
     padding: 12px 14px !important;
-    margin: 6px 0 4px !important;
+    margin: 6px 0 0 !important;
 }}
 html body [data-testid="stSidebar"] .lle-user-header {{
     display: flex !important;
@@ -297,16 +318,25 @@ html body [data-testid="stSidebar"] .lle-user-role * {{
 }}
 
 /* Botão Sair (dentro do container key="lle_sair") — colado ao card acima */
+/* v6.3: container do Sair vira "rodapé" do card do usuário — sem gap,
+   sem borda-top, borda inferior arredondada. Visualmente é um bloco só. */
 html body [data-testid="stSidebar"] .st-key-lle_sair {{
-    margin-top: 6px !important;
-    margin-bottom: 8px !important;
+    margin-top: 0 !important;
+    margin-bottom: 12px !important;
+    padding: 0 !important;
+    background: linear-gradient(180deg, rgba(255,255,255,0.02) 0%, transparent 100%) !important;
+    border: 1px solid rgba(255,255,255,0.08) !important;
+    border-top: 1px solid {_SB_BORDER} !important;
+    border-radius: 0 0 10px 10px !important;
+}}
+html body [data-testid="stSidebar"] .st-key-lle_sair [data-testid="stVerticalBlock"] {{
+    padding: 8px 12px !important;
 }}
 html body [data-testid="stSidebar"] .st-key-lle_sair button,
 html body [data-testid="stSidebar"] .st-key-lle_sair .stButton > button {{
     background: transparent !important;
     color: {_SB_TEXTO} !important;
     border: 1px solid rgba(250,195,24,0.35) !important;
-    border-left: 1px solid rgba(250,195,24,0.35) !important;
     border-radius: 6px !important;
     padding: 7px 12px !important;
     font-size: 11.5px !important;
