@@ -757,12 +757,14 @@ html body [data-testid="stFileUploader"] > section > button svg * {{
 }}
 
 /* v6.9: card ITAÚ · API (.arqcard-itau) — fundo navy escuro para o
-   texto claro ficar legível no tema light. */
+   texto claro ficar legível no tema light. v6.11: + margem entre cards
+   sucessivos. */
 html body .arqcard-itau {{
     background: linear-gradient(135deg, {_NAVY_SIDEBAR} 0%, {_NAVY_SIDEBAR_2} 100%) !important;
     border: 1px solid {_NAVY_SIDEBAR} !important;
-    border-left: 3px solid {_ITAU_LARANJA if False else "#EC7000"} !important;
+    border-left: 3px solid #EC7000 !important;
     color: #FFFFFF !important;
+    margin-bottom: 12px !important;
 }}
 html body .arqcard-itau * {{
     color: {_SB_TEXTO} !important;
@@ -909,26 +911,31 @@ html body .cv-secao-wrapper {{
     background: transparent !important;
 }}
 
-/* Rodada + resultado (aparecem depois de rodar a conciliação) */
+/* Rodada + resultado — v6.11: pílula verde para "Rodada de..." */
 html body .cv-rodada-header {{
     background: transparent !important;
     margin-bottom: 12px !important;
 }}
 html body .cv-rodada-supra {{
-    color: {_AMARELO} !important;
-    -webkit-text-fill-color: {_AMARELO} !important;
-    font-size: 11px !important;
-    font-weight: 700 !important;
+    color: #0F8C3B !important;
+    -webkit-text-fill-color: #0F8C3B !important;
+    font-size: 12px !important;
+    font-weight: 800 !important;
     letter-spacing: 1.5px !important;
     text-transform: uppercase !important;
     opacity: 1 !important;
+    display: inline-block !important;
+    padding: 4px 12px !important;
+    background: rgba(15,140,59,0.10) !important;
+    border: 1px solid #0F8C3B !important;
+    border-radius: 14px !important;
 }}
 html body .cv-rodada-titulo {{
     color: {_NAVY} !important;
     -webkit-text-fill-color: {_NAVY} !important;
     font-size: 22px !important;
     font-weight: 800 !important;
-    margin-top: 4px !important;
+    margin-top: 8px !important;
     opacity: 1 !important;
 }}
 
@@ -1031,7 +1038,7 @@ html body .cv-badge-fail {{
     letter-spacing: 0.5px !important;
 }}
 
-/* Bloco de candidatas dentro do card */
+/* Bloco de candidatas dentro do card — v6.11: linhas com bg sutil */
 html body .cv-candidatas-wrapper {{
     background: rgba(255,255,255,0.05) !important;
     border: 1px solid rgba(255,255,255,0.08) !important;
@@ -1052,8 +1059,22 @@ html body .cv-candidata-linha {{
     color: {_SB_TEXTO} !important;
     -webkit-text-fill-color: {_SB_TEXTO} !important;
     font-size: 11.5px !important;
-    padding: 5px 0 !important;
+    padding: 6px 8px !important;
+    background: rgba(255,255,255,0.03) !important;
+    border-radius: 4px !important;
+    margin-bottom: 3px !important;
     border-bottom: 1px dashed rgba(255,255,255,0.06) !important;
+}}
+html body .cv-candidata-linha * {{
+    color: {_SB_TEXTO} !important;
+    -webkit-text-fill-color: {_SB_TEXTO} !important;
+}}
+html body .cv-candidata-linha b,
+html body .cv-candidata-linha strong,
+html body .cv-candidata-linha a {{
+    color: {_AMARELO} !important;
+    -webkit-text-fill-color: {_AMARELO} !important;
+    font-weight: 700 !important;
 }}
 html body .cv-candidata-linha:last-child {{
     border-bottom: none !important;
@@ -1436,6 +1457,142 @@ html body [role="dialog"] button[kind="secondary"] {{
     color: {_SB_TEXTO} !important;
     -webkit-text-fill-color: {_SB_TEXTO} !important;
     border: 1px solid rgba(255,255,255,0.20) !important;
+}}
+
+/* ============================================================================
+   v6.11 · TABS (st.tabs — Conciliadas / Sem baixa / Divergências etc.)
+   Pílulas amarelas arredondadas com item ativo em amarelo sólido.
+   ============================================================================ */
+html body [data-baseweb="tab-list"],
+html body .stTabs [data-baseweb="tab-list"] {{
+    background: transparent !important;
+    border-bottom: 2px solid {_AMARELO} !important;
+    padding: 10px 0 !important;
+    gap: 8px !important;
+    flex-wrap: wrap !important;
+}}
+html body [data-baseweb="tab"],
+html body .stTabs [data-baseweb="tab"] {{
+    background: #FFFDEE !important;
+    color: {_TEXTO} !important;
+    -webkit-text-fill-color: {_TEXTO} !important;
+    padding: 9px 18px !important;
+    border: 1.5px solid {_AMARELO_SUAVE} !important;
+    border-radius: 22px !important;
+    font-size: 12px !important;
+    font-weight: 600 !important;
+    height: auto !important;
+    transition: all 0.18s ease !important;
+}}
+html body [data-baseweb="tab"] *,
+html body .stTabs [data-baseweb="tab"] * {{
+    color: {_TEXTO} !important;
+    -webkit-text-fill-color: {_TEXTO} !important;
+}}
+html body [data-baseweb="tab"]:hover {{
+    background: rgba(250,195,24,0.15) !important;
+    border-color: {_AMARELO} !important;
+}}
+html body [data-baseweb="tab"][aria-selected="true"],
+html body .stTabs [data-baseweb="tab"][aria-selected="true"] {{
+    background: {_AMARELO} !important;
+    color: {_NAVY} !important;
+    -webkit-text-fill-color: {_NAVY} !important;
+    border: 2px solid {_NAVY} !important;
+    font-weight: 700 !important;
+    box-shadow: 0 2px 6px rgba(250,195,24,0.35) !important;
+}}
+html body [data-baseweb="tab"][aria-selected="true"] * {{
+    color: {_NAVY} !important;
+    -webkit-text-fill-color: {_NAVY} !important;
+    font-weight: 700 !important;
+}}
+html body [data-baseweb="tab-highlight"],
+html body [data-baseweb="tab-border"] {{
+    display: none !important;
+}}
+
+/* ============================================================================
+   v6.11 · TABELAS NATIVAS (st.dataframe)
+   Fundo navy escuro, cabeçalho amarelo, texto claro.
+   ============================================================================ */
+html body .block-container [data-testid="stDataFrame"],
+html body .block-container [data-testid="stDataFrameResizable"] {{
+    background: linear-gradient(135deg, {_NAVY_SIDEBAR} 0%, {_NAVY_SIDEBAR_2} 100%) !important;
+    border: 1px solid {_AMARELO} !important;
+    border-radius: 8px !important;
+    padding: 4px !important;
+    box-shadow: 0 4px 14px rgba(15,31,70,0.20) !important;
+}}
+html body .block-container [data-testid="stDataFrame"] * {{
+    color: {_SB_TEXTO} !important;
+    -webkit-text-fill-color: {_SB_TEXTO} !important;
+}}
+html body .block-container [data-testid="stDataFrame"] th,
+html body .block-container [data-testid="stDataFrame"] [role="columnheader"],
+html body .block-container [data-testid="stDataFrame"] .col_heading {{
+    background: rgba(250,195,24,0.12) !important;
+    color: {_AMARELO} !important;
+    -webkit-text-fill-color: {_AMARELO} !important;
+    font-weight: 700 !important;
+    border-color: rgba(250,195,24,0.20) !important;
+}}
+html body .block-container [data-testid="stDataFrame"] [role="columnheader"] * {{
+    color: {_AMARELO} !important;
+    -webkit-text-fill-color: {_AMARELO} !important;
+}}
+html body .block-container [data-testid="stDataFrame"] [role="rowheader"] {{
+    color: {_AMARELO} !important;
+    -webkit-text-fill-color: {_AMARELO} !important;
+    font-weight: 700 !important;
+    background: rgba(250,195,24,0.05) !important;
+}}
+html body .block-container [data-testid="stDataFrame"] [role="gridcell"] {{
+    background: transparent !important;
+    color: {_SB_TEXTO} !important;
+    -webkit-text-fill-color: {_SB_TEXTO} !important;
+    border-color: rgba(255,255,255,0.06) !important;
+}}
+html body .block-container [data-testid="stDataFrame"] [role="row"]:hover [role="gridcell"] {{
+    background: rgba(255,255,255,0.03) !important;
+}}
+
+/* ============================================================================
+   v6.11 · KPIs Receita VERDE / Despesa VERMELHO
+   ============================================================================ */
+html body .lle-kpi .lle-kpi-sub-stack:nth-child(1) .lle-kpi-sub-valor {{
+    color: #0F8C3B !important;
+    -webkit-text-fill-color: #0F8C3B !important;
+}}
+html body .lle-kpi .lle-kpi-sub-stack:nth-child(2) .lle-kpi-sub-valor {{
+    color: #C0392B !important;
+    -webkit-text-fill-color: #C0392B !important;
+}}
+html body .lle-kpi-sub-receita,
+html body .lle-kpi-sub-credito,
+html body .lle-kpi-sub-aplicacao {{
+    color: #0F8C3B !important;
+    -webkit-text-fill-color: #0F8C3B !important;
+    font-weight: 700 !important;
+}}
+html body .lle-kpi-sub-despesa,
+html body .lle-kpi-sub-debito,
+html body .lle-kpi-sub-resgate {{
+    color: #C0392B !important;
+    -webkit-text-fill-color: #C0392B !important;
+    font-weight: 700 !important;
+}}
+
+/* ============================================================================
+   v6.11 · FILA DE ARQUIVOS (cv-fila-nome)
+   ============================================================================ */
+html body .cv-fila-nome,
+html body .cv-fila-nome * {{
+    color: {_NAVY} !important;
+    -webkit-text-fill-color: {_NAVY} !important;
+    font-weight: 700 !important;
+    font-size: 13px !important;
+    opacity: 1 !important;
 }}
 </style>
 """
