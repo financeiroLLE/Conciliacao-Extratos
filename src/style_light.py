@@ -37,6 +37,16 @@ v6.5 (11/09/2026) — pós quinto deploy:
     passa a pegar sem depender de seletores frágeis.
   - Alinhamento vertical: ajustado padding-top do corpo para casar
     exatamente com o topo do card da logo no sidebar.
+
+v6.6 (11/09/2026) — pós sexto deploy:
+  - Namespace .cv-* (Conciliação de Vendas) inteiro pintado em ESQUEMA
+    NAVY: cards KPI e cards de candidatas ficam com fundo navy escuro,
+    valores em amarelo (destaque), tags e botões coerentes. Antes ficava
+    amarelo apagado sobre amarelo apagado — ilegível.
+  - Menu do sidebar: reforço no contraste dos itens NÃO-ATIVOS quando
+    outro item está selecionado (evita virarem fantasmas).
+  - Modal "Clear caches" e outros dialogs nativos do Streamlit:
+    fundo navy escuro, botão principal amarelo.
 """
 from __future__ import annotations
 
@@ -436,11 +446,14 @@ html body [data-testid="stSidebar"] .lle-menu-section:first-of-type {{
     margin-top: 12px !important;
 }}
 
-/* Botões do menu (Dashboard, Conciliação Bancária, etc.) */
+/* Botões do menu (Dashboard, Conciliação Bancária, etc.)
+   v6.6: fundo mais opaco + texto sólido para não sumirem quando outro
+   item está ativo. */
 html body [data-testid="stSidebar"] .stButton:not(.st-key-lle_sair *) > button {{
-    background: rgba(255,255,255,0.04) !important;
+    background: rgba(255,255,255,0.07) !important;
     color: {_SB_TEXTO} !important;
-    border: 1px solid rgba(255,255,255,0.06) !important;
+    -webkit-text-fill-color: {_SB_TEXTO} !important;
+    border: 1px solid rgba(255,255,255,0.10) !important;
     border-left: 3px solid transparent !important;
     border-radius: 8px !important;
     padding: 11px 14px !important;
@@ -449,6 +462,7 @@ html body [data-testid="stSidebar"] .stButton:not(.st-key-lle_sair *) > button {
     font-size: 13.5px !important;
     box-shadow: none !important;
     margin-bottom: 3px !important;
+    opacity: 1 !important;
     transition: all 0.18s ease !important;
 }}
 html body [data-testid="stSidebar"] .stButton:not(.st-key-lle_sair *) > button:hover {{
@@ -655,6 +669,382 @@ html body .block-container [data-testid="stMetricLabel"] {{
 html body .block-container [data-testid="stMetricValue"] {{
     color: {_NAVY} !important;
     font-weight: 700 !important;
+}}
+
+/* ============================================================================
+   v6.6 · CONCILIAÇÃO DE VENDAS — namespace .cv-*
+   Todos os cards do módulo em ESQUEMA NAVY escuro, para dados saltarem
+   no tema light. Valores em amarelo, texto secundário em cinza claro.
+   ============================================================================ */
+
+/* Header do módulo ("Conciliação de Vendas · MVP-A · PISA · KING · TRIO") */
+html body .cv-header {{
+    background: linear-gradient(135deg, {_NAVY_2} 0%, {_NAVY_SIDEBAR_2} 100%) !important;
+    border-radius: 12px !important;
+    padding: 20px 24px !important;
+    color: #FFFFFF !important;
+}}
+html body .cv-header,
+html body .cv-header * {{
+    color: #FFFFFF !important;
+    -webkit-text-fill-color: #FFFFFF !important;
+}}
+html body .cv-header-titulo {{
+    color: #FFFFFF !important;
+    -webkit-text-fill-color: #FFFFFF !important;
+    font-weight: 800 !important;
+    font-size: 22px !important;
+}}
+html body .cv-header-sub {{
+    color: {_AMARELO} !important;
+    -webkit-text-fill-color: {_AMARELO} !important;
+    font-weight: 600 !important;
+    font-size: 12px !important;
+    letter-spacing: 0.5px !important;
+}}
+html body .cv-header-icon {{
+    background: {_AMARELO} !important;
+    color: {_NAVY} !important;
+}}
+
+/* Títulos de seção ("ENVIAR ARQUIVOS", "RESUMO DO QUE FOI LIDO",
+   "INICIAR CONCILIAÇÃO") — amarelo forte sobre fundo claro */
+html body .cv-secao-titulo,
+html body .cv-secao-header-titulo {{
+    color: {_AMARELO} !important;
+    -webkit-text-fill-color: {_AMARELO} !important;
+    font-weight: 800 !important;
+    font-size: 11px !important;
+    letter-spacing: 1.5px !important;
+    text-transform: uppercase !important;
+    opacity: 1 !important;
+}}
+html body .cv-secao-header {{
+    display: flex !important;
+    align-items: center !important;
+    gap: 10px !important;
+    margin: 6px 0 12px !important;
+}}
+html body .cv-secao-wrapper {{
+    background: transparent !important;
+}}
+
+/* Rodada + resultado (aparecem depois de rodar a conciliação) */
+html body .cv-rodada-header {{
+    background: transparent !important;
+    margin-bottom: 12px !important;
+}}
+html body .cv-rodada-supra {{
+    color: {_AMARELO} !important;
+    -webkit-text-fill-color: {_AMARELO} !important;
+    font-size: 11px !important;
+    font-weight: 700 !important;
+    letter-spacing: 1.5px !important;
+    text-transform: uppercase !important;
+    opacity: 1 !important;
+}}
+html body .cv-rodada-titulo {{
+    color: {_NAVY} !important;
+    -webkit-text-fill-color: {_NAVY} !important;
+    font-size: 22px !important;
+    font-weight: 800 !important;
+    margin-top: 4px !important;
+    opacity: 1 !important;
+}}
+
+/* KPIs do "RESUMO DO QUE FOI LIDO" (VENDAS CIELO/GETNET/BAIXAS/AGUARDANDO) */
+html body .cv-kpi {{
+    background: linear-gradient(135deg, {_NAVY_SIDEBAR} 0%, {_NAVY_SIDEBAR_2} 100%) !important;
+    border: 1px solid {_NAVY_SIDEBAR} !important;
+    border-left: 3px solid {_AMARELO} !important;
+    border-radius: 10px !important;
+    padding: 14px 16px !important;
+    box-shadow: 0 3px 12px rgba(15,31,70,0.15) !important;
+    text-align: center !important;
+}}
+html body .cv-kpi-label {{
+    color: {_AMARELO} !important;
+    -webkit-text-fill-color: {_AMARELO} !important;
+    font-size: 10px !important;
+    font-weight: 700 !important;
+    letter-spacing: 1px !important;
+    text-transform: uppercase !important;
+}}
+html body .cv-kpi-valor {{
+    color: #FFFFFF !important;
+    -webkit-text-fill-color: #FFFFFF !important;
+    font-size: 26px !important;
+    font-weight: 800 !important;
+    margin: 6px 0 !important;
+}}
+html body .cv-kpi-secundario {{
+    color: {_SB_TEXTO2} !important;
+    -webkit-text-fill-color: {_SB_TEXTO2} !important;
+    font-size: 10.5px !important;
+    opacity: 1 !important;
+}}
+
+/* Card de conciliação (múltiplas candidatas, ok, divergência) */
+html body .cv-card {{
+    background: linear-gradient(135deg, {_NAVY_SIDEBAR} 0%, {_NAVY_SIDEBAR_2} 100%) !important;
+    border: 1px solid {_NAVY_SIDEBAR} !important;
+    border-left: 4px solid {_AMARELO} !important;
+    border-radius: 10px !important;
+    padding: 16px 20px !important;
+    color: #FFFFFF !important;
+    box-shadow: 0 4px 14px rgba(15,31,70,0.20) !important;
+    margin-bottom: 12px !important;
+}}
+html body .cv-card,
+html body .cv-card * {{
+    color: {_SB_TEXTO} !important;
+    -webkit-text-fill-color: {_SB_TEXTO} !important;
+}}
+html body .cv-card-topo {{
+    display: flex !important;
+    justify-content: space-between !important;
+    align-items: flex-start !important;
+    margin-bottom: 8px !important;
+}}
+html body .cv-card-titulo {{
+    color: {_AMARELO} !important;
+    -webkit-text-fill-color: {_AMARELO} !important;
+    font-weight: 700 !important;
+    font-size: 15px !important;
+}}
+html body .cv-card-sub {{
+    color: {_SB_TEXTO2} !important;
+    -webkit-text-fill-color: {_SB_TEXTO2} !important;
+    font-size: 11.5px !important;
+}}
+
+/* Tags dos cards (MÚLTIPLAS CANDIDATAS, CIELO, GETNET, PIX, etc.) */
+html body .cv-tag {{
+    background: rgba(255,255,255,0.08) !important;
+    color: {_SB_TEXTO} !important;
+    -webkit-text-fill-color: {_SB_TEXTO} !important;
+    padding: 3px 9px !important;
+    border-radius: 4px !important;
+    font-size: 10px !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.5px !important;
+    border: 1px solid rgba(255,255,255,0.12) !important;
+}}
+html body .cv-badge-ok {{
+    background: {_AMARELO} !important;
+    color: {_NAVY} !important;
+    -webkit-text-fill-color: {_NAVY} !important;
+    padding: 3px 9px !important;
+    border-radius: 4px !important;
+    font-size: 10px !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.5px !important;
+}}
+html body .cv-badge-fail {{
+    background: #C0392B !important;
+    color: #FFFFFF !important;
+    -webkit-text-fill-color: #FFFFFF !important;
+    padding: 3px 9px !important;
+    border-radius: 4px !important;
+    font-size: 10px !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.5px !important;
+}}
+
+/* Bloco de candidatas dentro do card */
+html body .cv-candidatas-wrapper {{
+    background: rgba(255,255,255,0.05) !important;
+    border: 1px solid rgba(255,255,255,0.08) !important;
+    border-radius: 6px !important;
+    padding: 10px 12px !important;
+    margin-top: 12px !important;
+}}
+html body .cv-candidatas-header {{
+    color: {_AMARELO} !important;
+    -webkit-text-fill-color: {_AMARELO} !important;
+    font-size: 10.5px !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.5px !important;
+    text-transform: uppercase !important;
+    margin-bottom: 6px !important;
+}}
+html body .cv-candidata-linha {{
+    color: {_SB_TEXTO} !important;
+    -webkit-text-fill-color: {_SB_TEXTO} !important;
+    font-size: 11.5px !important;
+    padding: 5px 0 !important;
+    border-bottom: 1px dashed rgba(255,255,255,0.06) !important;
+}}
+html body .cv-candidata-linha:last-child {{
+    border-bottom: none !important;
+}}
+html body .cv-candidata-tag-adi {{
+    background: {_AMARELO} !important;
+    color: {_NAVY} !important;
+    -webkit-text-fill-color: {_NAVY} !important;
+    padding: 2px 6px !important;
+    border-radius: 3px !important;
+    font-size: 9px !important;
+    font-weight: 700 !important;
+    letter-spacing: 0.5px !important;
+}}
+html body .cv-candidata-tag-nf {{
+    background: rgba(255,255,255,0.10) !important;
+    color: {_AMARELO} !important;
+    -webkit-text-fill-color: {_AMARELO} !important;
+    padding: 2px 6px !important;
+    border-radius: 3px !important;
+    font-size: 9px !important;
+    font-weight: 700 !important;
+}}
+
+/* Parcelas (timeline visual das parcelas de venda) */
+html body .cv-parcelas-lista,
+html body .cv-parcela-linha,
+html body .cv-parc-linha {{
+    color: {_SB_TEXTO} !important;
+    -webkit-text-fill-color: {_SB_TEXTO} !important;
+    font-size: 11.5px !important;
+}}
+html body .cv-parcela-bullet {{
+    color: {_AMARELO} !important;
+    -webkit-text-fill-color: {_AMARELO} !important;
+    font-weight: 700 !important;
+}}
+html body .cv-parc-nf {{
+    color: {_AMARELO} !important;
+    -webkit-text-fill-color: {_AMARELO} !important;
+}}
+
+/* Fila / lista lateral com nomes de venda */
+html body .cv-fila-nome {{
+    color: {_SB_TEXTO} !important;
+    -webkit-text-fill-color: {_SB_TEXTO} !important;
+    font-weight: 600 !important;
+}}
+
+/* Estado vazio */
+html body .cv-empty-state {{
+    color: {_TEXTO2} !important;
+    -webkit-text-fill-color: {_TEXTO2} !important;
+    text-align: center !important;
+    padding: 20px !important;
+    background: {_BG_CARD_ALT} !important;
+    border-radius: 8px !important;
+    border: 1px dashed {_BORDA_SUAVE} !important;
+}}
+
+/* Aviso (banner com fundo amarelo claro do topo:
+   "Arquivos são processados na sessão e não ficam armazenados") */
+html body .cv-aviso {{
+    background: #FFFBEE !important;
+    border: 1px solid {_AMARELO_SUAVE} !important;
+    border-left: 3px solid {_AMARELO} !important;
+    color: {_TEXTO} !important;
+    -webkit-text-fill-color: {_TEXTO} !important;
+    padding: 10px 14px !important;
+    border-radius: 6px !important;
+}}
+html body .cv-aviso * {{
+    color: {_TEXTO} !important;
+    -webkit-text-fill-color: {_TEXTO} !important;
+}}
+html body .cv-aviso b {{
+    color: {_NAVY} !important;
+    -webkit-text-fill-color: {_NAVY} !important;
+    font-weight: 700 !important;
+}}
+
+/* Confirmação (modal interno de desfazer, etc.) */
+html body .cv-confirmacao {{
+    background: linear-gradient(135deg, {_NAVY_SIDEBAR} 0%, {_NAVY_SIDEBAR_2} 100%) !important;
+    border: 1px solid {_AMARELO} !important;
+    border-radius: 10px !important;
+    padding: 16px 20px !important;
+    color: {_SB_TEXTO} !important;
+}}
+html body .cv-confirmacao-titulo {{
+    color: {_AMARELO} !important;
+    -webkit-text-fill-color: {_AMARELO} !important;
+    font-weight: 700 !important;
+    font-size: 15px !important;
+}}
+html body .cv-confirmacao-descr {{
+    color: {_SB_TEXTO} !important;
+    -webkit-text-fill-color: {_SB_TEXTO} !important;
+    font-size: 12px !important;
+}}
+
+/* Rodapé (Grupo LLE · Conciliação Bancária · ...) */
+html body .cv-rodape-info {{
+    color: {_TEXTO2} !important;
+    -webkit-text-fill-color: {_TEXTO2} !important;
+    text-align: center !important;
+    font-size: 11px !important;
+    padding: 12px 0 !important;
+}}
+
+/* Wrapper de botão de busca */
+html body .cv-btn-busca-wrapper {{
+    margin: 8px 0 !important;
+}}
+
+/* ============================================================================
+   v6.6 · MODAL/DIALOG NATIVO DO STREAMLIT (Clear caches, etc.)
+   Fundo navy, botão principal amarelo. O texto interno em inglês é do
+   Streamlit — só a apresentação visual pode ser customizada.
+   ============================================================================ */
+html body [data-testid="stModal"] > div,
+html body [data-testid="stDialog"] > div,
+html body [role="dialog"] {{
+    background: linear-gradient(135deg, {_NAVY_SIDEBAR} 0%, {_NAVY_SIDEBAR_2} 100%) !important;
+    border: 1px solid {_AMARELO} !important;
+    border-left: 3px solid {_AMARELO} !important;
+    color: {_SB_TEXTO} !important;
+}}
+html body [data-testid="stModal"] h1,
+html body [data-testid="stModal"] h2,
+html body [data-testid="stModal"] h3,
+html body [data-testid="stModal"] h4,
+html body [role="dialog"] h1,
+html body [role="dialog"] h2,
+html body [role="dialog"] h3,
+html body [role="dialog"] h4 {{
+    color: {_AMARELO} !important;
+    -webkit-text-fill-color: {_AMARELO} !important;
+}}
+html body [data-testid="stModal"] p,
+html body [data-testid="stModal"] span,
+html body [role="dialog"] p,
+html body [role="dialog"] span {{
+    color: {_SB_TEXTO} !important;
+    -webkit-text-fill-color: {_SB_TEXTO} !important;
+}}
+html body [data-testid="stModal"] code,
+html body [role="dialog"] code {{
+    background: rgba(255,255,255,0.10) !important;
+    color: {_AMARELO} !important;
+    padding: 2px 6px !important;
+    border-radius: 3px !important;
+}}
+/* Botão primário do modal (Clear caches, Confirmar) — amarelo */
+html body [data-testid="stModal"] button[kind="primary"],
+html body [role="dialog"] button[kind="primary"],
+html body [data-testid="stModal"] button:not([kind]):not([data-testid*="close"]),
+html body [role="dialog"] button:not([kind]):not([data-testid*="close"]) {{
+    background: {_AMARELO} !important;
+    color: {_NAVY} !important;
+    -webkit-text-fill-color: {_NAVY} !important;
+    border: 1px solid {_AMARELO} !important;
+    font-weight: 700 !important;
+}}
+/* Botão secundário (Cancel) — transparente com borda */
+html body [data-testid="stModal"] button[kind="secondary"],
+html body [role="dialog"] button[kind="secondary"] {{
+    background: transparent !important;
+    color: {_SB_TEXTO} !important;
+    -webkit-text-fill-color: {_SB_TEXTO} !important;
+    border: 1px solid rgba(255,255,255,0.20) !important;
 }}
 </style>
 """
