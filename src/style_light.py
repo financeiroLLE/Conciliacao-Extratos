@@ -29,6 +29,14 @@ v6.4 (11/09/2026) — pós quarto deploy:
   - Alinhamento vertical sidebar × corpo: padroniza padding-top do
     .block-container e do [data-testid="stSidebar"] > div para começarem
     na mesma altura.
+
+v6.5 (11/09/2026) — pós quinto deploy:
+  - Sair AGORA fica dentro do container `.st-key-lle_sair` de verdade
+    (mudança no auth.py: st.button manual + auth_supabase.sign_out() em
+    vez de stauth logout com location="sidebar"). CSS antigo do sair
+    passa a pegar sem depender de seletores frágeis.
+  - Alinhamento vertical: ajustado padding-top do corpo para casar
+    exatamente com o topo do card da logo no sidebar.
 """
 from __future__ import annotations
 
@@ -83,17 +91,17 @@ html body .stApp > header {{ background: transparent !important; }}
 html body .block-container {{
     background: transparent !important;
     color: {_TEXTO} !important;
-    padding-top: 1.6rem !important;   /* v6.4: alinha com sidebar */
+    padding-top: 1.2rem !important;   /* v6.5: alinha o header com o topo da logo */
 }}
 
-/* v6.4: mesmo padding-top na sidebar para os cards (logo × header)
-   começarem na mesma altura */
+/* v6.5: sidebar SEM padding-top extra, e a logo com margin-top pequeno
+   equivalente ao padding do corpo. Assim topo da logo = topo do header. */
 html body [data-testid="stSidebar"] > div:first-child,
 html body [data-testid="stSidebar"] [data-testid="stSidebarContent"] {{
-    padding-top: 1rem !important;
+    padding-top: 0.8rem !important;
 }}
 html body [data-testid="stSidebar"] .lle-sidebar-logo {{
-    margin-top: 4px !important;
+    margin-top: 0 !important;
 }}
 
 /* ---------- 1.1) LABELS E TEXTOS DO CORPO — navy escuro legível ---------- */
