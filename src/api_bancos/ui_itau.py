@@ -332,14 +332,29 @@ def _puxar_e_injetar_no_uploader(
     _adicionar_arquivo_api(arq, nome_sankhya=nome_sankhya)
 
     # v5.83: guarda métricas para o card mostrar
+    # v5.85: além da soma bruta, guarda volume movimentado (|valor|) e
+    # totais de crédito/débito. Créditos e débitos de conta corrente se
+    # cancelam, então a soma bruta tende a zero e NÃO indica bug —
+    # o volume é a métrica correta para comparar com o Sankhya.
     try:
         qtd = int(len(df))
-        soma = float(df["valor"].sum()) if qtd > 0 and "valor" in df.columns else 0.0
+        if qtd > 0 and "valor" in df.columns:
+            valores = df["valor"].astype(float)
+            soma = float(valores.sum())
+            volume = float(valores.abs().sum())
+            total_credito = float(valores[valores > 0].sum())
+            total_debito = float(-valores[valores < 0].sum())  # positivo (magnitude)
+        else:
+            soma = volume = total_credito = total_debito = 0.0
     except Exception:
-        qtd, soma = 0, 0.0
+        qtd = 0
+        soma = volume = total_credito = total_debito = 0.0
     st.session_state[_CHAVE_METRICAS] = {
         "qtd": qtd,
         "soma": soma,
+        "volume": volume,
+        "total_credito": total_credito,
+        "total_debito": total_debito,
         "apelido": apelido,
         "periodo": f"{data_inicio.strftime('%d/%m/%Y')} a {data_fim.strftime('%d/%m/%Y')}",
     }
@@ -411,12 +426,18 @@ def _render_lista_arquivos_api() -> None:
 
     metricas = st.session_state.get(_CHAVE_METRICAS) or {}
     qtd_lancamentos = int(metricas.get("qtd", -1))  # -1 = desconhecido (sessão antiga)
-    soma_valor = float(metricas.get("soma", 0.0))
+    volume_valor = float(metricas.get("volume", 0.0))
+    total_credito = float(metricas.get("total_credito", 0.0))
+    total_debito = float(metricas.get("total_debito", 0.0))
+
+    def _fmt_brl(v: float) -> str:
+        return f"R$ {v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
     for i, arq in enumerate(arqs):
         col_card, col_x = st.columns([25, 1])
         with col_card:
-            # v5.83: informação de qtd + soma bem visível
+            # v5.85: mostra volume movimentado (|créditos| + |débitos|),
+            # que é a métrica que o Sankhya usa como referência.
             if qtd_lancamentos < 0:
                 info_qtd = f'{arq.size:,} bytes'
             elif qtd_lancamentos == 0:
@@ -425,10 +446,21 @@ def _render_lista_arquivos_api() -> None:
                     f'⚠ 0 lançamentos</span> · {arq.size:,} bytes'
                 )
             else:
-                soma_str = f"R$ {soma_valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
                 info_qtd = (
                     f'<span style="color:#0F8C3B;font-weight:700;">'
-                    f'{qtd_lancamentos} lançamentos · {soma_str}</span> · {arq.size:,} bytes'
+                    f'{qtd_lancamentos} lançamentos · '
+                    f'movimentação {_fmt_brl(volume_valor)}</span>'
+                )
+
+            # v5.85: quando tem qtd > 0, mostra também créditos e débitos
+            # separados (uma linha extra) — útil pra bater os totais.
+            info_cred_deb = ""
+            if qtd_lancamentos > 0:
+                info_cred_deb = (
+                    f'<div style="color:#9fb3d6;font-size:10.5px;margin-top:2px;">'
+                    f'<span style="color:#0F8C3B;">+ {_fmt_brl(total_credito)} crédito</span> · '
+                    f'<span style="color:#C0392B;">- {_fmt_brl(total_debito)} débito</span>'
+                    f'</div>'
                 )
 
             if nome_sk:
@@ -437,12 +469,14 @@ def _render_lista_arquivos_api() -> None:
                     f'conta · '
                     f'<b style="color:#eaf0fb;">{nome_sk}</b> · '
                     f'{info_qtd}</div>'
+                    f'{info_cred_deb}'
                 )
             else:
                 linha2 = (
                     f'<div style="color:#9fb3d6;font-size:11px;margin-top:2px;">'
                     f'{info_qtd} · '
                     f'<span style="color:#FAC318;">sem nome_sankhya cadastrado</span></div>'
+                    f'{info_cred_deb}'
                 )
 
             st.markdown(
@@ -464,28 +498,24 @@ def _render_lista_arquivos_api() -> None:
                 _remover_arquivo_api(i)
                 st.rerun()
 
-    # v5.83.1: mostra debug SEMPRE que tem arquivo da API (enquanto estamos
-    # investigando o parser). Depois de tudo funcionar, remover este bloco.
-    # Detecta "problema" quando: 0 lançamentos, OU soma = 0 mas tem linhas.
+    # v5.85: só detecta problema real quando NENHUM lançamento vem,
+    # OU quando volume movimentado é zero (aí sim é bug). Soma bruta ~ 0
+    # com volume > 0 é COMPORTAMENTO NORMAL (créditos ≈ débitos) —
+    # não deve gerar alerta.
     parece_problema = arqs and (
         qtd_lancamentos == 0
-        or (qtd_lancamentos > 0 and abs(soma_valor) < 0.01)
+        or (qtd_lancamentos > 0 and volume_valor < 0.01)
     )
     if arqs:
         arq0 = arqs[0]
         if parece_problema:
-            if qtd_lancamentos == 0:
-                st.warning(
-                    "⚠️ **Extrato veio vazio da API.** Zero lançamentos. "
-                    "Use os botões abaixo para diagnosticar."
-                )
-            else:
-                st.warning(
-                    f"⚠️ **{qtd_lancamentos} lançamentos foram lidos, mas a "
-                    f"soma dos valores deu R$ 0,00.** O parser está pegando "
-                    "as linhas, mas o campo do valor está sendo lido errado. "
-                    "Use os botões abaixo para eu ver o formato real do JSON."
-                )
+            st.warning(
+                "⚠️ **Extrato sem movimentação lida da API.** Zero "
+                "lançamentos ou volume zero — algo está errado. "
+                "Use os botões abaixo para diagnosticar."
+            )
+        # v5.85: botões de conferência ficam disponíveis SEMPRE (útil
+        # pra auditoria), mas discretos e sem alerta quando está tudo ok.
         col_dl, col_dbg = st.columns([1, 1])
         with col_dl:
             st.download_button(
@@ -497,7 +527,7 @@ def _render_lista_arquivos_api() -> None:
                 use_container_width=True,
             )
         with col_dbg:
-            # v5.83.1: expander aberto por padrão quando tem problema
+            # v5.85: expander só abre por padrão quando tem problema REAL
             with st.expander(
                 "🔧  Debug técnico — JSON bruto da API",
                 expanded=bool(parece_problema),
