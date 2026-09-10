@@ -261,12 +261,33 @@ html body .lle-kpi .lle-kpi-sub-label * {{
     letter-spacing: 1px !important;
     text-transform: uppercase !important;
 }}
+/* v6.12: separar o valor PRINCIPAL (branco) dos sub-valores (que têm
+   classe .verde ou .vermelho aplicada pelo próprio app). NÃO pintar
+   .lle-kpi-sub-valor de branco — deixar as classes .verde/.vermelho
+   do CSS antigo funcionarem, e reforçá-las com cores fortes. */
 html body .lle-kpi .lle-kpi-value,
-html body .lle-kpi .lle-kpi-value *,
-html body .lle-kpi .lle-kpi-sub-valor,
-html body .lle-kpi .lle-kpi-sub-valor * {{
+html body .lle-kpi .lle-kpi-value * {{
     color: #FFFFFF !important;
     -webkit-text-fill-color: #FFFFFF !important;
+    font-weight: 800 !important;
+}}
+/* Sub-valor SEM classe explícita → branco (fallback) */
+html body .lle-kpi .lle-kpi-sub-valor:not(.verde):not(.vermelho) {{
+    color: #FFFFFF !important;
+    -webkit-text-fill-color: #FFFFFF !important;
+    font-weight: 800 !important;
+}}
+/* Verde e Vermelho REFORÇADOS (cores fortes, saltam no fundo navy) */
+html body .lle-kpi .lle-kpi-sub-valor.verde,
+html body .lle-kpi-sub-valor.verde {{
+    color: #7ee0a6 !important;
+    -webkit-text-fill-color: #7ee0a6 !important;
+    font-weight: 800 !important;
+}}
+html body .lle-kpi .lle-kpi-sub-valor.vermelho,
+html body .lle-kpi-sub-valor.vermelho {{
+    color: #ff6b6b !important;
+    -webkit-text-fill-color: #ff6b6b !important;
     font-weight: 800 !important;
 }}
 html body .lle-kpi .lle-kpi-suffix,
@@ -1460,20 +1481,25 @@ html body [role="dialog"] button[kind="secondary"] {{
 }}
 
 /* ============================================================================
-   v6.11 · TABS (st.tabs — Conciliadas / Sem baixa / Divergências etc.)
-   Pílulas amarelas arredondadas com item ativo em amarelo sólido.
+   v6.12 · TABS — especificidade máxima para vencer o CSS antigo
    ============================================================================ */
-html body [data-baseweb="tab-list"],
+html body div.stTabs > div [data-baseweb="tab-list"],
+html body div[data-testid="stTabs"] [data-baseweb="tab-list"],
 html body .stTabs [data-baseweb="tab-list"] {{
     background: transparent !important;
+    background-color: transparent !important;
+    border: none !important;
     border-bottom: 2px solid {_AMARELO} !important;
     padding: 10px 0 !important;
     gap: 8px !important;
     flex-wrap: wrap !important;
+    border-radius: 0 !important;
 }}
-html body [data-baseweb="tab"],
+html body div.stTabs > div [data-baseweb="tab"],
+html body div[data-testid="stTabs"] [data-baseweb="tab"],
 html body .stTabs [data-baseweb="tab"] {{
     background: #FFFDEE !important;
+    background-color: #FFFDEE !important;
     color: {_TEXTO} !important;
     -webkit-text-fill-color: {_TEXTO} !important;
     padding: 9px 18px !important;
@@ -1493,9 +1519,11 @@ html body [data-baseweb="tab"]:hover {{
     background: rgba(250,195,24,0.15) !important;
     border-color: {_AMARELO} !important;
 }}
-html body [data-baseweb="tab"][aria-selected="true"],
+html body div.stTabs > div [data-baseweb="tab"][aria-selected="true"],
+html body div[data-testid="stTabs"] [data-baseweb="tab"][aria-selected="true"],
 html body .stTabs [data-baseweb="tab"][aria-selected="true"] {{
     background: {_AMARELO} !important;
+    background-color: {_AMARELO} !important;
     color: {_NAVY} !important;
     -webkit-text-fill-color: {_NAVY} !important;
     border: 2px solid {_NAVY} !important;
@@ -1593,6 +1621,151 @@ html body .cv-fila-nome * {{
     font-weight: 700 !important;
     font-size: 13px !important;
     opacity: 1 !important;
+}}
+
+/* ============================================================================
+   v6.12 · RODAPÉ DO SANKHYA (expander com <table> HTML inline)
+   O HTML usa cores inline (color:#FAC318, #cdd9f2, #6f88b8) que ficam
+   claras. No tema light fica invisível. Solução: forçar o expander
+   que TEM uma <table> dentro a ficar em navy escuro (o CSS antigo
+   também é navy escuro no dark — só reforço aqui). Cores inline
+   claras voltam a ser legíveis.
+   ============================================================================ */
+html body .block-container [data-testid="stExpander"]:has(table),
+html body .block-container details:has(table) {{
+    background: linear-gradient(135deg, {_NAVY_SIDEBAR} 0%, {_NAVY_SIDEBAR_2} 100%) !important;
+    border: 2px solid {_AMARELO} !important;
+    border-radius: 10px !important;
+    color: #FFFFFF !important;
+}}
+html body .block-container [data-testid="stExpander"]:has(table) summary,
+html body .block-container details:has(table) > summary {{
+    background: rgba(250,195,24,0.10) !important;
+    color: {_AMARELO} !important;
+    -webkit-text-fill-color: {_AMARELO} !important;
+    font-weight: 700 !important;
+    border-radius: 8px 8px 0 0 !important;
+    padding: 12px 16px !important;
+}}
+html body .block-container [data-testid="stExpander"]:has(table) summary * {{
+    color: {_AMARELO} !important;
+    -webkit-text-fill-color: {_AMARELO} !important;
+    font-weight: 700 !important;
+}}
+/* Tabela dentro do expander — cores inline reforçadas */
+html body .block-container [data-testid="stExpander"]:has(table) table {{
+    color: #FFFFFF !important;
+    background: transparent !important;
+}}
+html body .block-container [data-testid="stExpander"]:has(table) table * {{
+    color: inherit !important;
+    -webkit-text-fill-color: inherit !important;
+}}
+/* Preserva/reforça as cores semânticas específicas */
+html body .block-container [data-testid="stExpander"]:has(table) td[style*="#FAC318"],
+html body .block-container [data-testid="stExpander"]:has(table) td[style*="color:#FAC318"] {{
+    color: {_AMARELO} !important;
+    -webkit-text-fill-color: {_AMARELO} !important;
+    font-weight: 700 !important;
+}}
+html body .block-container [data-testid="stExpander"]:has(table) td[style*="#cdd9f2"] {{
+    color: {_SB_TEXTO} !important;
+    -webkit-text-fill-color: {_SB_TEXTO} !important;
+}}
+html body .block-container [data-testid="stExpander"]:has(table) td[style*="#6f88b8"],
+html body .block-container [data-testid="stExpander"]:has(table) td[style*="#9fb3d6"] {{
+    color: {_SB_TEXTO2} !important;
+    -webkit-text-fill-color: {_SB_TEXTO2} !important;
+}}
+html body .block-container [data-testid="stExpander"]:has(table) span[style*="#7ee0a6"] {{
+    color: #7ee0a6 !important;
+    -webkit-text-fill-color: #7ee0a6 !important;
+    font-weight: 700 !important;
+}}
+/* Cabeçalho das colunas (Crédito, Débito, Movimentação total) */
+html body .block-container [data-testid="stExpander"]:has(table) table tr:first-child td {{
+    color: {_AMARELO_SUAVE} !important;
+    -webkit-text-fill-color: {_AMARELO_SUAVE} !important;
+    font-weight: 700 !important;
+}}
+/* Bordas escuras do CSS antigo — trocar para amarelo suave */
+html body .block-container [data-testid="stExpander"]:has(table) td[style*="border-top:1px solid #163062"] {{
+    border-top: 1px solid rgba(250,195,24,0.20) !important;
+}}
+html body .block-container [data-testid="stExpander"]:has(table) td[style*="border-bottom:1px solid #163062"] {{
+    border-bottom: 1px solid rgba(250,195,24,0.20) !important;
+}}
+
+/* ============================================================================
+   v6.12 · BOTÃO "TESTAR CONEXÃO ITAÚ" — compacto
+   Estava com use_container_width=True esticando pela coluna inteira.
+   Reduzir altura e padding, alinhar tipo linha pequena.
+   ============================================================================ */
+html body .block-container .st-key-itau_testar button,
+html body .block-container button[data-testid*="itau_testar"] {{
+    padding: 4px 12px !important;
+    min-height: 28px !important;
+    height: 28px !important;
+    font-size: 11.5px !important;
+    line-height: 1 !important;
+    width: auto !important;
+    max-width: 180px !important;
+    white-space: nowrap !important;
+}}
+html body .block-container .st-key-itau_testar {{
+    max-width: 180px !important;
+}}
+
+/* ============================================================================
+   v6.12 · SELECTBOX DROPDOWN — opção selecionada visível
+   O dropdown aberto renderiza opções num popover. Forçar texto claro
+   sobre fundo navy.
+   ============================================================================ */
+html body div[data-baseweb="popover"] ul[role="listbox"],
+html body div[data-baseweb="popover"] div[role="listbox"],
+html body div[data-baseweb="popover"] [data-baseweb="menu"] {{
+    background: {_NAVY_SIDEBAR} !important;
+    background-color: {_NAVY_SIDEBAR} !important;
+    border: 1px solid {_AMARELO} !important;
+}}
+html body div[data-baseweb="popover"] li[role="option"],
+html body div[data-baseweb="popover"] [role="option"] {{
+    background: transparent !important;
+    color: #FFFFFF !important;
+    -webkit-text-fill-color: #FFFFFF !important;
+}}
+html body div[data-baseweb="popover"] li[role="option"] *,
+html body div[data-baseweb="popover"] [role="option"] * {{
+    color: #FFFFFF !important;
+    -webkit-text-fill-color: #FFFFFF !important;
+}}
+html body div[data-baseweb="popover"] li[role="option"]:hover,
+html body div[data-baseweb="popover"] li[role="option"][aria-selected="true"],
+html body div[data-baseweb="popover"] [role="option"][aria-selected="true"] {{
+    background: rgba(250,195,24,0.15) !important;
+    color: {_AMARELO} !important;
+    -webkit-text-fill-color: {_AMARELO} !important;
+}}
+html body div[data-baseweb="popover"] li[role="option"]:hover *,
+html body div[data-baseweb="popover"] li[role="option"][aria-selected="true"] * {{
+    color: {_AMARELO} !important;
+    -webkit-text-fill-color: {_AMARELO} !important;
+}}
+
+/* ============================================================================
+   v6.12 · TOOLTIPS (?) — ícone visível
+   ============================================================================ */
+html body [data-testid="stTooltipHoverTarget"],
+html body [data-testid="stTooltipIcon"],
+html body [data-baseweb="tooltip"] {{
+    color: {_NAVY} !important;
+    fill: {_NAVY} !important;
+}}
+html body [data-testid="stTooltipHoverTarget"] svg,
+html body [data-testid="stTooltipIcon"] svg {{
+    fill: {_NAVY} !important;
+    color: {_NAVY} !important;
+    opacity: 0.7 !important;
 }}
 </style>
 """
