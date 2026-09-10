@@ -18,13 +18,17 @@ v6.2 (11/09/2026) — pós segundo deploy:
     duplo em partes críticas) para vencer o CSS antigo por especificidade.
 
 v6.3 (11/09/2026) — pós terceiro deploy:
-  - Captions do corpo ("Formato padronizado...", "Só pra contas que recebem
-    cartão...") agora em cinza médio legível. Antes ficavam brancas sobre
-    branco por CSS antigo com maior especificidade — reforço via múltiplos
-    seletores (stCaption, stCaptionContainer, small, .stCaption).
-  - Botão Sair: agora VISUALMENTE colado ao card do usuário. O container
-    do Sair fica com border-top zero e margin-top negativo, formando um
-    bloco único com .lle-user-block acima.
+  - Captions do corpo agora legíveis (múltiplos seletores).
+  - Tentativa de colar Sair ao card do usuário.
+
+v6.4 (11/09/2026) — pós quarto deploy:
+  - Botão Sair: o stauth Authenticate().logout(location="sidebar") renderiza
+    o botão com key="btn_logout_lle" FORA do container st.container(key=
+    "lle_sair") em algumas versões. Agora captamos AMBOS os targets
+    (.st-key-lle_sair e .st-key-btn_logout_lle) para garantir que pega.
+  - Alinhamento vertical sidebar × corpo: padroniza padding-top do
+    .block-container e do [data-testid="stSidebar"] > div para começarem
+    na mesma altura.
 """
 from __future__ import annotations
 
@@ -79,6 +83,17 @@ html body .stApp > header {{ background: transparent !important; }}
 html body .block-container {{
     background: transparent !important;
     color: {_TEXTO} !important;
+    padding-top: 1.6rem !important;   /* v6.4: alinha com sidebar */
+}}
+
+/* v6.4: mesmo padding-top na sidebar para os cards (logo × header)
+   começarem na mesma altura */
+html body [data-testid="stSidebar"] > div:first-child,
+html body [data-testid="stSidebar"] [data-testid="stSidebarContent"] {{
+    padding-top: 1rem !important;
+}}
+html body [data-testid="stSidebar"] .lle-sidebar-logo {{
+    margin-top: 4px !important;
 }}
 
 /* ---------- 1.1) LABELS E TEXTOS DO CORPO — navy escuro legível ---------- */
@@ -317,9 +332,13 @@ html body [data-testid="stSidebar"] .lle-user-role * {{
     opacity: 1 !important;
 }}
 
-/* Botão Sair (dentro do container key="lle_sair") — colado ao card acima */
-/* v6.3: container do Sair vira "rodapé" do card do usuário — sem gap,
-   sem borda-top, borda inferior arredondada. Visualmente é um bloco só. */
+/* Botão Sair — v6.4: captura AMBOS os targets possíveis pra garantir
+   que pega o botão do stauth Authenticate() (que pode renderizar
+   dentro do container "lle_sair" ou direto no sidebar como
+   "btn_logout_lle" dependendo da versão).
+   O elemento pai do botão vira o "rodapé" do card do usuário. */
+
+/* Container do st.container(key="lle_sair"), quando presente */
 html body [data-testid="stSidebar"] .st-key-lle_sair {{
     margin-top: 0 !important;
     margin-bottom: 12px !important;
@@ -331,9 +350,30 @@ html body [data-testid="stSidebar"] .st-key-lle_sair {{
 }}
 html body [data-testid="stSidebar"] .st-key-lle_sair [data-testid="stVerticalBlock"] {{
     padding: 8px 12px !important;
+    gap: 0 !important;
 }}
+
+/* Container direto do stauth logout button (quando ele não vai
+   pro st.container) */
+html body [data-testid="stSidebar"] .st-key-btn_logout_lle,
+html body [data-testid="stSidebar"] [data-testid*="element-container"]:has(button[data-testid*="btn_logout_lle"]),
+html body [data-testid="stSidebar"] [class*="st-key-btn_logout"] {{
+    margin-top: 0 !important;
+    margin-bottom: 12px !important;
+    padding: 8px 12px !important;
+    background: linear-gradient(180deg, rgba(255,255,255,0.02) 0%, transparent 100%) !important;
+    border: 1px solid rgba(255,255,255,0.08) !important;
+    border-top: 1px solid {_SB_BORDER} !important;
+    border-radius: 0 0 10px 10px !important;
+}}
+
+/* Estilo do botão em si (independente de onde está) */
 html body [data-testid="stSidebar"] .st-key-lle_sair button,
-html body [data-testid="stSidebar"] .st-key-lle_sair .stButton > button {{
+html body [data-testid="stSidebar"] .st-key-lle_sair .stButton > button,
+html body [data-testid="stSidebar"] button[data-testid*="btn_logout_lle"],
+html body [data-testid="stSidebar"] button[key*="btn_logout"],
+html body [data-testid="stSidebar"] .st-key-btn_logout_lle button,
+html body [data-testid="stSidebar"] .st-key-btn_logout_manual button {{
     background: transparent !important;
     color: {_SB_TEXTO} !important;
     border: 1px solid rgba(250,195,24,0.35) !important;
@@ -348,7 +388,10 @@ html body [data-testid="stSidebar"] .st-key-lle_sair .stButton > button {{
     margin: 0 !important;
 }}
 html body [data-testid="stSidebar"] .st-key-lle_sair button:hover,
-html body [data-testid="stSidebar"] .st-key-lle_sair .stButton > button:hover {{
+html body [data-testid="stSidebar"] .st-key-lle_sair .stButton > button:hover,
+html body [data-testid="stSidebar"] button[data-testid*="btn_logout_lle"]:hover,
+html body [data-testid="stSidebar"] button[key*="btn_logout"]:hover,
+html body [data-testid="stSidebar"] .st-key-btn_logout_lle button:hover {{
     background: rgba(250,195,24,0.10) !important;
     color: {_AMARELO} !important;
     border-color: {_AMARELO} !important;
@@ -356,7 +399,13 @@ html body [data-testid="stSidebar"] .st-key-lle_sair .stButton > button:hover {{
 }}
 html body [data-testid="stSidebar"] .st-key-lle_sair button p,
 html body [data-testid="stSidebar"] .st-key-lle_sair button span,
-html body [data-testid="stSidebar"] .st-key-lle_sair button div {{
+html body [data-testid="stSidebar"] .st-key-lle_sair button div,
+html body [data-testid="stSidebar"] button[data-testid*="btn_logout_lle"] p,
+html body [data-testid="stSidebar"] button[data-testid*="btn_logout_lle"] span,
+html body [data-testid="stSidebar"] button[data-testid*="btn_logout_lle"] div,
+html body [data-testid="stSidebar"] .st-key-btn_logout_lle button p,
+html body [data-testid="stSidebar"] .st-key-btn_logout_lle button span,
+html body [data-testid="stSidebar"] .st-key-btn_logout_lle button div {{
     color: inherit !important;
     -webkit-text-fill-color: inherit !important;
 }}
