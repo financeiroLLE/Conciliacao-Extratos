@@ -66,6 +66,19 @@ class TokenCache:
 _TOKEN_LOCK = threading.Lock()
 _TOKEN_CACHE: Dict[str, TokenCache] = {}
 
+# v5.83: buffer para DEBUG. Guarda o último payload bruto de cada página
+# retornada pela API, para o ui_itau.py mostrar quando o parser vier vazio.
+# Serve para descobrirmos o FORMATO REAL do JSON que o Itaú entrega
+# (que pode diferir da documentação). Reseta a cada nova chamada.
+_ULTIMO_DEBUG: Dict[str, Any] = {
+    "payloads": [],           # lista de dicts (um por página) — bruto da API
+    "http_status": [],        # status HTTP de cada página
+    "conta": "",
+    "periodo": "",
+    "url_base": "",
+    "erro": "",
+}
+
 
 # ==============================================================================
 # HELPERS
@@ -336,11 +349,17 @@ def _chamar_extrato(
             detalhe = j.get("message") or j.get("error_description") or ""
         except Exception:
             detalhe = resp.text[:200]
+        _ULTIMO_DEBUG["http_status"].append(resp.status_code)
+        _ULTIMO_DEBUG["erro"] = f"HTTP {resp.status_code} · {detalhe}"
         raise RuntimeError(
             f"Falha ao consultar extrato (HTTP {resp.status_code}). Detalhe: {detalhe}"
         )
 
-    return resp.json()
+    payload = resp.json()
+    # v5.83: guarda payload bruto para debug (ui_itau.py mostra se veio vazio)
+    _ULTIMO_DEBUG["payloads"].append(payload)
+    _ULTIMO_DEBUG["http_status"].append(resp.status_code)
+    return payload
 
 
 # ==============================================================================
@@ -423,6 +442,17 @@ def _paginar_e_baixar_extrato(
     max_paginas: int = 50,
 ) -> List[Dict[str, Any]]:
     """Chama a API do Itaú paginando até acabarem os lançamentos."""
+    # v5.83: reseta o buffer de debug a cada nova consulta
+    _ULTIMO_DEBUG["payloads"] = []
+    _ULTIMO_DEBUG["http_status"] = []
+    _ULTIMO_DEBUG["conta"] = conta_formatada
+    _ULTIMO_DEBUG["periodo"] = f"{data_inicio} a {data_fim}"
+    _ULTIMO_DEBUG["url_base"] = (
+        URLS_PROD["extrato_base"] if config["ambiente"] == "prod"
+        else URLS_HOMOL["extrato_base"]
+    )
+    _ULTIMO_DEBUG["erro"] = ""
+
     todos: List[Dict[str, Any]] = []
     page = 1
     while page <= max_paginas:
@@ -489,6 +519,23 @@ def obter_nome_sankhya(apelido: str) -> str:
     if not reg:
         return ""
     return str(reg.get("nome_sankhya", "")).strip()
+
+
+def obter_ultimo_debug() -> Dict[str, Any]:
+    """v5.83: retorna cópia do último snapshot de debug da API.
+
+    Contém: payloads brutos (por página), status HTTP, conta consultada,
+    período, url_base e eventual erro. Usado pelo ui_itau.py quando o
+    parser vem vazio, para mostrar o formato REAL do JSON do Itaú.
+    """
+    return {
+        "payloads": list(_ULTIMO_DEBUG.get("payloads") or []),
+        "http_status": list(_ULTIMO_DEBUG.get("http_status") or []),
+        "conta": str(_ULTIMO_DEBUG.get("conta", "")),
+        "periodo": str(_ULTIMO_DEBUG.get("periodo", "")),
+        "url_base": str(_ULTIMO_DEBUG.get("url_base", "")),
+        "erro": str(_ULTIMO_DEBUG.get("erro", "")),
+    }
 
 
 def puxar_extrato_df(
