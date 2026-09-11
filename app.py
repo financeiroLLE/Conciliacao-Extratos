@@ -1621,6 +1621,13 @@ table {{ color: {CORES["branco"]}; }}
 # branco + bordas amarelas). Colocado DEPOIS do CSS grande antigo para
 # vencer pela ordem no DOM. Para reverter, comente esta linha e remova
 # o import de src.style_light acima.
+# ============================================================
+# v6.15 DIAGNOSTICO — remover depois de confirmar
+# ============================================================
+st.error("🔴 DIAGNOSTICO v6.15 — se voce esta vendo esta mensagem VERMELHA, o codigo NOVO do app.py esta rodando (Streamlit Cloud pegou a versao nova)")
+st.warning("🟡 Se a mensagem vermelha aparece MAS o sidebar continua amarelo, entao o problema e 100% no CSS (especificidade). Se NAO aparece, o Streamlit Cloud esta servindo versao antiga.")
+# ============================================================
+
 # v6.14: CSS de override INLINE (sem módulo separado — antes: render_style_override())
 # ============================================================
 # Paleta v6.12 — mantém o esquema aprovado (navy sidebar + light body + amarelo)
@@ -1645,8 +1652,25 @@ _TEXTO3 = "#8A99B5"
 st.html(
     f"""
 <style>
+/* TESTE DIAGNOSTICO v6.15 - FAIXA VERMELHA */
+html body::before {{
+    content: "CSS v6.15 - FAIXA CSS OK" !important;
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    background: #C0392B !important;
+    color: #FFFFFF !important;
+    z-index: 999999 !important;
+    padding: 8px 16px !important;
+    text-align: center !important;
+    font-size: 14px !important;
+    font-weight: 800 !important;
+    font-family: Arial, sans-serif !important;
+}}
+
 /* ============================================================================
-   FASE A · v6.14 INLINE — CSS agora vive dentro do app.py, não mais no
+   FASE A · v6.15 DIAGNOSTICO — CSS agora vive dentro do app.py, não mais no
    módulo separado src/style_light.py (Streamlit Cloud cacheava o módulo
    Python e não pegava versões novas nem depois de Reboot).
    ============================================================================ */
