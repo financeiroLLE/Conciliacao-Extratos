@@ -1612,49 +1612,19 @@ table {{ color: {CORES["branco"]}; }}
     font-weight: 400;
 }}
 
-</style>
-"""
-)
 
 
-# v6.0 — Fase A do redesign: override do visual (sidebar navy + corpo
-# branco + bordas amarelas). Colocado DEPOIS do CSS grande antigo para
-# vencer pela ordem no DOM. Para reverter, comente esta linha e remova
-# o import de src.style_light acima.
-# ============================================================
-# v6.15 DIAGNOSTICO — remover depois de confirmar
-# ============================================================
-st.error("🔴 DIAGNOSTICO v6.15 — se voce esta vendo esta mensagem VERMELHA, o codigo NOVO do app.py esta rodando (Streamlit Cloud pegou a versao nova)")
-st.warning("🟡 Se a mensagem vermelha aparece MAS o sidebar continua amarelo, entao o problema e 100% no CSS (especificidade). Se NAO aparece, o Streamlit Cloud esta servindo versao antiga.")
-# ============================================================
+/* ============================================================================
+   FASE A · v6.16 — CSS NOVO CONCATENADO NO MESMO st.html() (fix Streamlit)
+   Streamlit não aplica CSS de um SEGUNDO st.html() na mesma execução — 
+   solução: colar tudo dentro do bloco antigo. Vem POR ÚLTIMO, então
+   ganha por ordem no DOM.
+   ============================================================================ */
 
-# v6.14: CSS de override INLINE (sem módulo separado — antes: render_style_override())
-# ============================================================
-# Paleta v6.12 — mantém o esquema aprovado (navy sidebar + light body + amarelo)
-_NAVY = "#0F1F46"
-_NAVY_2 = "#0A1730"
-_NAVY_SIDEBAR = "#051d5c"
-_NAVY_SIDEBAR_2 = "#041747"
-_AMARELO = "#FAC318"
-_AMARELO_SUAVE = "#FFDD66"
-_BG_APP = "#F5F7FB"
-_BG_CARD = "#FFFFFF"
-_BG_CARD_ALT = "#FAFBFD"
-_BORDA_SUAVE = "#E5E9F0"
-_SB_TEXTO = "#EAF0FB"
-_SB_TEXTO2 = "#9FB3D6"
-_SB_TEXTO3 = "#6B83B0"
-_SB_BORDER = "#1E3B7A"
-_TEXTO = "#1A2547"
-_TEXTO2 = "#5A6A8A"
-_TEXTO3 = "#8A99B5"
-# ============================================================
-st.html(
-    f"""
-<style>
-/* TESTE DIAGNOSTICO v6.15 - FAIXA VERMELHA */
+
+/* TESTE DIAGNOSTICO v6.16 - FAIXA VERMELHA */
 html body::before {{
-    content: "CSS v6.15 - FAIXA CSS OK" !important;
+    content: "CSS v6.16 - FAIXA CSS OK" !important;
     position: fixed !important;
     top: 0 !important;
     left: 0 !important;
@@ -3350,9 +3320,15 @@ html body [data-testid="stTooltipIcon"] svg {{
 </style>
 """
 )
-# ============================================================
-# Fim do CSS override v6.14
-# ============================================================
+
+
+# v6.0 — Fase A do redesign: override do visual (sidebar navy + corpo
+# branco + bordas amarelas). Colocado DEPOIS do CSS grande antigo para
+# vencer pela ordem no DOM. Para reverter, comente esta linha e remova
+# o import de src.style_light acima.
+st.error("🔴 DIAGNOSTICO v6.16 — se voce esta vendo esta mensagem VERMELHA, o codigo NOVO do app.py esta rodando (Streamlit Cloud pegou a versao nova)")
+st.warning("🟡 Se a mensagem vermelha aparece MAS o sidebar continua amarelo, entao o problema e 100% no CSS (especificidade). Se NAO aparece, o Streamlit Cloud esta servindo versao antiga.")
+
 
 
 # ============================================================
