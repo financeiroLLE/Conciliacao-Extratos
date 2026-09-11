@@ -96,6 +96,33 @@ def render_style_override() -> None:
         f"""
 <style>
 /* ============================================================================
+   FASE A · v6.13 TEST — FAIXA VERMELHA DE DIAGNÓSTICO
+   Se você está vendo a faixa vermelha no topo dizendo "CSS v6.13 ATIVO",
+   então o render_style_override() ESTÁ sendo chamado e o CSS ESTÁ injetado
+   — o problema anterior era briga de especificidade.
+   Se NÃO estiver vendo a faixa, o CSS não está chegando ao navegador.
+   ============================================================================ */
+
+/* TESTE DIAGNÓSTICO — faixa vermelha fixa no topo */
+html body::before {{
+    content: "CSS v6.13 ATIVO — SE VOCE VE ISSO, O OVERRIDE ESTA FUNCIONANDO" !important;
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    background: #C0392B !important;
+    color: #FFFFFF !important;
+    z-index: 999999 !important;
+    padding: 8px 16px !important;
+    text-align: center !important;
+    font-size: 14px !important;
+    font-weight: 800 !important;
+    font-family: Arial, sans-serif !important;
+    letter-spacing: 0.5px !important;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.4) !important;
+}}
+
+/* ============================================================================
    FASE A · v6.2 — LAYOUT INVERTIDO (navy sidebar + light body + amarelo)
    Todos os seletores prefixados com html body para garantir especificidade
    suficiente para vencer o CSS antigo pelo peso + ordem.
