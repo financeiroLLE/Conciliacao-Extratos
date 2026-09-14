@@ -1769,20 +1769,35 @@ with st.sidebar:
     )
 
     # ============================================================
-    # AUDITORIA
+    # AUDITORIA (submenu — v6.20: agrupa Auditoria de Cartões +
+    # Cadastro de Taxas num expander; Cadastro de Taxas saiu de
+    # dentro de Configurações e vive aqui, ao lado da auditoria
+    # que o consome)
     # ============================================================
     st.html("<div class='lle-menu-section'>🛡️ AUDITORIA</div>")
 
-    # Auditoria de Cartoes
-    is_atual = st.session_state.pagina == "Auditoria de Taxas"
-    st.button(
-        "💳 Auditoria de Cartões",
-        key="nav_Auditoria de Taxas",
-        on_click=ir_para,
-        args=("Auditoria de Taxas",),
-        type="primary" if is_atual else "secondary",
-        use_container_width=True,
-    )
+    with st.expander("🛡️ Menu Auditoria", expanded=True):
+        # Auditoria de Cartões
+        is_atual = st.session_state.pagina == "Auditoria de Taxas"
+        st.button(
+            "💳 Auditoria de Cartões",
+            key="nav_Auditoria de Taxas",
+            on_click=ir_para,
+            args=("Auditoria de Taxas",),
+            type="primary" if is_atual else "secondary",
+            use_container_width=True,
+        )
+
+        # Cadastro de Taxas (movido de Configurações — v6.20)
+        is_atual = st.session_state.pagina == "Cadastro de Taxas"
+        st.button(
+            "🏦 Cadastro de Taxas",
+            key="nav_Cadastro de Taxas",
+            on_click=ir_para,
+            args=("Cadastro de Taxas",),
+            type="primary" if is_atual else "secondary",
+            use_container_width=True,
+        )
 
     # Em breve — Auditoria de Tarifas
     st.html(
@@ -1808,7 +1823,8 @@ with st.sidebar:
         use_container_width=True,
     )
 
-    # Configuracoes (expander)
+    # Configuracoes (expander) — v6.20: Cadastro de Taxas foi movido
+    # daqui pro submenu AUDITORIA (fica ao lado do que consome ele).
     with st.expander("⚙️ Configurações"):
         rodar_fuzzy = st.checkbox(
             "Gerar sugestões fuzzy",
@@ -1819,17 +1835,6 @@ with st.sidebar:
             "Tolerância de data (dias)",
             min_value=0, max_value=10, value=2, step=1,
             help="Aceita diferença de até N dias entre o lançamento no banco e no sistema (fim de semana / feriado).",
-        )
-        st.divider()
-        st.caption("Cadastros administrativos (versão nova vem com o módulo de Configurações completo)")
-        is_atual = st.session_state.pagina == "Cadastro de Taxas"
-        st.button(
-            "🏦 Cadastro de Taxas (legado)",
-            key="nav_Cadastro de Taxas",
-            on_click=ir_para,
-            args=("Cadastro de Taxas",),
-            type="primary" if is_atual else "secondary",
-            use_container_width=True,
         )
 
     # Sobre
