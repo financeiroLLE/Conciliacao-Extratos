@@ -975,11 +975,70 @@ input[type="number"] {{
 /* Divider */
 hr {{ border-color: {CORES["card_borda"]} !important; }}
 
-/* Expander */
+/* Expander no CORPO do app — v6.19: visual dos botões do sidebar
+   (fundo creme claro, bordas suaves, sombra sutil). Sidebar tem
+   seus próprios estilos, então excluímos o sidebar aqui. */
+.block-container [data-testid="stExpander"] {{
+    background-color: transparent !important;
+    border: none !important;
+    box-shadow: none !important;
+}}
+.block-container [data-testid="stExpander"] summary,
+.block-container [data-testid="stExpander"] details > summary {{
+    background-color: #FFF6C8 !important;
+    color: {CORES["azul_escuro"]} !important;
+    border: 1px solid rgba(4,23,71,0.15) !important;
+    border-radius: 10px !important;
+    padding: 12px 16px !important;
+    font-weight: 500 !important;
+    font-size: 14px !important;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.18) !important;
+    list-style: none !important;
+    transition: all 0.18s ease !important;
+}}
+.block-container [data-testid="stExpander"] summary:hover {{
+    background-color: #FFEE99 !important;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.24) !important;
+}}
+.block-container [data-testid="stExpander"] summary p,
+.block-container [data-testid="stExpander"] summary span,
+.block-container [data-testid="stExpander"] summary div {{
+    color: {CORES["azul_escuro"]} !important;
+    -webkit-text-fill-color: {CORES["azul_escuro"]} !important;
+}}
+/* Seta do expander (chevron) — reposiciona à direita e rotaciona */
+.block-container [data-testid="stExpander"] summary::marker,
+.block-container [data-testid="stExpander"] summary::-webkit-details-marker {{
+    display: none !important;
+}}
+.block-container [data-testid="stExpander"] summary svg,
+.block-container [data-testid="stExpander"] [data-testid="stExpanderToggleIcon"] {{
+    order: 99 !important;
+    margin-left: auto !important;
+    margin-right: 0 !important;
+    transform: rotate(90deg) !important;
+    transition: transform 0.2s ease !important;
+    color: {CORES["azul_escuro"]} !important;
+    fill: {CORES["azul_escuro"]} !important;
+}}
+.block-container [data-testid="stExpander"] details[open] > summary svg,
+.block-container [data-testid="stExpander"] details[open] [data-testid="stExpanderToggleIcon"] {{
+    transform: rotate(-90deg) !important;
+}}
+.block-container [data-testid="stExpander"] details[open] > summary {{
+    border-radius: 10px 10px 0 0 !important;
+}}
+/* Ícone amarelo (o emoji SVG antes do texto) mantém a cor original */
+.block-container [data-testid="stExpander"] summary img {{
+    filter: none !important;
+}}
+/* Fallback antigo (caso alguma versão do Streamlit ainda use) */
 .streamlit-expanderHeader {{
-    background-color: {CORES["azul_escuro_2"]} !important;
-    color: {CORES["branco"]} !important;
-    border: 1px solid {CORES["card_borda"]} !important;
+    background-color: #FFF6C8 !important;
+    color: {CORES["azul_escuro"]} !important;
+    border: 1px solid rgba(4,23,71,0.15) !important;
+    border-radius: 10px !important;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.18) !important;
 }}
 
 /* Caption */
