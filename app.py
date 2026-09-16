@@ -1669,6 +1669,103 @@ table {{ color: {CORES["branco"]}; }}
     font-weight: 400;
 }}
 
+/* ============================================================
+   v6.21 — DATEPICKER (calendário do st.date_input)
+   Antes: números do calendário brancos sobre fundo branco (invisíveis).
+   Agora: fundo navy escuro com texto claro, mesmo padrão do app.
+   ============================================================ */
+[data-baseweb="calendar"] {{
+    background: {CORES["azul_escuro_2"]} !important;
+    border: 1px solid {CORES["amarelo"]} !important;
+    border-radius: 10px !important;
+    box-shadow: 0 6px 24px rgba(0,0,0,0.4) !important;
+    padding: 8px !important;
+}}
+[data-baseweb="calendar"] * {{
+    color: {CORES["branco"]} !important;
+    background-color: transparent !important;
+}}
+/* Cabeçalho do calendário (mês/ano + setas) */
+[data-baseweb="calendar"] > div:first-child {{
+    background: {CORES["azul_escuro_2"]} !important;
+    padding: 6px 10px !important;
+    border-bottom: 1px solid rgba(250,195,24,0.20) !important;
+    margin-bottom: 4px !important;
+}}
+[data-baseweb="calendar"] > div:first-child * {{
+    color: {CORES["amarelo"]} !important;
+    font-weight: 700 !important;
+}}
+/* Setas de navegação */
+[data-baseweb="calendar"] button {{
+    background: transparent !important;
+    color: {CORES["amarelo"]} !important;
+    border: none !important;
+}}
+[data-baseweb="calendar"] button:hover {{
+    background: rgba(250,195,24,0.15) !important;
+}}
+[data-baseweb="calendar"] button svg,
+[data-baseweb="calendar"] button svg * {{
+    fill: {CORES["amarelo"]} !important;
+    color: {CORES["amarelo"]} !important;
+}}
+/* Nomes dos dias da semana (Su Mo Tu We Th Fr Sa) */
+[data-baseweb="calendar"] div[role="rowheader"],
+[data-baseweb="calendar"] div[role="columnheader"] {{
+    color: {CORES["amarelo"]} !important;
+    font-weight: 700 !important;
+    background: transparent !important;
+    opacity: 0.9 !important;
+}}
+/* Números dos dias */
+[data-baseweb="calendar"] [role="gridcell"] {{
+    color: {CORES["branco"]} !important;
+    background: transparent !important;
+    font-weight: 500 !important;
+}}
+[data-baseweb="calendar"] [role="gridcell"] * {{
+    color: inherit !important;
+    background: transparent !important;
+}}
+[data-baseweb="calendar"] [role="gridcell"][aria-disabled="true"] {{
+    color: rgba(255,255,255,0.35) !important;
+    opacity: 0.6 !important;
+}}
+/* Dia HOJE (com borda amarela quando não é o selecionado) */
+[data-baseweb="calendar"] [aria-current="date"]:not([aria-selected="true"]) {{
+    border: 1px solid {CORES["amarelo"]} !important;
+    border-radius: 50% !important;
+    font-weight: 700 !important;
+}}
+/* Dia SELECIONADO (bolinha amarela, número navy dentro) */
+[data-baseweb="calendar"] [aria-selected="true"],
+[data-baseweb="calendar"] [aria-pressed="true"],
+[data-baseweb="calendar"] [role="gridcell"][aria-selected="true"] {{
+    background: {CORES["amarelo"]} !important;
+    background-color: {CORES["amarelo"]} !important;
+    color: {CORES["azul_escuro"]} !important;
+    border-radius: 50% !important;
+    font-weight: 800 !important;
+}}
+[data-baseweb="calendar"] [aria-selected="true"] *,
+[data-baseweb="calendar"] [aria-pressed="true"] *,
+[data-baseweb="calendar"] [role="gridcell"][aria-selected="true"] * {{
+    color: {CORES["azul_escuro"]} !important;
+    background: transparent !important;
+    font-weight: 800 !important;
+}}
+/* Hover num dia (feedback quando passa o mouse) */
+[data-baseweb="calendar"] [role="gridcell"]:hover:not([aria-selected="true"]):not([aria-disabled="true"]) {{
+    background: rgba(250,195,24,0.15) !important;
+    border-radius: 50% !important;
+    cursor: pointer !important;
+}}
+/* Popover que contém o calendário — mesmo fundo pra não vazar branco */
+[data-baseweb="popover"]:has([data-baseweb="calendar"]) {{
+    background: {CORES["azul_escuro_2"]} !important;
+}}
+
 </style>
 """
 )
@@ -4977,7 +5074,40 @@ def _explicar_diferenca_por_dia(resultado, conta):
                         )
         except Exception:
             pass
-        if item["banco"] or item["sankhya"] or item["divergentes"] or abs(dif) >= 0.01:
+        # v6.22: explicar TARIFA GETNET/CIELO DUPLICADA no Sankhya.
+        # Quando o Sankhya lança a tarifa DENTRO do valor bruto (receita cheia)
+        # E TAMBÉM como despesa separada, a taxa entra 2× no volume do dia. O
+        # banco só recebe o líquido — diferença de volume = 2 × valor da tarifa.
+        # Ex.: 08/09/2026 · Aluguel Agosto/2026 GetNet R$ 365,40 → diferença
+        # do dia aparece como R$ 730,80 "Sankhya a mais" sem linha isolada.
+        # Detecção: extrato da adquirente tem tarifa T no dia, e a diferença
+        # do dia é EXATAMENTE 2 × T (com sinal Sankhya a mais, dif < 0).
+        try:
+            if not item.get("nota_cartao") and abs(dif) >= 0.01:
+                _adq2 = st.session_state.get("adquirente_df")
+                if _adq2 is not None and not getattr(_adq2, "empty", True) and "categoria" in _adq2.columns:
+                    _da2 = pd.to_datetime(_adq2["data"], errors="coerce").dt.normalize()
+                    _t2 = _adq2[(_da2 == pd.Timestamp(dia)) & (_adq2["categoria"].isin(["aluguel", "tarifa"]))]
+                    if not _t2.empty:
+                        _soma_t2 = round(float(pd.to_numeric(_t2["valor"], errors="coerce").abs().sum()), 2)
+                        # diferença negativa (Sankhya a mais) esperada = 2 × tarifa,
+                        # com sinal do banco > 0 essa é dif < 0 (Sankhya a mais).
+                        if _soma_t2 > 0 and abs(abs(dif) - 2 * _soma_t2) < 0.02:
+                            _nomes_t2 = " + ".join(
+                                str(x)[:40] for x in _t2.get("descricao", _t2.get("tipo", pd.Series(dtype=str))).fillna("").tolist() if str(x).strip()
+                            ) or "aluguel/tarifa"
+                            _adq_nomes = ", ".join(sorted(set(_t2["adquirente"].astype(str)))) if "adquirente" in _t2.columns else "adquirente"
+                            item["nota_tarifa_dupla"] = (
+                                "Tarifa " + _esc(_adq_nomes) + " de <b>" + fmt_brl(_soma_t2)
+                                + "</b> lançada 2× no Sankhya (no bruto das vendas E como despesa "
+                                "separada · " + _esc(_nomes_t2) + "). O banco recebeu líquido — "
+                                "por isso a diferença do dia é 2× a tarifa (" + fmt_brl(_soma_t2 * 2)
+                                + "). Fecha ao centavo quando descontamos essa duplicidade."
+                            )
+        except Exception:
+            pass
+        if (item["banco"] or item["sankhya"] or item["divergentes"]
+                or item.get("nota_tarifa_dupla") or abs(dif) >= 0.01):
             out.append(item)
     # ordena pelo "tamanho" do dia: maior entre |dif| e a soma das linhas listadas
     def _peso(i):
@@ -5187,6 +5317,13 @@ def _render_alerta_diferenca_por_dia(dif_bs, explicacao, nota_extra: str = "",
                     '<div style="margin:0 16px 12px 16px;background:#0c2b1a;border-left:3px solid #0F8C3B;'
                     'border-radius:6px;padding:8px 12px;font-size:12px;color:#c9efd9;">'
                     '&#9989; ' + item["nota_cartao"] + '</div>'
+                )
+            # v6.22: tarifa da adquirente lançada 2× no Sankhya (bruto + despesa)
+            if item.get("nota_tarifa_dupla"):
+                blocos += (
+                    '<div style="margin:0 16px 12px 16px;background:#0c2b1a;border-left:3px solid #0F8C3B;'
+                    'border-radius:6px;padding:8px 12px;font-size:12px;color:#c9efd9;">'
+                    '&#9989; ' + item["nota_tarifa_dupla"] + '</div>'
                 )
             # v5.57: cabeçalho do dia com DIREÇÃO e SINAL — antes mostrava só o
             # valor absoluto e não dava pra somar os dias e chegar no alerta.
