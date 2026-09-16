@@ -18,6 +18,12 @@ import re
 
 
 # Palavras-chave que identificam estorno (case/acento insensitive)
+# v6.22: adicionadas variações curtas "dev ted", "dev doc", "dev pix", " dev "
+# que aparecem em extratos Itaú quando o banco devolve um pagamento no mesmo
+# dia (ex.: SISPAG FORNECEDORES -R$ 2.450 e DEV TED +R$ 2.450 no mesmo dia
+# 03/09/2026). Antes essas variações não eram reconhecidas e o par ficava
+# indevidamente em pendências. "dev " isolado só entra com espaço no fim
+# para evitar falso positivo com "development", "devedor" etc.
 TERMOS_ESTORNO = [
     "estorno",
     "estornado",
@@ -28,6 +34,17 @@ TERMOS_ESTORNO = [
     "devol de cheque",
     "devolvido",
     "devolvida",
+    "dev ted",
+    "dev doc",
+    "dev pix",
+    "dev sispag",
+    "dev pagto",
+    "dev pagamento",
+    "dev cred",
+    "dev debito",
+    "dev transf",
+    "dev transferencia",
+    " dev ",       # DEV isolado com espaço (case-insensitive)
     "cancelamento",
     "cancelado",
     "cancelada",
