@@ -2046,13 +2046,21 @@ def card_kpi_html(label: str, valor: str, suffix_html: str = "", classe: str = "
 
 
 def _card_falta_conciliar_vertical(receitas: float, despesas: float) -> str:
-    """v3: Falta Conciliar com receitas e despesas EMPILHADAS, ambos em vermelho."""
+    """v6.25: Falta Conciliar com receitas e despesas EMPILHADAS.
+    Zero fica VERDE ('tudo conciliado desse lado') e valor > 0 fica VERMELHO
+    ('há pendências'). Assim quem olha o card distingue de bate a diferença
+    entre 'nada pendente' e 'valor a analisar'.
+    """
+    _cls_r = "verde" if abs(receitas) < 0.005 else "vermelho"
+    _cls_d = "verde" if abs(despesas) < 0.005 else "vermelho"
+    _sel_r = " · tudo conciliado" if abs(receitas) < 0.005 else ""
+    _sel_d = " · tudo conciliado" if abs(despesas) < 0.005 else ""
     return f"""
     <div class="lle-kpi-sub-stack">
-        <div class="lle-kpi-sub-label">Receitas:</div>
-        <div class="lle-kpi-sub-valor vermelho">{fmt_brl(receitas)}</div>
-        <div class="lle-kpi-sub-label">Despesas:</div>
-        <div class="lle-kpi-sub-valor vermelho">{fmt_brl(despesas)}</div>
+        <div class="lle-kpi-sub-label">Receitas:{_sel_r}</div>
+        <div class="lle-kpi-sub-valor {_cls_r}">{fmt_brl(receitas)}</div>
+        <div class="lle-kpi-sub-label">Despesas:{_sel_d}</div>
+        <div class="lle-kpi-sub-valor {_cls_d}">{fmt_brl(despesas)}</div>
     </div>
     """
 
