@@ -783,6 +783,38 @@ def executar_pipeline(
             index=[i for i in res_tarifas.indices_sankhya_casados if i < len(pend_sistema)]
         ).reset_index(drop=True)
 
+    # v6.22 — SEGUNDA PASSAGEM DO MATCH EXATO (rede de segurança final).
+    # Casos observados em produção (dia 11/09/2026 · ITAU PISA): três
+    # despesas "SISPAG DIVERSOS PIX TRANSFERENCIA" no banco (R$ 12.159,24 ·
+    # R$ 13.119,45 · R$ 520,00) ficavam como pendentes mesmo com o Sankhya
+    # tendo os pares exatos (SEU AMIGO · SD FAMILIA · JLC GOMES · todos com
+    # TOP=1704, Conciliado=Sim, mesma data, mesma conta ITAU PISA).
+    #
+    # A causa é uma corrida entre detectores: alguma regra de agrupamento
+    # (folha, salários N→M, depósitos abertos, tarifas repetidas) consome
+    # a linha do banco OU do Sankhya numa combinação por soma antes do
+    # match_exato ter chance. Depois de todas as regras, se sobrarem pares
+    # exatos (mesma conta + mesmo valor + data dentro da tolerância), a
+    # gente casa aqui — é o comportamento que a usuária espera.
+    #
+    # Segurança: match_exato() já é 1-pra-1 e usa o mesmo critério do match
+    # inicial. Não pode "roubar" nada porque só olha o que ainda está
+    # pendente nos dois lados.
+    if not pend_banco.empty and not pend_sistema.empty:
+        conc_final, pend_banco, pend_sistema = match_exato(
+            pend_banco, pend_sistema, tolerancia_dias=tolerancia_dias
+        )
+        if not conc_final.empty:
+            # Marca esses pares com motivo específico pra ficarem auditáveis
+            if "motivo" in conc_final.columns:
+                conc_final["motivo"] = (
+                    conc_final["motivo"].astype(str)
+                    + " [passagem final v6.22]"
+                )
+            conciliados = pd.concat(
+                [conciliados, conc_final], ignore_index=True
+            ) if not conciliados.empty else conc_final
+
     if not conciliados.empty:
         # Preserva a categoria_mov no resultado conciliado (pra dashboards)
         pass
