@@ -5619,6 +5619,23 @@ def _render_regua_conferencia_sankhya(resultado: ResultadoConciliacao, conta: st
     if tarifas_lancadas_valor > 0.005:
         cred_s = round(cred_s - tarifas_lancadas_valor, 2)
         deb_s = round(deb_s - tarifas_lancadas_valor, 2)
+
+    # v6.24: descontar os pares ANULADOS POR ESTORNO (recebimento + devolução
+    # no mesmo dia, mesma conta, valor absoluto igual, ex.: DEV TED +2.450
+    # anulando SISPAG FORNECEDORES −2.450 em 03/09). Esses pares existem só
+    # no banco (o Sankhya nem lançou porque a operação se anulou), então
+    # sobram R$ 2.450 no crédito e R$ 2.450 no débito do lado banco que não
+    # têm contrapartida real — não é diferença a analisar, é operação que
+    # foi feita e desfeita. Subtrair dos dois lados alinha a régua.
+    _est_anu = getattr(resultado, "estornos_anulados", pd.DataFrame())
+    if _est_anu is not None and not _est_anu.empty and "conta" in _est_anu.columns:
+        _est_conta = _est_anu[_est_anu["conta"] == conta]
+        if not _est_conta.empty and "valor_original" in _est_conta.columns:
+            _vol_est_anu = float(_est_conta["valor_original"].abs().sum())
+            if _vol_est_anu > 0.005:
+                cred_b = round(cred_b - _vol_est_anu, 2)
+                deb_b = round(deb_b - _vol_est_anu, 2)
+
     tot_b = round(cred_b + deb_b, 2); tot_s = round(cred_s + deb_s, 2)
     dif_c = round(cred_b - cred_s, 2); dif_d = round(deb_b - deb_s, 2)
     dif_t = round(tot_b - tot_s, 2)
