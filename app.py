@@ -975,10 +975,19 @@ input[type="number"] {{
 /* Divider */
 hr {{ border-color: {CORES["card_borda"]} !important; }}
 
-/* Expander no CORPO do app — v6.19: visual dos botões do sidebar
-   (fundo creme claro, bordas suaves, sombra sutil). Sidebar tem
-   seus próprios estilos, então excluímos o sidebar aqui. */
+/* Expander no CORPO do app — v6.19/v6.23: summary com visual de botão do
+   sidebar (creme claro, sombra sutil). O wrapper mantém borda amarela do
+   card (visual antigo), pra dar contorno ao conteúdo quando o expander
+   está ABERTO — isso restaura a borda que aparecia no "Conferência com o
+   rodapé do Sankhya" e outros cards similares. */
 .block-container [data-testid="stExpander"] {{
+    background-color: {CORES["azul_escuro_2"]} !important;
+    border: 2px solid {CORES["amarelo"]} !important;
+    border-radius: 10px !important;
+    box-shadow: 0 3px 12px rgba(250,195,24,0.10) !important;
+}}
+/* Quando FECHADO — sem fundo/borda extra (o summary já é o card visual) */
+.block-container [data-testid="stExpander"]:has(details:not([open])) {{
     background-color: transparent !important;
     border: none !important;
     box-shadow: none !important;
@@ -1670,75 +1679,96 @@ table {{ color: {CORES["branco"]}; }}
 }}
 
 /* ============================================================
-   v6.21 — DATEPICKER (calendário do st.date_input)
-   Antes: números do calendário brancos sobre fundo branco (invisíveis).
-   Agora: fundo navy escuro com texto claro, mesmo padrão do app.
+   v6.23 — DATEPICKER (calendário do st.date_input)
+   Bege claro (#FFF6C8, mesmo tom dos botões do sidebar) + texto navy.
+   Antes: quadrados brancos apareciam nas linhas do início/fim do mês
+   porque a base não estava sendo pintada. Agora o popover E o próprio
+   calendário são pintados no mesmo tom bege, sem vazamento branco.
    ============================================================ */
+/* Popover (contêiner externo do calendário) — bege sólido cobre TUDO */
+[data-baseweb="popover"] [data-baseweb="calendar"],
 [data-baseweb="calendar"] {{
-    background: {CORES["azul_escuro_2"]} !important;
+    background: #FFF6C8 !important;
+    background-color: #FFF6C8 !important;
     border: 1px solid {CORES["amarelo"]} !important;
-    border-radius: 10px !important;
-    box-shadow: 0 6px 24px rgba(0,0,0,0.4) !important;
-    padding: 8px !important;
+    border-radius: 12px !important;
+    box-shadow: 0 6px 24px rgba(4,23,71,0.35) !important;
+    padding: 10px !important;
 }}
-[data-baseweb="calendar"] * {{
-    color: {CORES["branco"]} !important;
-    background-color: transparent !important;
+[data-baseweb="popover"]:has([data-baseweb="calendar"]),
+[data-baseweb="popover"]:has([data-baseweb="calendar"]) > div {{
+    background: #FFF6C8 !important;
+    background-color: #FFF6C8 !important;
 }}
-/* Cabeçalho do calendário (mês/ano + setas) */
+/* TUDO dentro do calendário — cor navy + fundo bege (cobre células
+   vazias das linhas do início e do fim do mês). */
+[data-baseweb="calendar"] *,
+[data-baseweb="calendar"] div,
+[data-baseweb="calendar"] span,
+[data-baseweb="calendar"] button {{
+    background: #FFF6C8 !important;
+    background-color: #FFF6C8 !important;
+    color: {CORES["azul_escuro"]} !important;
+}}
+/* Cabeçalho (mês / ano) — navy peso forte, ainda em bege */
 [data-baseweb="calendar"] > div:first-child {{
-    background: {CORES["azul_escuro_2"]} !important;
+    background: #FFF6C8 !important;
     padding: 6px 10px !important;
-    border-bottom: 1px solid rgba(250,195,24,0.20) !important;
-    margin-bottom: 4px !important;
+    border-bottom: 1px solid rgba(4,23,71,0.15) !important;
+    margin-bottom: 6px !important;
 }}
 [data-baseweb="calendar"] > div:first-child * {{
-    color: {CORES["amarelo"]} !important;
-    font-weight: 700 !important;
+    color: {CORES["azul_escuro"]} !important;
+    font-weight: 800 !important;
+    background: #FFF6C8 !important;
+    background-color: #FFF6C8 !important;
 }}
-/* Setas de navegação */
+/* Setas de navegação — navy com hover amarelo suave */
 [data-baseweb="calendar"] button {{
-    background: transparent !important;
-    color: {CORES["amarelo"]} !important;
+    background: #FFF6C8 !important;
+    color: {CORES["azul_escuro"]} !important;
     border: none !important;
+    border-radius: 4px !important;
 }}
 [data-baseweb="calendar"] button:hover {{
-    background: rgba(250,195,24,0.15) !important;
+    background: {CORES["amarelo"]} !important;
+    background-color: {CORES["amarelo"]} !important;
 }}
 [data-baseweb="calendar"] button svg,
 [data-baseweb="calendar"] button svg * {{
-    fill: {CORES["amarelo"]} !important;
-    color: {CORES["amarelo"]} !important;
+    fill: {CORES["azul_escuro"]} !important;
+    color: {CORES["azul_escuro"]} !important;
 }}
 /* Nomes dos dias da semana (Su Mo Tu We Th Fr Sa) */
 [data-baseweb="calendar"] div[role="rowheader"],
 [data-baseweb="calendar"] div[role="columnheader"] {{
-    color: {CORES["amarelo"]} !important;
+    color: {CORES["azul_escuro"]} !important;
     font-weight: 700 !important;
-    background: transparent !important;
-    opacity: 0.9 !important;
+    background: #FFF6C8 !important;
+    opacity: 0.85 !important;
 }}
-/* Números dos dias */
+/* Números dos dias — navy */
 [data-baseweb="calendar"] [role="gridcell"] {{
-    color: {CORES["branco"]} !important;
-    background: transparent !important;
-    font-weight: 500 !important;
+    color: {CORES["azul_escuro"]} !important;
+    background: #FFF6C8 !important;
+    font-weight: 600 !important;
 }}
 [data-baseweb="calendar"] [role="gridcell"] * {{
     color: inherit !important;
     background: transparent !important;
 }}
+/* Dias fora do mês / desabilitados — navy esmaecido */
 [data-baseweb="calendar"] [role="gridcell"][aria-disabled="true"] {{
-    color: rgba(255,255,255,0.35) !important;
-    opacity: 0.6 !important;
+    color: rgba(4,23,71,0.35) !important;
+    opacity: 0.7 !important;
 }}
-/* Dia HOJE (com borda amarela quando não é o selecionado) */
+/* Dia HOJE (contorno amarelo quando não é o selecionado) */
 [data-baseweb="calendar"] [aria-current="date"]:not([aria-selected="true"]) {{
-    border: 1px solid {CORES["amarelo"]} !important;
+    border: 2px solid {CORES["amarelo"]} !important;
     border-radius: 50% !important;
-    font-weight: 700 !important;
+    font-weight: 800 !important;
 }}
-/* Dia SELECIONADO (bolinha amarela, número navy dentro) */
+/* Dia SELECIONADO — bolinha amarela cheia com número navy */
 [data-baseweb="calendar"] [aria-selected="true"],
 [data-baseweb="calendar"] [aria-pressed="true"],
 [data-baseweb="calendar"] [role="gridcell"][aria-selected="true"] {{
@@ -1753,17 +1783,16 @@ table {{ color: {CORES["branco"]}; }}
 [data-baseweb="calendar"] [role="gridcell"][aria-selected="true"] * {{
     color: {CORES["azul_escuro"]} !important;
     background: transparent !important;
+    background-color: transparent !important;
     font-weight: 800 !important;
 }}
-/* Hover num dia (feedback quando passa o mouse) */
+/* Hover num dia — destaca com amarelo suave */
 [data-baseweb="calendar"] [role="gridcell"]:hover:not([aria-selected="true"]):not([aria-disabled="true"]) {{
-    background: rgba(250,195,24,0.15) !important;
+    background: {CORES["amarelo"]} !important;
+    background-color: {CORES["amarelo"]} !important;
     border-radius: 50% !important;
     cursor: pointer !important;
-}}
-/* Popover que contém o calendário — mesmo fundo pra não vazar branco */
-[data-baseweb="popover"]:has([data-baseweb="calendar"]) {{
-    background: {CORES["azul_escuro_2"]} !important;
+    color: {CORES["azul_escuro"]} !important;
 }}
 
 </style>
@@ -5106,6 +5135,18 @@ def _explicar_diferenca_por_dia(resultado, conta):
                             )
         except Exception:
             pass
+        # v6.23: quando o dia é 100% explicado pela tarifa da adquirente
+        # lançada 2× no Sankhya (nota_tarifa_dupla) E não há outras linhas
+        # isoladas nos dois lados, ESCONDE o dia — não é divergência real,
+        # o extrato da adquirente já mostra o desconto do saldo a receber.
+        _explicado_por_tarifa = (
+            item.get("nota_tarifa_dupla")
+            and not item["banco"]
+            and not item["sankhya"]
+            and not item["divergentes"]
+        )
+        if _explicado_por_tarifa:
+            continue  # esconde do detalhe — resolvido pela adquirente
         if (item["banco"] or item["sankhya"] or item["divergentes"]
                 or item.get("nota_tarifa_dupla") or abs(dif) >= 0.01):
             out.append(item)
