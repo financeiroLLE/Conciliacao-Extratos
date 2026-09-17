@@ -5828,35 +5828,28 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
     _falta_al = float(k.get("falta_conciliar", 0.0))
     _diverg_al = float(k.get("divergencia_sankhya_banco", 0.0))
     _tem_pend_al = round(abs(_falta_al) + abs(_diverg_al), 2) >= 0.01
-    if abs(dif_bs) >= 0.01 or _tem_pend_al:
-        _adq_alert = st.session_state.get("adquirente_df")
-        _partes, _todos = _explicar_diferenca_cartao(resultado, conta, _adq_alert)
-        _val = fmt_brl(abs(dif_bs))
-        _tem_adq = _adq_alert is not None and not getattr(_adq_alert, "empty", True)
+    # v6.27: reformulação da lógica dos banners/painel de diferença por dia.
+    # ANTES: quando a diferença era 100% explicada pela adquirente (taxa Getnet),
+    # o banner verde ocupava o topo e o painel "Ver o que aconteceu em cada dia"
+    # SUMIA — mesmo tendo pendentes dos dois lados que precisavam ser vistos
+    # linha a linha. Agora:
+    #  - se HÁ pendentes (dos dois lados), o painel por dia SEMPRE aparece.
+    #  - o banner verde "identificada 100% pela adquirente" NÃO aparece mais
+    #    (essa informação vive na aba "💳 Diferença de Cartão" e no detalhe
+    #    por dia). Ela pediu explicitamente na v6.27.
+    #  - o banner de "100% pares anulados por estorno" continua, mas só quando
+    #    não houver mais nada pra analisar (fica como veredito de "tudo ok").
+    if _tem_pend_al or abs(dif_bs) >= 0.01:
+        _explic = _explicar_diferenca_por_dia(resultado, conta)
         _nota_anulados = (
             ' &middot; <span style="color:#9fb3d6;">além de ' + fmt_brl(_vol_anulados)
             + ' em PIX recebidos e devolvidos que se anulam (aba ♻️ Estornos — não precisam de análise)</span>'
             if _vol_anulados >= 0.01 else ''
         )
-
-        if abs(dif_bs) >= 0.01 and _tem_adq and _partes and _todos:
-            # Só quando HÁ adquirente E ela explica 100% da diferença (taxa comprovada).
-            st.html(
-                '<div style="background:#0c2b1a;border-left:4px solid #0F8C3B;border-radius:8px;'
-                'padding:10px 14px;margin:10px 0 2px 0;color:#e9eef7;font-size:14px;line-height:1.5;">'
-                '&#9989; <b>Diferença Banco &times; Sankhya: ' + _val + '</b> &middot; '
-                '<b>identificada 100% pela adquirente</b> &middot; taxa descontada no repasse '
-                '(não é erro de conciliação). Detalhe na aba &ldquo;Diferença de Cartão&rdquo;.'
-                + _nota_anulados + '</div>'
-            )
-        else:
-            # Caso geral (com ou sem cartão): explica por dia, pela origem real.
-            # NUNCA rotula como cartão por padrão.
-            _explic = _explicar_diferenca_por_dia(resultado, conta)
-            _render_alerta_diferenca_por_dia(
-                dif_bs, _explic, nota_extra=_nota_anulados,
-                falta=_falta_al, diverg=_diverg_al,
-            )
+        _render_alerta_diferenca_por_dia(
+            dif_bs, _explic, nota_extra=_nota_anulados,
+            falta=_falta_al, diverg=_diverg_al,
+        )
     elif abs(dif_bruta) >= 0.01 and _vol_anulados >= 0.01:
         # v5.47: a diferença entre os cards existe, mas é 100% de pares anulados
         # por estorno — nada a analisar. Banner verde explicando por que os
