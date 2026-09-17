@@ -440,7 +440,10 @@ def _render_lista_arquivos_api() -> None:
     volume_valor = float(metricas.get("volume", 0.0))
 
     for i, arq in enumerate(arqs):
-        col_card, col_x = st.columns([25, 1])
+        # v6.28: botão ⬇ de download ao lado do ✖. Fica sempre visível,
+        # não só em modo debug. Útil pra guardar cópia local, conferir no
+        # Excel ou reenviar por email quando alguém pedir o extrato bruto.
+        col_card, col_dl, col_x = st.columns([24, 1, 1])
         with col_card:
             # v5.87: card enxuto — mostra apenas a quantidade de lançamentos.
             # Volume/crédito/débito continuam calculados em session_state para
@@ -485,6 +488,21 @@ def _render_lista_arquivos_api() -> None:
                 f'{linha2}'
                 f'</div></div>',
                 unsafe_allow_html=True,
+            )
+        with col_dl:
+            # v6.28: baixar cópia local do XLSX puxado pela API
+            try:
+                _bytes = arq.getvalue()
+            except Exception:
+                _bytes = b""
+            st.download_button(
+                "⬇",
+                data=_bytes,
+                file_name=arq.name,
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                key=f"dl_api_itau_{i}",
+                help="Baixar cópia do XLSX (para conferir, guardar ou reenviar por email)",
+                use_container_width=True,
             )
         with col_x:
             if st.button("✖", key=f"rm_api_itau_{i}",
