@@ -222,6 +222,45 @@ def detectar_salarios_n_m(
             # antes ou aparecer como folha. Não force.
             continue
 
+        # v6.30: se cada SISPAG SALARIOS PRÓPRIO do banco (excluindo as
+        # linhas de tarifa "TAR SISPAG SALARIO") já tem par 1-a-1 exato
+        # disponível no Sankhya, deixa o match_exato pegar. Sem esta trava,
+        # a busca combinatória consumia despesas do Sankhya com valores
+        # diferentes (que somavam o total do banco) por coincidência, mesmo
+        # com os pares 1-a-1 corretos ao alcance. Caso real ITAU PISA
+        # 11/09/2026: os 4 SISPAG SALARIOS individuais (9.744,59 · 1.054,18
+        # · 7.303,72 · 7.695,00) tinham par exato no Sankhya
+        # (ERIKA · JOAO · GISELLE · LUCAS), mas a regra pescava
+        # KLOBER + VENTURA + FABIO + GABRIEL + CARLOS por soma casada
+        # (25.798,69), deixando a folha real fora e cinco SISPAG DIVERSOS
+        # do banco órfãos. A checagem ignora as TAR SISPAG SALARIO — que
+        # muitas vezes aparecem consolidadas no Sankhya numa única linha
+        # e não têm 1-a-1 individual — porque a evidência de folha real
+        # está nos SISPAG SALARIOS principais.
+        def _eh_tar(h):
+            return isinstance(h, str) and "tar" in h.lower() and "salario" in h.lower().replace("á","a")
+        _idx_indiv_principais = [
+            i for i in grupo_b["indices"]
+            if not _eh_tar(salarios_banco.at[i, "historico"])
+        ]
+        if _idx_indiv_principais:
+            _valores_indiv = salarios_banco.loc[_idx_indiv_principais, "valor"].astype(float).tolist()
+            _todos_tem_1a1 = True
+            _pool = list(valores)
+            for _v_ind in _valores_indiv:
+                _achou = False
+                for _pi, _pv in enumerate(_pool):
+                    if abs(_pv - _v_ind) <= TOL_VALOR:
+                        _pool.pop(_pi)
+                        _achou = True
+                        break
+                if not _achou:
+                    _todos_tem_1a1 = False
+                    break
+            if _todos_tem_1a1:
+                # match_exato resolve sozinho — não força N→M
+                continue
+
         subset = _buscar_combinacao_que_soma(valores, valor_alvo)
         if subset is None:
             continue
