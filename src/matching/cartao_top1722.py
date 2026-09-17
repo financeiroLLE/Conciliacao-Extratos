@@ -80,6 +80,36 @@ def _eh_cartao_no_banco(historico: str) -> bool:
     return any(termo in h for termo in TERMOS_CARTAO_BANCO)
 
 
+# v6.29: termos que caracterizam uma DESPESA do Sankhya como tarifa de
+# adquirente (aluguel de máquina, excedente de transação, plataforma digital,
+# etc.). Só linhas cujo histórico bater com um destes termos podem ser
+# consumidas pelo ramo v5.59 "líquido de tarifa". Evita que uma despesa a
+# fornecedor com valor absoluto igual ao da tarifa vire tarifa por engano.
+TERMOS_TARIFA_ADQUIRENTE_SIS = [
+    "tarifa aluguel",
+    "tarifa getnet", "tarifa cielo", "tarifa rede", "tarifa stone",
+    "tarifa pagseguro", "tarifa pagbank", "tarifa mercado pago",
+    "tarifa adquirente",
+    "trans excedentes", "transacao excedente", "transacoes excedentes",
+    "plat digital", "plataforma digital",
+    "aluguel getnet", "aluguel cielo", "aluguel rede", "aluguel stone",
+    "aluguel maquineta", "aluguel maquininha", "aluguel pos",
+    "aluguel terminal", "aluguel de terminal",
+    "mensalidade getnet", "mensalidade cielo", "mensalidade rede",
+    "mensalidade adquirente",
+]
+
+
+def _eh_tarifa_no_sankhya(historico: str) -> bool:
+    """True se o histórico da despesa Sankhya sugere ser tarifa de adquirente."""
+    if not isinstance(historico, str):
+        return False
+    h = historico.lower()
+    troca = str.maketrans("áàâãéèêíìóòôõúùç", "aaaaeeeiioooouuc")
+    h = h.translate(troca)
+    return any(termo in h for termo in TERMOS_TARIFA_ADQUIRENTE_SIS)
+
+
 def detectar_top_1722(
     pendentes_banco: pd.DataFrame,
     pendentes_sistema: pd.DataFrame,
@@ -219,12 +249,22 @@ def detectar_top_1722(
                 # extrato da adquirente no MESMO dia (aluguel, excedentes etc.).
                 # Caso real PISA: 03/07 vendas 21.168,43 + tarifa −309,40
                 # (Aluguel Junho, comprovada na GetNet) = depósitos 20.859,03.
+                # v6.29: só aceita como "tarifa" despesa cujo HISTÓRICO indique
+                # tarifa/aluguel/excedente/plat digital/adquirente. Sem isso, uma
+                # despesa a fornecedor com valor absoluto coincidente (ex.: R$ 520
+                # pra JLC GOMES × R$ 520 de aluguel Getnet do mesmo dia) era
+                # consumida no lugar da tarifa real e sumia das pendências,
+                # deixando o pagamento SISPAG DIVERSOS do banco órfão. Caso real
+                # ITAU PISA 11/09/2026 — três SISPAG DIVERSOS PIX TRANSFERENCIA
+                # ficavam em aberto porque as despesas correspondentes tinham
+                # sido "roubadas" por essa rotina como se fossem tarifa.
                 if not _fecha_dia and _tarifas_dia.get(_dia):
                     _cand = sis[
                         (pd.to_datetime(sis["data"], errors="coerce").dt.normalize() == _dia)
                         & (sis["conta"].astype(str) == conta)
                         & (sis["valor"] < 0)
                         & (~sis["_idx_sis"].isin(indices_sankhya_casados))
+                        & sis["historico"].fillna("").apply(_eh_tarifa_no_sankhya)
                     ].copy()
                     _usadas = []
                     _cand["_abs"] = _cand["valor"].abs().round(2)
