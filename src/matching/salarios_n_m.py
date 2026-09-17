@@ -36,6 +36,68 @@ import pandas as pd
 TOL_VALOR = 0.01
 MAX_COMBINACAO = 5  # máximo de linhas Sankhya por combinação
 
+# v6.29: marcadores que caracterizam pessoa jurídica no histórico do Sankhya.
+# Salário é SEMPRE pessoa física — se o histórico traz um destes termos, a
+# linha é despesa a fornecedor/prestador e NÃO pode ser candidata de folha.
+# Sem esta trava, a busca combinatória (até 5 despesas somando o total dos
+# SISPAG SALARIOS do dia) casava fornecedores por coincidência de soma —
+# caso real ITAU PISA 11/09/2026: SEU AMIGO + SD FAMILIA + JLC GOMES
+# (R$ 12.159,24 + R$ 13.119,45 + R$ 520,00 = R$ 25.798,69) somava o total
+# de folha do dia e sumia das pendências, deixando três pagamentos SISPAG
+# DIVERSOS do banco órfãos.
+TERMOS_PJ_HISTORICO = [
+    " ltda", " ltda.", "ltda ", "ltda.",
+    " s.a", " s/a", " s a ", " sa ", " sa.",
+    " me ", " me.", " epp ", " epp.",
+    " eireli", " eirl",
+    "representacoes", "representações",
+    "representacao", "representação",
+    "repres comer", "repres com ", "repres. com",
+    "comercial ", "comercio ", "comércio ",
+    "industria", "indústria", "industrial",
+    "distribuidora", "distribuicao", "distribuição", "distrib ",
+    "transportes", "transportadora", "logistica", "logística",
+    "servicos", "serviços",
+    "engenharia", "arquitetura", "construcao", "construção", "construtora",
+    "propaganda", "marketing", "publicidade",
+    "consultoria", "assessoria", "contabilidade",
+    "informatica", "informática", "tecnologia", "sistemas",
+    "hoteis", "hotéis", "restaurante",
+    "farmacia", "farmácia", "drogaria",
+    "supermercado", "atacadista", "atacado",
+    "materiais", "confeccoes", "confecções",
+    "franchising", "franquia",
+    "grupo ",
+    "cia ", "cia. ", "companhia ",
+    # instituições financeiras / bancos
+    "caixa economica", "caixa econômica",
+    " banco ", "banco do brasil", "banco bradesco", "banco itau", "banco santander",
+    "instituicao financeira", "instituição financeira",
+    "financeira ", "cooperativa ",
+    # entes públicos e sindicatos
+    "prefeitura", "municipio", "município",
+    "receita federal", "secretaria da fazenda", "estado do ",
+    "sindicato ",
+    "fundacao", "fundação", "associacao", "associação",
+]
+
+
+def _eh_pessoa_juridica(historico: str) -> bool:
+    """True se o histórico do Sankhya identifica claramente uma pessoa jurídica.
+
+    Usado para EXCLUIR fornecedores/prestadores do pool de candidatos a folha
+    de pagamento (que é sempre pessoa física).
+    """
+    if not isinstance(historico, str) or not historico.strip():
+        return False
+    h = historico.lower()
+    troca = str.maketrans("áàâãéèêíìóòôõúùç", "aaaaeeeiioooouuc")
+    h = h.translate(troca)
+    # Espaços nas laterais para pegar sufixos isolados sem falso positivo em
+    # nomes ("Melo", "Alameda" etc.)
+    h_pad = " " + h + " "
+    return any(termo in h_pad for termo in TERMOS_PJ_HISTORICO)
+
 
 @dataclass
 class ResultadoSalariosNM:
@@ -140,6 +202,12 @@ def detectar_salarios_n_m(
         if tem_conta and "conta" in ps.columns:
             mask = mask & (ps["conta"] == conta_g)
         mask = mask & (~ps.index.isin(indices_sankhya_consumidos))
+        # v6.29: exclui despesas cujo histórico identifica pessoa jurídica
+        # (fornecedor/prestador). Folha é sempre pessoa física — sem esta
+        # trava a busca combinatória casava fornecedores por coincidência
+        # de soma. Ver docstring de _eh_pessoa_juridica.
+        if "historico" in ps.columns:
+            mask = mask & (~ps["historico"].fillna("").apply(_eh_pessoa_juridica))
 
         candidatos = ps[mask].copy()
         if candidatos.empty:
