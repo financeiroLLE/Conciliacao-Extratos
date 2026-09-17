@@ -5748,15 +5748,21 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
             "Pendente no Extrato Bancário", fmt_brl(falta_c), sub_fc, classe="destaque-vermelho")
 
     # Sankhya sem confirmação: junta valor + contagem num card só
+    # v6.26: quebrar em Receitas / Despesas com "tudo conciliado" quando zero,
+    # mesmo padrão do card "Pendente no Extrato Bancário".
     cor_div = "destaque-verde" if (div_c == 0 and qtd_div_c == 0) else "destaque-vermelho"
     qtd_txt = (fmt_int(qtd_div_c) + " item") if qtd_div_c == 1 else (fmt_int(qtd_div_c) + " itens")
     valor_div_html = (fmt_brl(div_c)
                       + ' <span style="font-size:14px; color:#8BA3C7; font-weight:400;">&middot; '
                       + qtd_txt + '</span>')
+    _div_r = float(k.get("divergencia_sankhya_banco_receitas", 0.0))
+    _div_d = float(k.get("divergencia_sankhya_banco_despesas", 0.0))
+    sub_div = _card_falta_conciliar_vertical(_div_r, _div_d) + (
+        '<div class="lle-kpi-suffix" style="margin-top:8px;">'
+        'lançamentos do ERP que o banco não confirmou</div>'
+    )
     card_sankhya_sem_conf = card_kpi_html(
-        "Pendente no Sankhya", valor_div_html,
-        '<div class="lle-kpi-suffix">lançamentos do ERP que o banco não confirmou</div>',
-        classe=cor_div)
+        "Pendente no Sankhya", valor_div_html, sub_div, classe=cor_div)
 
     # v5.76: card CONCILIAÇÃO com desmembramento (Opção C aprovada com Débora).
     # Antes o card "Total Conciliado" mostrava só o valor par-a-par (movimentação
