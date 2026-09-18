@@ -820,6 +820,25 @@ def executar_pipeline(
     banco_mov = _remover_por_indices(banco_mov, res_depositos.indices_banco_casados)
     sistema_mov = _remover_por_indices(sistema_mov, res_depositos.indices_sankhya_casados)
 
+    # v6.34: HISTÓRICO AGREGADO agora roda ANTES do match_exato.
+    # Motivo: match_exato é 1-a-1 com tolerância de dias — ele pode "roubar"
+    # uma linha de tarifa/salário do dia X casando com uma linha de mesmo
+    # valor no dia X±1, mesmo quando no dia X existe uma consolidação
+    # completa que fecha por soma+histórico. Caso real ITAU PISA 21/08/2026:
+    # banco tinha 37 TAR SISPAG SALARIO somando -R$ 41,70 e Sankhya tinha
+    # 1 linha consolidada de -R$ 41,70 — deveria casar em bloco. Mas o
+    # match_exato consumiu 1 TAR de -R$ 0,60 do banco 21/08 pareando com
+    # uma TAR de -R$ 0,60 do Sankhya 20/08 (tolerância = 2). As 36
+    # restantes somavam -R$ 41,10, não fechavam com -R$ 41,70, o
+    # histórico agregado não casava, e o detector de divergência
+    # multiplicava tudo em N pares "valor divergente". Rodando o
+    # agregado antes, o bloco fecha primeiro; o que sobra vai pro
+    # match_exato normalmente.
+    from src.matching.historico_agregado import detectar_agrupamento_por_historico
+    res_hist = detectar_agrupamento_por_historico(banco_mov, sistema_mov)
+    banco_mov = _remover_por_indices(banco_mov, res_hist.indices_banco_casados)
+    sistema_mov = _remover_por_indices(sistema_mov, res_hist.indices_sankhya_casados)
+
     # =================================================================
     # Agora sim: match_exato 1-pra-1 sobre o que sobrou.
     # =================================================================
@@ -843,26 +862,9 @@ def executar_pipeline(
             index=[i for i in res_tarifas.indices_sankhya_casados if i < len(pend_sistema)]
         ).reset_index(drop=True)
 
-    # v6.31 — MATCH AGREGADO POR HISTÓRICO IGUAL. Casa N banco → M Sankhya
-    # quando ambos os lados têm o MESMO histórico (normalizado) na mesma
-    # data e conta, e as somas batem. Caso real ITAU PISA 11/09/2026:
-    # o banco tinha 3× TAR SISPAG SALARIO (-0,30, -0,30, -0,60 = -1,20)
-    # e o Sankhya tinha 1× TAR SISPAG SALARIO (-1,20) consolidada. Nenhum
-    # valor batia 1-a-1, mas o texto do histórico é literalmente o mesmo
-    # e o total confere ao centavo — é o mesmo lançamento, só quebrado
-    # de formas diferentes. A regra roda DEPOIS do match_exato (não pode
-    # roubar pares 1-a-1) e antes da 2ª passagem (que pega os resíduos).
-    from src.matching.historico_agregado import detectar_agrupamento_por_historico
-    res_hist = detectar_agrupamento_por_historico(pend_banco, pend_sistema)
-    if res_hist.indices_banco_casados or res_hist.indices_sankhya_casados:
-        pend_banco = pend_banco.reset_index(drop=True)
-        pend_sistema = pend_sistema.reset_index(drop=True)
-        pend_banco = pend_banco.drop(
-            index=[i for i in res_hist.indices_banco_casados if i < len(pend_banco)]
-        ).reset_index(drop=True)
-        pend_sistema = pend_sistema.drop(
-            index=[i for i in res_hist.indices_sankhya_casados if i < len(pend_sistema)]
-        ).reset_index(drop=True)
+    # v6.34: histórico agregado agora roda ANTES do match_exato (bloco acima),
+    # então não precisa mais aqui. A 2ª passagem do match_exato abaixo já
+    # resolve os pares 1-a-1 que sobrarem depois de todas as regras.
 
     # v6.22 — SEGUNDA PASSAGEM DO MATCH EXATO (rede de segurança final).
     # Casos observados em produção (dia 11/09/2026 · ITAU PISA): três
