@@ -5707,10 +5707,20 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
     # Sankhya) — assim os dois lados batem operacionalmente. Se houver
     # desconto, aparece uma linha discreta explicando de onde saiu, pra
     # preservar a auditoria (nada some sem comprovação).
+    # v6.32.1: uso .get com fallback pro BRUTO caso o pipeline em produção
+    # ainda seja o anterior (sem os campos _liq). Assim o app não quebra
+    # enquanto o backend atualiza; quando o pipeline novo entrar, o card
+    # passa a mostrar líquido automaticamente.
     _val_estornos_liq = float(k.get("valor_estornos_anulados", 0.0))
     _val_tarifas_liq = float(k.get("valor_tarifas_adquirente_confirmadas", 0.0))
-    sub_banco_c = _card_total_com_rec_desp(k["receitas_banco_liq"], k["despesas_banco_liq"])
-    if _val_estornos_liq >= 0.005:
+    _rec_b = k.get("receitas_banco_liq", k.get("receitas_banco", 0.0))
+    _desp_b = k.get("despesas_banco_liq", k.get("despesas_banco", 0.0))
+    _tot_b = k.get("total_movimentado_banco_liq", k.get("total_movimentado_banco", 0.0))
+    _rec_s = k.get("receitas_sistema_liq", k.get("receitas_sistema", 0.0))
+    _desp_s = k.get("despesas_sistema_liq", k.get("despesas_sistema", 0.0))
+    _tot_s = k.get("total_extrato_sistema_liq", k.get("total_extrato_sistema", 0.0))
+    sub_banco_c = _card_total_com_rec_desp(_rec_b, _desp_b)
+    if _val_estornos_liq >= 0.005 and "receitas_banco_liq" in k:
         sub_banco_c += (
             '<div style="color:#9fb3d6;font-size:11px;margin-top:4px;">'
             '&#8722; ' + fmt_brl(2 * _val_estornos_liq)
@@ -5718,8 +5728,8 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
             + ' × 2 lados) &middot; aba &#9851;&#65039; Estornos'
             '</div>'
         )
-    sub_sankhya_c = _card_total_com_rec_desp(k["receitas_sistema_liq"], k["despesas_sistema_liq"])
-    if _val_tarifas_liq >= 0.005:
+    sub_sankhya_c = _card_total_com_rec_desp(_rec_s, _desp_s)
+    if _val_tarifas_liq >= 0.005 and "receitas_sistema_liq" in k:
         sub_sankhya_c += (
             '<div style="color:#9fb3d6;font-size:11px;margin-top:4px;">'
             '&#8722; ' + fmt_brl(2 * _val_tarifas_liq)
@@ -5728,9 +5738,9 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
             '</div>'
         )
     cards = [
-        card_kpi_html("Movimentação Operacional · Banco", fmt_brl(k["total_movimentado_banco_liq"]),
+        card_kpi_html("Movimentação Operacional · Banco", fmt_brl(_tot_b),
                       sub_banco_c),
-        card_kpi_html("Movimentação Operacional · Sankhya", fmt_brl(k["total_extrato_sistema_liq"]),
+        card_kpi_html("Movimentação Operacional · Sankhya", fmt_brl(_tot_s),
                       sub_sankhya_c),
         _card_investimentos_da_conta(resultado, conta),
         card_kpi("Índice de Conciliação", fmt_pct(k["percentual_conciliado"]),
