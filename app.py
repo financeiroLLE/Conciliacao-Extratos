@@ -5702,12 +5702,35 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
     # v5.65: conferência com o rodapé do Sankhya no TOPO do detalhamento —
     # expander com veredito no título; abre sozinho só quando há diferença.
     _render_regua_conferencia_sankhya(resultado, conta, k)
-    sub_banco_c = _card_total_com_rec_desp(k["receitas_banco"], k["despesas_banco"])
-    sub_sankhya_c = _card_total_com_rec_desp(k["receitas_sistema"], k["despesas_sistema"])
+    # v6.32: cards MOVIMENTAÇÃO OPERACIONAL usam totais LÍQUIDOS (estornos
+    # anulados descontados no banco, tarifas de adquirente descontadas no
+    # Sankhya) — assim os dois lados batem operacionalmente. Se houver
+    # desconto, aparece uma linha discreta explicando de onde saiu, pra
+    # preservar a auditoria (nada some sem comprovação).
+    _val_estornos_liq = float(k.get("valor_estornos_anulados", 0.0))
+    _val_tarifas_liq = float(k.get("valor_tarifas_adquirente_confirmadas", 0.0))
+    sub_banco_c = _card_total_com_rec_desp(k["receitas_banco_liq"], k["despesas_banco_liq"])
+    if _val_estornos_liq >= 0.005:
+        sub_banco_c += (
+            '<div style="color:#9fb3d6;font-size:11px;margin-top:4px;">'
+            '&#8722; ' + fmt_brl(2 * _val_estornos_liq)
+            + ' de estornos anulados (' + fmt_brl(_val_estornos_liq)
+            + ' × 2 lados) &middot; aba &#9851;&#65039; Estornos'
+            '</div>'
+        )
+    sub_sankhya_c = _card_total_com_rec_desp(k["receitas_sistema_liq"], k["despesas_sistema_liq"])
+    if _val_tarifas_liq >= 0.005:
+        sub_sankhya_c += (
+            '<div style="color:#9fb3d6;font-size:11px;margin-top:4px;">'
+            '&#8722; ' + fmt_brl(2 * _val_tarifas_liq)
+            + ' de tarifas de adquirente (' + fmt_brl(_val_tarifas_liq)
+            + ' × 2 lados)'
+            '</div>'
+        )
     cards = [
-        card_kpi_html("Movimentação Operacional · Banco", fmt_brl(k["total_movimentado_banco"]),
+        card_kpi_html("Movimentação Operacional · Banco", fmt_brl(k["total_movimentado_banco_liq"]),
                       sub_banco_c),
-        card_kpi_html("Movimentação Operacional · Sankhya", fmt_brl(k["total_extrato_sistema"]),
+        card_kpi_html("Movimentação Operacional · Sankhya", fmt_brl(k["total_extrato_sistema_liq"]),
                       sub_sankhya_c),
         _card_investimentos_da_conta(resultado, conta),
         card_kpi("Índice de Conciliação", fmt_pct(k["percentual_conciliado"]),
