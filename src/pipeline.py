@@ -515,12 +515,72 @@ def _calcular_kpis(
     # v5.49: percentual com base CONSISTENTE — só movimentação nos dois lados.
     percentual = 100.0 * total_conciliado_mov / total_banco if total_banco > 0 else 0.0
 
+    # v6.32: ajustes automáticos para os cards MOVIMENTAÇÃO OPERACIONAL
+    # ficarem alinhados entre Banco e Sankhya.
+    #
+    # (a) BANCO — desconta estornos anulados. Regra da empresa (Débora):
+    # estorno não é lançado no Sankhya porque saiu e voltou sem efeito
+    # operacional real. O par receita+despesa infla o card em 2× o valor
+    # do estorno (uma ponta em receitas, outra em despesas), então
+    # descontamos os dois lados.
+    _val_estornos = float(estornos_anulados["valor_original"].abs().sum()) if (
+        estornos_anulados is not None and not estornos_anulados.empty
+        and "valor_original" in estornos_anulados.columns
+    ) else 0.0
+    receitas_banco_liq = max(0.0, receitas_banco - _val_estornos)
+    despesas_banco_liq = max(0.0, despesas_banco - _val_estornos)
+    total_banco_liq = receitas_banco_liq + despesas_banco_liq
+
+    # (b) SANKHYA — desconta tarifas de adquirente (Getnet/Cielo/etc.).
+    # O Sankhya lança a venda BRUTA (receita) e a tarifa como DESPESA
+    # separada, enquanto o banco recebe só o LÍQUIDO (bruto − tarifa)
+    # em uma única linha. Consequência: cada tarifa infla o card do
+    # Sankhya em 2× o valor da tarifa (receita bruta a mais + despesa
+    # da tarifa). Descontamos os dois lados. Só linhas cujo histórico
+    # identifica claramente uma tarifa de adquirente entram no ajuste.
+    _termos_tarifa_adq = [
+        "tarifa aluguel", "trans excedentes", "plat digital",
+        "plataforma digital", "aluguel getnet", "aluguel cielo",
+        "aluguel rede", "aluguel stone", "aluguel maquineta",
+        "aluguel maquininha", "aluguel pos", "aluguel terminal",
+        "mensalidade getnet", "mensalidade cielo", "mensalidade rede",
+        "mensalidade adquirente", "tarifa getnet", "tarifa cielo",
+        "tarifa rede", "tarifa stone", "tarifa pagseguro",
+        "tarifa pagbank", "tarifa mercado pago", "tarifa adquirente",
+    ]
+    _val_tarifas_adq = 0.0
+    if not sistema_completo.empty and "historico" in sistema_completo.columns:
+        _hist_lower = (
+            sistema_completo["historico"].fillna("").astype(str).str.lower()
+            .str.translate(str.maketrans("áàâãéèêíìóòôõúùç", "aaaaeeeiioooouuc"))
+        )
+        _mask_tar = _hist_lower.apply(
+            lambda h: any(t in h for t in _termos_tarifa_adq)
+        )
+        _linhas_tar = sistema_completo[_mask_tar & (sistema_completo["valor"] < 0)]
+        if not _linhas_tar.empty:
+            _val_tarifas_adq = float(_linhas_tar["valor"].abs().sum())
+    receitas_sistema_liq = max(0.0, receitas_sistema - _val_tarifas_adq)
+    despesas_sistema_liq = max(0.0, despesas_sistema - _val_tarifas_adq)
+    total_sistema_liq = receitas_sistema_liq + despesas_sistema_liq
+
     return {
         # v3: renomeado de "Total Extrato Bancário" → "Total Movimentado no Banco".
         # Mantém o nome antigo como alias por retrocompatibilidade.
         "total_movimentado_banco": total_banco,
         "total_extrato_bancario": total_banco,
         "total_extrato_sistema": total_sistema,
+        # v6.32: totais LÍQUIDOS (estornos anulados descontados no banco,
+        # tarifas de adquirente descontadas no Sankhya). São os números que
+        # aparecem nos cards MOVIMENTAÇÃO OPERACIONAL — batem entre si
+        # quando os dois lados registraram os mesmos eventos operacionais.
+        "total_movimentado_banco_liq": total_banco_liq,
+        "total_extrato_sistema_liq": total_sistema_liq,
+        "receitas_banco_liq": receitas_banco_liq,
+        "despesas_banco_liq": despesas_banco_liq,
+        "receitas_sistema_liq": receitas_sistema_liq,
+        "despesas_sistema_liq": despesas_sistema_liq,
+        "valor_tarifas_adquirente_confirmadas": _val_tarifas_adq,
         "total_conciliado": total_conciliado,
         "total_conciliado_movimentacao": total_conciliado_mov,
         "total_conciliado_investimentos": total_conciliado_invest,
