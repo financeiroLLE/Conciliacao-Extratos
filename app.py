@@ -5265,24 +5265,13 @@ def _render_alerta_diferenca_por_dia(dif_bs, explicacao, nota_extra: str = "",
     v5.78: botão de re-upload do Sankhya renderizado acima."""
     _render_botao_atualizar_sankhya()
 
-    if abs(dif_bs) >= 0.01:
-        _cabeca = ('&#9888;&#65039; <b>Diferença Banco &times; Sankhya: '
-                   + fmt_brl(abs(dif_bs)) + '</b> &middot; <b>a analisar por dia</b>')
-    else:
-        _lados = []
-        if abs(falta) >= 0.005:
-            _lados.append(fmt_brl(abs(falta)) + ' no banco sem par')
-        if abs(diverg) >= 0.005:
-            _lados.append(fmt_brl(abs(diverg)) + ' no Sankhya sem par')
-        _cabeca = ('&#9888;&#65039; <b>Lançamentos sem par: ' + ' &middot; '.join(_lados)
-                   + '</b> &middot; os totais se compensam (diferença líquida R$ 0,00), '
-                   'mas cada lançamento precisa do seu par &middot; <b>a analisar por dia</b>')
-    st.html(
-        '<div style="background:#2a1d10;border-left:4px solid #FAC318;border-radius:8px;'
-        'padding:10px 14px;margin:10px 0 2px 0;color:#e9eef7;font-size:14px;line-height:1.5;">'
-        + _cabeca + ' &middot; abra o detalhe abaixo para ver o que aconteceu em cada dia.'
-        + (nota_extra or '') + '</div>'
-    )
+    # v6.31: banner amarelo do topo REMOVIDO. A Débora pediu duas vezes
+    # que a mensagem "Diferença Banco × Sankhya · a analisar por dia" não
+    # aparecesse mais no topo — ela vê como algo automático (a tarifa da
+    # adquirente sempre desconta do total, como o estorno). O detalhe
+    # dia-a-dia continua acessível pelo expander abaixo pra quem quiser
+    # abrir; a diferença de cartão específica vive na aba "💳 Diferença
+    # de Cartão".
     with st.expander("Ver o que aconteceu em cada dia", expanded=False):
         if not explicacao:
             st.caption(
