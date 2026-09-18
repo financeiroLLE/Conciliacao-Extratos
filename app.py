@@ -2067,13 +2067,22 @@ def _card_falta_conciliar_vertical(receitas: float, despesas: float) -> str:
 
 def _card_total_com_rec_desp(receitas: float, despesas: float) -> str:
     """v3.1: bloco com Receitas (verde) e Despesas (vermelho) empilhadas embaixo do valor total.
-    Usado em 'Total Movimentado no Banco' e 'Total Extrato Sankhya'."""
+    Usado em 'Total Movimentado no Banco' e 'Total Extrato Sankhya'.
+    v6.33: acrescenta linha "Saldo (Receitas − Despesas)" — mostra o efeito
+    líquido no saldo da conta no período. Verde quando entrou mais que saiu,
+    vermelho quando saiu mais que entrou."""
+    _saldo = float(receitas) - float(despesas)
+    _cls_saldo = "verde" if _saldo >= 0 else "vermelho"
+    _sinal = "+" if _saldo > 0 else ("−" if _saldo < 0 else "")
+    _saldo_fmt = _sinal + fmt_brl(abs(_saldo)) if _saldo != 0 else fmt_brl(0)
     return f"""
     <div class="lle-kpi-sub-stack">
         <div class="lle-kpi-sub-label">Receitas:</div>
         <div class="lle-kpi-sub-valor verde">{fmt_brl(receitas)}</div>
         <div class="lle-kpi-sub-label">Despesas:</div>
         <div class="lle-kpi-sub-valor vermelho">{fmt_brl(despesas)}</div>
+        <div class="lle-kpi-sub-label" style="margin-top:6px;border-top:1px solid #10254e;padding-top:6px;">Saldo (Receitas − Despesas):</div>
+        <div class="lle-kpi-sub-valor {_cls_saldo}">{_saldo_fmt}</div>
     </div>
     """
 
