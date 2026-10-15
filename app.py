@@ -4874,6 +4874,25 @@ def _checar_periodo(banco: pd.DataFrame, sistema: pd.DataFrame) -> str | None:
         smin, smax = sistema["data"].min(), sistema["data"].max()
         if pd.isna(bmin) or pd.isna(bmax) or pd.isna(smin) or pd.isna(smax):
             return None
+        # v7.3: avisa também quando o extrato tem DIAS INTEIROS fora do
+        # período do Sankhya (ex.: extrato até 14/10 e Sankhya até 13/10).
+        # Antes só avisava com mais de 3 dias de diferença, e o dia 14/10
+        # inteiro aparecia como "falta lançar no Sankhya" sem explicação.
+        _bd = pd.to_datetime(banco["data"], errors="coerce").dt.normalize()
+        _fora = banco[(_bd > smax.normalize()) | (_bd < smin.normalize())]
+        if "historico" in _fora.columns:
+            _fora = _fora[~_fora["historico"].astype(str).str.upper().str.contains("SALDO", na=False)]
+        if not _fora.empty:
+            _dias = sorted({d.strftime("%d/%m") for d in pd.to_datetime(_fora["data"]).dt.normalize()})
+            return (
+                f"⚠️ **Períodos diferentes.** O Sankhya enviado vai de {smin:%d/%m/%Y} a "
+                f"{smax:%d/%m/%Y}, mas o extrato do banco tem {len(_fora)} lançamento(s) "
+                f"fora desse período (dia(s) {', '.join(_dias)}, "
+                + "R$ " + f"{float(_fora['valor'].abs().sum()):,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+                + " em volume). Eles aparecem como \"falta lançar no Sankhya\" só porque o relatório "
+                "do Sankhya não cobre esses dias. Exporte o Sankhya até a mesma data do "
+                "extrato, ou use o filtro de período para conciliar só os dias em comum."
+            )
         if abs((bmax - smax).days) > 3 or abs((bmin - smin).days) > 3:
             return (
                 f"⚠️ **Períodos diferentes.** O extrato do banco vai de "
