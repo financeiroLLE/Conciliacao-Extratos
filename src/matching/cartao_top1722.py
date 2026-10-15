@@ -100,6 +100,22 @@ TERMOS_TARIFA_ADQUIRENTE_SIS = [
 ]
 
 
+# v7.1: além das expressões fixas acima, aceita a COMBINAÇÃO de uma palavra de
+# cobrança (aluguel/tarifa/mensalidade/excedente) com uma palavra que identifica
+# a adquirente, em qualquer ordem. Caso real ITAU PISA 05/10/2026: o histórico
+# "ALUGUEL SETEMBRO/2026 GETNET" não casava com "aluguel getnet" (palavras
+# separadas pelo mês) e o dia de cartão ficava aberto.
+_RE_COBRANCA = re.compile(r"\b(aluguel|tarifa|tarifas|mensalidade|excedente|excedentes)\b")
+_RE_ADQUIRENTE = re.compile(
+    r"\b(getnet|get net|cielo|rede|redecard|stone|pagseguro|pag seguro|pagbank|"
+    r"pag bank|mercado ?pago|adquirente|maquineta|maquininha|maquinha|pos|terminal)\b"
+)
+_RE_ADQUIRENTE_FORTE = re.compile(
+    r"\b(getnet|get net|cielo|redecard|stone pagamentos|pagseguro|pag seguro|"
+    r"pagbank|pag bank|mercado ?pago|adquirente)\b"
+)
+
+
 def _eh_tarifa_no_sankhya(historico: str) -> bool:
     """True se o histórico da despesa Sankhya sugere ser tarifa de adquirente."""
     if not isinstance(historico, str):
@@ -107,7 +123,101 @@ def _eh_tarifa_no_sankhya(historico: str) -> bool:
     h = historico.lower()
     troca = str.maketrans("áàâãéèêíìóòôõúùç", "aaaaeeeiioooouuc")
     h = h.translate(troca)
-    return any(termo in h for termo in TERMOS_TARIFA_ADQUIRENTE_SIS)
+    if any(termo in h for termo in TERMOS_TARIFA_ADQUIRENTE_SIS):
+        return True
+    if _RE_COBRANCA.search(h) and _RE_ADQUIRENTE.search(h):
+        return True
+    # despesa cujo histórico é só o NOME da adquirente (o Sankhya costuma
+    # trazer o parceiro no histórico, ex.: "GETNET ADQUIRENCIA E SERVICOS").
+    # Só é usada aqui, com fechamento do dia ao centavo como prova.
+    return bool(_RE_ADQUIRENTE_FORTE.search(h))
+
+
+def _fechar_dia_liquido_de_tarifa(
+    sis: pd.DataFrame,
+    conta: str,
+    dia: pd.Timestamp,
+    soma_banco: float,
+    soma_vendas: float,
+    ja_casados: set,
+    tarifas_comprovadas: list | None,
+    janela_dias: int,
+) -> tuple[pd.DataFrame, str]:
+    """v7.1: tenta fechar o dia de cartão LÍQUIDO da tarifa lançada no Sankhya.
+
+    Fato de negócio (Crédito, out/2026): a adquirente desconta aluguel/tarifa do
+    repasse; o Sankhya baixa as vendas cheias (TOP 1722) e a tarifa é lançada
+    como despesa separada para o saldo bater. Então, no dia:
+
+        depósitos do banco = vendas 1722 − tarifa(s) lançada(s) no Sankhya
+
+    Antes (v5.59) isso só fechava quando o extrato da ADQUIRENTE tinha sido
+    enviado e o valor batia linha a linha. Sem o arquivo, ou com a tarifa
+    quebrada em mais de uma linha, as 143 notas e os 10 depósitos do dia
+    ficavam pendentes, mesmo com o Sankhya correto.
+
+    Ordem das tentativas (sempre exigindo fechamento AO CENTAVO e histórico de
+    tarifa, para não consumir despesa de fornecedor por coincidência de valor):
+      1. valores comprovados no extrato da adquirente (regra v5.59);
+      2. todas as despesas de tarifa do mesmo dia somadas;
+      3. uma única despesa de tarifa do mesmo dia;
+      4. uma única despesa de tarifa em até ±janela_dias (tarifa lançada em
+         data diferente do desconto), a mais próxima do dia.
+
+    Retorna (linhas de tarifa usadas, origem) ou (DataFrame vazio, "").
+    """
+    dt_sis = pd.to_datetime(sis["data"], errors="coerce").dt.normalize()
+    base = sis[
+        (sis["conta"].astype(str) == conta)
+        & (sis["valor"] < 0)
+        & (~sis["_idx_sis"].isin(ja_casados))
+        & sis["historico"].fillna("").apply(_eh_tarifa_no_sankhya)
+    ].copy()
+    if base.empty:
+        return pd.DataFrame(), ""
+    base["_abs"] = base["valor"].abs().round(2)
+    base["_dist"] = (dt_sis.loc[base.index] - dia).abs().dt.days
+    alvo = round(soma_vendas - soma_banco, 2)  # quanto a tarifa precisa somar
+    if alvo <= 0.004:
+        return pd.DataFrame(), ""
+
+    def _fecha(df: pd.DataFrame) -> bool:
+        return abs(round(float(df["_abs"].sum()), 2) - alvo) < 0.005
+
+    mesmo_dia = base[base["_dist"] == 0]
+
+    # 1. comprovadas pela adquirente
+    if tarifas_comprovadas:
+        usadas = []
+        disp = mesmo_dia.copy()
+        for tv in tarifas_comprovadas:
+            hit = disp[disp["_abs"] == round(float(tv), 2)]
+            if hit.empty:
+                continue
+            usadas.append(hit.iloc[0])
+            disp = disp.drop(index=hit.index[0])
+        if usadas:
+            df_u = pd.DataFrame(usadas)
+            if _fecha(df_u):
+                return df_u, "comprovada pela adquirente"
+
+    # 2. soma de todas as tarifas do mesmo dia
+    if not mesmo_dia.empty and _fecha(mesmo_dia):
+        return mesmo_dia, "lançada no Sankhya"
+
+    # 3. uma tarifa do mesmo dia
+    hit = mesmo_dia[(mesmo_dia["_abs"] - alvo).abs() < 0.005]
+    if not hit.empty:
+        return hit.iloc[[0]], "lançada no Sankhya"
+
+    # 4. uma tarifa lançada em outro dia, dentro da janela
+    if janela_dias and janela_dias > 0:
+        perto = base[(base["_dist"] > 0) & (base["_dist"] <= janela_dias)]
+        hit = perto[(perto["_abs"] - alvo).abs() < 0.005].sort_values("_dist")
+        if not hit.empty:
+            return hit.iloc[[0]], "lançada no Sankhya em outra data"
+
+    return pd.DataFrame(), ""
 
 
 def detectar_top_1722(
@@ -258,25 +368,15 @@ def detectar_top_1722(
                 # ITAU PISA 11/09/2026 — três SISPAG DIVERSOS PIX TRANSFERENCIA
                 # ficavam em aberto porque as despesas correspondentes tinham
                 # sido "roubadas" por essa rotina como se fossem tarifa.
-                if not _fecha_dia and _tarifas_dia.get(_dia):
-                    _cand = sis[
-                        (pd.to_datetime(sis["data"], errors="coerce").dt.normalize() == _dia)
-                        & (sis["conta"].astype(str) == conta)
-                        & (sis["valor"] < 0)
-                        & (~sis["_idx_sis"].isin(indices_sankhya_casados))
-                        & sis["historico"].fillna("").apply(_eh_tarifa_no_sankhya)
-                    ].copy()
-                    _usadas = []
-                    _cand["_abs"] = _cand["valor"].abs().round(2)
-                    _disp = _cand.copy()
-                    for _tv in _tarifas_dia[_dia]:
-                        _hit = _disp[_disp["_abs"] == round(_tv, 2)]
-                        if _hit.empty:
-                            continue
-                        _usadas.append(_hit.iloc[0])
-                        _disp = _disp.drop(index=_hit.index[0])
-                    if _usadas:
-                        _linhas_tarifa_dia = pd.DataFrame(_usadas)
+                # v7.1: a prova da adquirente deixou de ser obrigatória — ver
+                # _fechar_dia_liquido_de_tarifa (histórico de tarifa + centavo).
+                _origem_tarifa = ""
+                if not _fecha_dia:
+                    _linhas_tarifa_dia, _origem_tarifa = _fechar_dia_liquido_de_tarifa(
+                        sis, conta, _dia, _sb, _ss, indices_sankhya_casados,
+                        _tarifas_dia.get(_dia), janela_dias,
+                    )
+                    if not _linhas_tarifa_dia.empty:
                         _t_total = round(float(_linhas_tarifa_dia["valor"].sum()), 2)  # negativo
                         _fecha_dia = abs((_ss + _t_total) - _sb) < 0.005
                         if not _fecha_dia:
@@ -289,7 +389,7 @@ def detectar_top_1722(
                     _tem_tarifa = not _linhas_tarifa_dia.empty
                     _status_dia = (
                         f"Conciliado por Agrupamento — Cartão TOP 1722 (dia {_dia.strftime('%d/%m')}"
-                        + (f" · líquido de tarifa R$ {abs(_t_total):.2f} comprovada pela adquirente" if _tem_tarifa else "")
+                        + (f" · líquido de tarifa R$ {abs(_t_total):.2f} {_origem_tarifa}" if _tem_tarifa else "")
                         + ")"
                     )
                     grupos.append({
