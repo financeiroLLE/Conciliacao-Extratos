@@ -921,6 +921,75 @@ def teste_conta70_classificacao_tipo():
     print("✓ teste_conta70_classificacao_tipo")
 
 
+def _caso_tarifa_lancada(hist_tarifa, data_tarifa="05/10/2026", valor_tarifa=-496.94):
+    """v7.1: caso ITAU PISA 05/10/2026 reduzido. Depósitos do cartão chegam
+    líquidos; Sankhya baixa as vendas cheias (TOP 1722) e lança a tarifa."""
+    banco = _df_banco([
+        (_dt("05/10/2026"), "GETNET CREDITO VENDAS", "", 60000.00, "ITAU PISA"),
+        (_dt("05/10/2026"), "GETNET CREDITO VENDAS", "", 34941.15, "ITAU PISA"),
+    ])
+    sistema = pd.DataFrame([
+        {"data": _dt("05/10/2026"), "historico": "CLIENTE A", "documento": "1",
+         "valor": 50000.00, "conta": "ITAU PISA", "top_baixa": "1722"},
+        {"data": _dt("05/10/2026"), "historico": "CLIENTE B", "documento": "2",
+         "valor": 45438.09, "conta": "ITAU PISA", "top_baixa": "1722"},
+        {"data": _dt(data_tarifa), "historico": hist_tarifa, "documento": "3",
+         "valor": valor_tarifa, "conta": "ITAU PISA", "top_baixa": ""},
+    ])
+    return executar_pipeline(banco, sistema, rodar_fuzzy=False)
+
+
+def teste_top1722_tarifa_lancada_sem_extrato_adquirente():
+    """v7.1: dia de cartão fecha líquido da tarifa lançada no Sankhya mesmo sem
+    o extrato da adquirente (antes ficavam todas as notas e depósitos pendentes)."""
+    res = _caso_tarifa_lancada("TARIFA ALUGUEL GETNET SETEMBRO/2026")
+    assert len(res.pendentes_banco) == 0, f"banco pendente: {len(res.pendentes_banco)}"
+    assert len(res.pendentes_sistema) == 0, f"sankhya pendente: {len(res.pendentes_sistema)}"
+    assert len(res.top1722_grupos) == 1
+    k = res.kpis_da_conta("ITAU PISA")
+    assert k["percentual_explicado"] > 99.99, k["percentual_explicado"]
+    print("✓ teste_top1722_tarifa_lancada_sem_extrato_adquirente")
+
+
+def teste_top1722_tarifa_historico_com_mes_no_meio():
+    """v7.1: 'ALUGUEL SETEMBRO/2026 GETNET' também é tarifa de adquirente."""
+    res = _caso_tarifa_lancada("ALUGUEL SETEMBRO/2026 GETNET")
+    assert len(res.pendentes_banco) == 0 and len(res.pendentes_sistema) == 0
+    print("✓ teste_top1722_tarifa_historico_com_mes_no_meio")
+
+
+def teste_top1722_tarifa_em_outra_data_dentro_da_janela():
+    """v7.1: tarifa lançada 1 dia depois do desconto ainda fecha o dia."""
+    res = _caso_tarifa_lancada("TARIFA ALUGUEL GETNET", data_tarifa="06/10/2026")
+    assert len(res.pendentes_banco) == 0 and len(res.pendentes_sistema) == 0
+    print("✓ teste_top1722_tarifa_em_outra_data_dentro_da_janela")
+
+
+def teste_top1722_despesa_comum_nao_vira_tarifa():
+    """v7.1 (mantém v6.29): despesa a fornecedor com o mesmo valor NÃO fecha o dia."""
+    res = _caso_tarifa_lancada("JLC GOMES COMERCIO")
+    assert len(res.top1722_grupos) == 0
+    assert len(res.pendentes_banco) == 2
+    print("✓ teste_top1722_despesa_comum_nao_vira_tarifa")
+
+
+def teste_kpis_globais_ignoram_sankhya_sem_conta():
+    """v7.1: cópia do Sankhya sem conta ('—') não infla o resumo geral."""
+    banco = _df_banco([(_dt("05/10/2026"), "PIX RECEBIDO", "", 100.00, "ITAU PISA")])
+    sistema = pd.DataFrame([
+        {"data": _dt("05/10/2026"), "historico": "CLIENTE", "documento": "1",
+         "valor": 100.00, "conta": "ITAU PISA"},
+        {"data": _dt("05/10/2026"), "historico": "CLIENTE", "documento": "1",
+         "valor": 100.00, "conta": "—"},
+    ])
+    res = executar_pipeline(banco, sistema, rodar_fuzzy=False)
+    kg = res.kpis_globais()
+    assert abs(kg["total_extrato_sistema"] - 100.0) < 0.01, kg["total_extrato_sistema"]
+    assert kg["qtd_divergencia_sankhya_banco"] == 0
+    assert len(res.sistema_fora_das_contas()) == 1
+    print("✓ teste_kpis_globais_ignoram_sankhya_sem_conta")
+
+
 def main():
     testes = [v for k, v in globals().items() if k.startswith("teste_")]
     falhas = []
