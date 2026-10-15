@@ -959,6 +959,44 @@ def executar_pipeline(
         # Preserva a categoria_mov no resultado conciliado (pra dashboards)
         pass
 
+    # v7.2: SEGUNDA PASSAGEM DO CARTÃO (TOP 1722) sobre o que sobrou.
+    # Caso real ITAU PISA 05/10/2026: no dia havia, além dos 10 depósitos da
+    # adquirente, outro crédito com cara de cartão (histórico com CIELO/REDE/
+    # CARTAO etc.) que tinha par 1-a-1 normal no Sankhya. Na 1ª passagem ele
+    # entrava na soma do dia, o dia não fechava nem com a tarifa, e as 143
+    # notas + 10 depósitos ficavam pendentes. Depois do match_exato esse
+    # crédito já casou; aqui o dia fecha (vendas − tarifa = depósitos).
+    # Roda ANTES da regra v5.28, para a tarifa ainda estar disponível.
+    if not pend_banco.empty and not pend_sistema.empty:
+        res_1722_b = detectar_top_1722(
+            pend_banco, pend_sistema, janela_dias=tolerancia_dias,
+            tarifas_adquirente=tarifas_adquirente,
+        )
+        if res_1722_b.indices_banco_casados or res_1722_b.indices_sankhya_casados:
+            pend_banco = _remover_por_indices(pend_banco, res_1722_b.indices_banco_casados)
+            pend_sistema = _remover_por_indices(pend_sistema, res_1722_b.indices_sankhya_casados)
+
+            def _renomear(df):
+                if df is None or df.empty or "id_grupo" not in df.columns:
+                    return df
+                df = df.copy()
+                df["id_grupo"] = "P2-" + df["id_grupo"].astype(str)
+                return df
+
+            def _juntar(a, b):
+                b = _renomear(b)
+                if a is None or a.empty:
+                    return b
+                if b is None or b.empty:
+                    return a
+                return pd.concat([a, b], ignore_index=True)
+
+            res_top1722.grupos_conciliados = _juntar(res_top1722.grupos_conciliados, res_1722_b.grupos_conciliados)
+            res_top1722.linhas_sankhya_casadas = _juntar(res_top1722.linhas_sankhya_casadas, res_1722_b.linhas_sankhya_casadas)
+            res_top1722.linhas_banco_casadas = _juntar(res_top1722.linhas_banco_casadas, res_1722_b.linhas_banco_casadas)
+            # o que continua "com diferença" é o que a 2ª passagem ainda não fechou
+            res_top1722.com_diferenca = _renomear(res_1722_b.com_diferenca)
+
     # v5.24: AUT MAIS sem par no banco — antes de detectar divergências.
     # O XLS bancário não exporta APL APLIC AUT MAIS / RES APLIC AUT MAIS (só o PDF exporta).
     # Como o Sankhya tem esses lançamentos e o XLS não, eles ficavam em "Divergência
