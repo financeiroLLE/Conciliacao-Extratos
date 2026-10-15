@@ -3087,8 +3087,25 @@ def pagina_dashboard():
         _saldos_por_conta.append({"conta": _c, "info": _info or {}})
 
     # investimentos (líquido)
+    # v7.3: só o lado do BANCO, só aplicação/resgate, só contas processadas.
+    # Antes somava banco + Sankhya (o mesmo resgate contado 2x) e ainda os
+    # rendimentos, que já estão nas receitas: ITAU PISA 01-09/10 mostrava
+    # 28.466,40 em vez de 14.232,89 (resgates 58.230,84 − aplicações 43.997,95).
     inv_df = getattr(resultado, "aplicacoes_resgates", None)
-    inv_net = float(inv_df["valor"].sum()) if (inv_df is not None and not inv_df.empty and "valor" in inv_df.columns) else 0.0
+    inv_net = 0.0
+    if inv_df is not None and not inv_df.empty and "valor" in inv_df.columns:
+        _iv = inv_df
+        try:
+            _iv = resultado._restrito_as_contas(_iv)
+        except Exception:
+            pass
+        if "origem" in _iv.columns:
+            _iv = _iv[~_iv["origem"].astype(str).str.contains("Sankhya", case=False, na=False)]
+        if "categoria_mov" in _iv.columns:
+            _iv = _iv[_iv["categoria_mov"].isin(["aplicacao", "resgate"])]
+        if "historico" in _iv.columns:
+            _iv = _iv[~_iv["historico"].astype(str).str.upper().str.contains("SALDO", na=False)]
+        inv_net = round(float(pd.to_numeric(_iv["valor"], errors="coerce").sum()), 2)
 
     # período de referência
     per_txt = "—"
@@ -3399,7 +3416,7 @@ def pagina_dashboard():
         f"<div style='background:#0b2560;border:1px solid #163062;border-top:3px solid #FAC318;border-radius:14px;padding:15px'>"
         "<div style='font-size:12px;letter-spacing:1px;color:#9fb3d6'>INVESTIMENTOS</div>"
         f"<div style='font-size:24px;font-weight:800;color:#FAC318;margin-top:6px'>{_brl(inv_net)}</div>"
-        "<div style='font-size:12px;color:#6f88b8'>líq. aplic − resgates</div>"
+        f"<div style='font-size:12px;color:#6f88b8'>{'resgatou mais do que aplicou' if inv_net > 0.005 else ('aplicou mais do que resgatou' if inv_net < -0.005 else 'aplicações e resgates se equilibraram')}</div>"
         f"<div style='font-size:10px;color:#6f88b8;margin-top:2px'>{_sufixo_escopo}</div></div>"
     )
     _card_trend = (
