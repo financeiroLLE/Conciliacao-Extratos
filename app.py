@@ -2089,7 +2089,13 @@ def _card_total_com_rec_desp(receitas: float, despesas: float) -> str:
 
 def _card_investimentos(resultado: ResultadoConciliacao) -> str:
     """Card único de Investimentos (Aplicações + Resgates) — substitui 2 cards separados."""
-    return _card_investimentos_de_df(resultado.aplicacoes_resgates)
+    # v7.1: só as contas processadas (linhas do Sankhya sem conta não entram)
+    _df = resultado.aplicacoes_resgates
+    try:
+        _df = resultado._restrito_as_contas(_df)
+    except Exception:
+        pass
+    return _card_investimentos_de_df(_df)
 
 
 def _card_investimentos_da_conta(resultado: ResultadoConciliacao, conta: str) -> str:
@@ -3712,18 +3718,36 @@ def render_resumo_termometros(resultado: ResultadoConciliacao, kpis: dict):
             '<div class="lle-kpi-suffix">' + sub + '</div></div>'
         )
 
+    # v7.1: aviso quando o Sankhya trouxe linhas que não pertencem a nenhuma
+    # conta processada (ex.: o relatório entrou 2x e uma cópia ficou sem a
+    # coluna de conta). Essas linhas NÃO entram mais nos totais do resumo.
+    try:
+        _fora = resultado.sistema_fora_das_contas()
+    except Exception:
+        _fora = pd.DataFrame()
+    if _fora is not None and not _fora.empty:
+        _contas_fora = sorted({str(c) for c in _fora["conta"].unique()})
+        st.warning(
+            f"⚠️ O relatório do Sankhya trouxe {fmt_int(len(_fora))} lançamento(s) "
+            f"({fmt_brl(float(_fora['valor'].abs().sum()))}) fora das contas processadas "
+            f"(conta: {', '.join(_contas_fora)}). Eles ficaram FORA deste resumo. "
+            "Se a conta veio como '—', o relatório foi enviado sem a coluna de conta "
+            "ou enviado duas vezes; confira os arquivos do Sankhya."
+        )
+
     # v5.35: nomeia a regra que DE FATO explicou (boleto/cartão), em vez de cravar
     # "cartão". Se não houve agrupamento, mostra só os pares diretos.
-    _regras_nomes = []
-    if int(kpis.get("qtd_top1702_grupos", 0)) > 0:
+    # v7.1: usa as regras que realmente consumiram linhas do banco.
+    _regras_nomes = [r["regra"].split(" (")[0].lower() for r in kpis.get("regras_banco_resumo", [])][:3]
+    if not _regras_nomes and int(kpis.get("qtd_top1702_grupos", 0)) > 0:
         _regras_nomes.append("boleto")
-    if int(kpis.get("qtd_top1722_grupos", 0)) > 0:
+    if not _regras_nomes and int(kpis.get("qtd_top1722_grupos", 0)) > 0:
         _regras_nomes.append("cartão")
     # v5.49: estornos anulados também explicam volume do banco sem ser "pares"
     if int(kpis.get("qtd_estornos_anulados", 0)) > 0:
         _regras_nomes.append("estornos anulados")
     if regra > 0.05:
-        _rot = ("por " + " e ".join(_regras_nomes)) if _regras_nomes else "por agrupamento"
+        _rot = ("por regras (" + ", ".join(_regras_nomes) + ")") if _regras_nomes else "por agrupamento"
         sub_banco = fmt_pct(pares) + " em pares diretos &middot; " + fmt_pct(regra) + " " + _rot
     else:
         sub_banco = fmt_pct(pares) + " em pares diretos"
@@ -3748,6 +3772,17 @@ def render_resumo_termometros(resultado: ResultadoConciliacao, kpis: dict):
     # quando a conta tem cartão. Sem cartão, fala a verdade: "a analisar".
     # v5.47: separa a parte que são pares anulados por estorno (PIX recebido e
     # devolvido — já explicados, não precisam de análise) do restante a analisar.
+    # v7.1: o card do Sankhya usa o total LÍQUIDO das tarifas de adquirente
+    # (o mesmo critério do card "Movimentação Operacional · Sankhya" do
+    # detalhamento). A tarifa lançada aparece 2x no bruto (venda cheia +
+    # despesa) e o banco recebe líquido; sem isso o resumo apontava
+    # "Sankhya movimentou R$ 993,88 a mais" num caso já resolvido.
+    _tar_g = float(kpis.get("valor_tarifas_adquirente_confirmadas", 0.0))
+    _nota_tar_g = ""
+    if _tar_g >= 0.005 and "total_extrato_sistema_liq" in kpis:
+        total_sis = float(kpis["total_extrato_sistema_liq"])
+        _nota_tar_g = ("&minus; " + fmt_brl(2 * _tar_g) + " de tarifas de adquirente ("
+                       + fmt_brl(_tar_g) + " × 2 lados), já lançadas no Sankhya")
     diff_assinado = round(total_banco - total_sis, 2)
     abs_diff = abs(diff_assinado)
     _ea_g = getattr(resultado, "estornos_anulados", None)
@@ -3778,15 +3813,12 @@ def render_resumo_termometros(resultado: ResultadoConciliacao, kpis: dict):
         else:
             nota_diff = _lado + (" — pode incluir taxa de cartão lançada 2x; o restante a analisar."
                                  if _tem_cartao else " — a analisar.")
-    if diff_assinado > 0:
-        banco_card = card_kpi("Movimentado no Banco", fmt_brl(total_banco), nota_diff)
-        sankhya_card = card_kpi("Movimentado no Sankhya", fmt_brl(total_sis))
-    elif diff_assinado < 0:
-        banco_card = card_kpi("Movimentado no Banco", fmt_brl(total_banco))
-        sankhya_card = card_kpi("Movimentado no Sankhya", fmt_brl(total_sis), nota_diff)
-    else:
-        banco_card = card_kpi("Movimentado no Banco", fmt_brl(total_banco))
-        sankhya_card = card_kpi("Movimentado no Sankhya", fmt_brl(total_sis))
+    _nota_sis = nota_diff if diff_assinado < 0 else ""
+    if _nota_tar_g:
+        _nota_sis = (_nota_sis + "<br>" if _nota_sis else "") + _nota_tar_g
+    banco_card = card_kpi("Movimentado no Banco", fmt_brl(total_banco),
+                          nota_diff if diff_assinado > 0 else "")
+    sankhya_card = card_kpi("Movimentado no Sankhya", fmt_brl(total_sis), _nota_sis)
     render_cards([precisa_card, banco_card, sankhya_card, _card_investimentos(resultado)])
 
 
@@ -4548,6 +4580,22 @@ def tela_upload():
                         _lista_sistema.append(_buf)
                 else:
                     _lista_sistema = arquivo_sistema if isinstance(arquivo_sistema, list) else [arquivo_sistema]
+                # v7.1: ignora arquivo do Sankhya idêntico enviado mais de uma
+                # vez (mesmo conteúdo), como já era feito com a adquirente.
+                import hashlib as _hl_sis
+                _lista_unica, _md5_vistos = [], set()
+                for _arq_sis in _lista_sistema:
+                    try:
+                        _h_sis = _hl_sis.md5(_arq_sis.getvalue()).hexdigest()
+                    except Exception:
+                        _h_sis = None
+                    if _h_sis and _h_sis in _md5_vistos:
+                        st.info(f"ℹ️ Relatório do Sankhya repetido ignorado: {getattr(_arq_sis, 'name', '')}")
+                        continue
+                    if _h_sis:
+                        _md5_vistos.add(_h_sis)
+                    _lista_unica.append(_arq_sis)
+                _lista_sistema = _lista_unica
                 _dfs_sistema = []
                 for _arq_sis in _lista_sistema:
                     _dfs_sistema.append(
@@ -4590,6 +4638,16 @@ def tela_upload():
                         "Lançamentos fora da janela foram ignorados."
                     )
 
+                # v7.1: no modo 1 conta, se SÓ PARTE do Sankhya veio sem conta
+                # ('—'), avisa: essas linhas ficam fora do resumo (antes
+                # inflavam o total geral sem aparecer em card nenhum).
+                if modo == "1 conta por vez" and not sistema.empty and (sistema["conta"] == "—").any() \
+                        and not (sistema["conta"] == "—").all():
+                    st.warning(
+                        f"⚠️ {int((sistema['conta'] == '—').sum())} linha(s) do Sankhya vieram sem conta "
+                        "e ficaram fora da conciliação. Confira se o mesmo relatório foi enviado "
+                        "duas vezes ou se um dos arquivos não tem a coluna de conta."
+                    )
                 if modo == "1 conta por vez" and not sistema.empty and (sistema["conta"] == "—").all():
                     sistema["conta"] = arquivos_banco[0][0]
                     st.info(
@@ -4872,6 +4930,25 @@ def _volume_estornos_anulados_por_dia(resultado, conta: str) -> dict:
     return vol
 
 
+def _volume_tarifas_casadas_por_dia(resultado, conta: str) -> dict:
+    """v7.1: tarifa da adquirente que a regra do cartão (TOP 1722) usou para
+    fechar o dia ao centavo. No VOLUME ela conta 2x no Sankhya (venda cheia +
+    despesa da tarifa) e 0x no banco (repasse líquido), então é descontada 2x
+    do lado Sankhya, igual ao card "Movimentação Operacional · Sankhya"."""
+    l = getattr(resultado, "top1722_linhas", None)
+    if l is None or getattr(l, "empty", True) or "valor" not in l.columns:
+        return {}
+    if "conta" in l.columns:
+        l = l[l["conta"].astype(str) == str(conta)]
+    v = pd.to_numeric(l["valor"], errors="coerce")
+    l = l[v < 0]
+    if l.empty:
+        return {}
+    dia = pd.to_datetime(l["data"], errors="coerce").dt.normalize()
+    g = (pd.to_numeric(l["valor"], errors="coerce").abs() * 2).groupby(dia).sum()
+    return {k: round(float(x), 2) for k, x in g.items()}
+
+
 def _diferenca_bxs_por_dia(resultado: "ResultadoConciliacao", conta: str) -> list[tuple]:
     """Diferença |banco| − |Sankhya| por dia, com o MESMO filtro do KPI de
     'movimentado' (exclui saldo/aplicação/resgate/rendimento) e DESCONTANDO os
@@ -4902,13 +4979,15 @@ def _diferenca_bxs_por_dia(resultado: "ResultadoConciliacao", conta: str) -> lis
     gb = _abs_por_dia(resultado.banco_completo)
     gs = _abs_por_dia(resultado.sistema_completo)
     vol_anulados = _volume_estornos_anulados_por_dia(resultado, conta)
+    vol_tarifas = _volume_tarifas_casadas_por_dia(resultado, conta)  # v7.1
     dias = sorted(set(gb.index) | set(gs.index))
     out = []
     for dia in dias:
         dif = round(
             float(gb.get(dia, 0.0))
             - float(vol_anulados.get(dia, 0.0))
-            - float(gs.get(dia, 0.0)),
+            - float(gs.get(dia, 0.0))
+            + float(vol_tarifas.get(dia, 0.0)),
             2,
         )
         if abs(dif) >= 0.01:
@@ -5022,6 +5101,28 @@ def _linhas_pendentes_do_dia(resultado, conta, dia, lado):
     return linhas
 
 
+def _tarifa_lancada_no_sankhya(resultado, conta, dia, valor) -> bool:
+    """v7.1: True se o Sankhya já tem a despesa de tarifa da adquirente com
+    esse valor (ao centavo), na conta, em até ±tolerância dias do dia."""
+    try:
+        from src.matching.cartao_top1722 import _eh_tarifa_no_sankhya
+        sk = resultado.sistema_completo
+        if sk is None or sk.empty:
+            return False
+        if "conta" in sk.columns:
+            sk = sk[sk["conta"] == conta]
+        sk = sk[pd.to_numeric(sk["valor"], errors="coerce") < 0]
+        if sk.empty:
+            return False
+        tol = int(getattr(resultado, "tolerancia_dias", 2) or 2)
+        dist = (pd.to_datetime(sk["data"], errors="coerce").dt.normalize() - pd.Timestamp(dia)).abs().dt.days
+        ok_val = (pd.to_numeric(sk["valor"], errors="coerce").abs().round(2) - round(float(valor), 2)).abs() < 0.005
+        ok_hist = sk["historico"].fillna("").astype(str).apply(_eh_tarifa_no_sankhya)
+        return bool((ok_val & ok_hist & (dist <= tol)).any())
+    except Exception:
+        return False
+
+
 def _explicar_diferenca_por_dia(resultado, conta):
     """Explica a diferença Banco×Sankhya de cada dia pela ORIGEM real das linhas
     que não casaram — SEM supor cartão. Retorna lista de dicts ordenada por |dif|:
@@ -5112,12 +5213,19 @@ def _explicar_diferenca_por_dia(resultado, conta):
                         _nomes_t = " + ".join(
                             str(x)[:40] for x in _t.get("descricao", _t.get("tipo", pd.Series(dtype=str))).fillna("").tolist() if str(x).strip()
                         ) or "aluguel/tarifa"
-                        item["nota_cartao"] = (
-                            "A adquirente descontou <b>" + fmt_brl(_soma_t)
-                            + "</b> do repasse deste dia (" + _esc(_nomes_t) + ") — comprovado no "
-                            "extrato da adquirente. As baixas de venda estão corretas; "
-                            "falta lançar essa <b>despesa de tarifa</b> no Sankhya."
-                        )
+                        # v7.1: antes de dizer "falta lançar", procura a despesa
+                        # de tarifa no Sankhya (mesmo valor, até ±tolerância dias).
+                        # Se já está lançada, o dia está resolvido e sai do detalhe.
+                        _ja_lancada = _tarifa_lancada_no_sankhya(resultado, conta, dia, _soma_t)
+                        if _ja_lancada:
+                            item["tarifa_ja_lancada"] = True
+                        else:
+                            item["nota_cartao"] = (
+                                "A adquirente descontou <b>" + fmt_brl(_soma_t)
+                                + "</b> do repasse deste dia (" + _esc(_nomes_t) + "), comprovado no "
+                                "extrato da adquirente. As baixas de venda estão corretas; "
+                                "falta lançar essa <b>despesa de tarifa</b> no Sankhya."
+                            )
         except Exception:
             pass
         # v6.22: explicar TARIFA GETNET/CIELO DUPLICADA no Sankhya.
@@ -5129,7 +5237,7 @@ def _explicar_diferenca_por_dia(resultado, conta):
         # Detecção: extrato da adquirente tem tarifa T no dia, e a diferença
         # do dia é EXATAMENTE 2 × T (com sinal Sankhya a mais, dif < 0).
         try:
-            if not item.get("nota_cartao") and abs(dif) >= 0.01:
+            if not item.get("nota_cartao") and not item.get("tarifa_ja_lancada") and abs(dif) >= 0.01:
                 _adq2 = st.session_state.get("adquirente_df")
                 if _adq2 is not None and not getattr(_adq2, "empty", True) and "categoria" in _adq2.columns:
                     _da2 = pd.to_datetime(_adq2["data"], errors="coerce").dt.normalize()
@@ -5157,7 +5265,7 @@ def _explicar_diferenca_por_dia(resultado, conta):
         # isoladas nos dois lados, ESCONDE o dia — não é divergência real,
         # o extrato da adquirente já mostra o desconto do saldo a receber.
         _explicado_por_tarifa = (
-            item.get("nota_tarifa_dupla")
+            (item.get("nota_tarifa_dupla") or item.get("tarifa_ja_lancada"))
             and not item["banco"]
             and not item["sankhya"]
             and not item["divergentes"]
@@ -5619,6 +5727,23 @@ def _render_regua_conferencia_sankhya(resultado: ResultadoConciliacao, conta: st
     except Exception:
         tarifas_lancadas_valor = 0.0
 
+    # v7.1: sem extrato da adquirente, usa as tarifas que a regra do cartão
+    # (TOP 1722) consumiu para fechar o dia ao centavo — mesma prova.
+    if tarifas_lancadas_valor < 0.005:
+        try:
+            _l1722 = getattr(resultado, "top1722_linhas", pd.DataFrame())
+            if _l1722 is not None and not _l1722.empty and "valor" in _l1722.columns:
+                _l1722 = _l1722[_l1722["conta"].astype(str) == str(conta)] if "conta" in _l1722.columns else _l1722
+                tarifas_lancadas_valor = round(float(
+                    pd.to_numeric(_l1722["valor"], errors="coerce").clip(upper=0).abs().sum()), 2)
+        except Exception:
+            tarifas_lancadas_valor = 0.0
+
+    # v7.1: guarda o rodapé REAL do Sankhya (como aparece no ERP) antes do
+    # ajuste. Antes a linha "Rodapé do Sankhya" já mostrava o valor ajustado e
+    # não batia com a tela do Sankhya (ex.: 3.756.726,98 × 3.757.223,92).
+    cred_s_erp, deb_s_erp = cred_s, deb_s
+
     # aplica o desconto — cada tarifa lançada aparecia dobrada: uma vez no
     # crédito (Sankhya recebeu bruto a mais) e uma vez no débito (Sankhya
     # lançou despesa que o banco não tem). Subtrair dos DOIS lados alinha.
@@ -5679,13 +5804,27 @@ def _render_regua_conferencia_sankhya(resultado: ResultadoConciliacao, conta: st
             '<td ' + _td_lbl + '>Débito</td>'
             '<td ' + _td_lbl + '>Movimentação total</td></tr>'
             '<tr><td style="padding:9px 8px 1px;color:#FAC318;font-weight:600;">Rodapé do Sankhya</td>'
-            '<td ' + _td_sk + '>' + fmt_brl(cred_s) + '</td>'
-            '<td ' + _td_sk + '>' + fmt_brl(deb_s) + '</td>'
-            '<td ' + _td_sk + '>' + fmt_brl(tot_s) + '</td></tr>'
-            '<tr><td style="padding:0 8px 9px;color:#6f88b8;font-size:11px;">como o app chegou</td>'
-            '<td ' + _td_dec + '>Receitas ' + fmt_brl(rec_s) + ' + Resgates ' + fmt_brl(rg_s) + (' + Rendimentos ' + fmt_brl(rend_s) if rend_s >= 0.005 else '') + '</td>'
+            '<td ' + _td_sk + '>' + fmt_brl(cred_s_erp) + '</td>'
+            '<td ' + _td_sk + '>' + fmt_brl(deb_s_erp) + '</td>'
+            '<td ' + _td_sk + '>' + fmt_brl(round(cred_s_erp + deb_s_erp, 2)) + '</td></tr>'
+            '<tr><td style="padding:0 8px 9px;color:#6f88b8;font-size:11px;">como está no ERP</td>'
+            '<td ' + _td_dec + '>Receitas ' + fmt_brl(rec_s) + ' + Resgates ' + fmt_brl(rg_s)
+            + ('<br>(rendimentos de ' + fmt_brl(rend_s) + ' já estão nas receitas)' if rend_s >= 0.005 else '') + '</td>'
             '<td ' + _td_dec + '>Despesas ' + fmt_brl(desp_s) + ' + Aplicações ' + fmt_brl(ap_s) + '</td>'
-            '<td ' + _td_dec + '>Operacional ' + fmt_brl(round(rec_s + desp_s, 2)) + ' + Invest. ' + fmt_brl(round(ap_s + rg_s + rend_s, 2)) + '</td></tr>'
+            '<td ' + _td_dec + '>Operacional ' + fmt_brl(round(rec_s + desp_s, 2)) + ' + Invest. ' + fmt_brl(round(ap_s + rg_s, 2)) + '</td></tr>'
+            + (
+                '<tr><td style="padding:7px 8px;color:#cdd9f2;border-top:1px solid #163062;">'
+                '(&minus;) Tarifa da adquirente<br><span style="color:#6f88b8;font-size:11px;">'
+                'lançada no Sankhya e já descontada no repasse</span></td>'
+                '<td ' + _td_bco + '>&minus;' + fmt_brl(tarifas_lancadas_valor) + '</td>'
+                '<td ' + _td_bco + '>&minus;' + fmt_brl(tarifas_lancadas_valor) + '</td>'
+                '<td ' + _td_bco + '>&minus;' + fmt_brl(round(2 * tarifas_lancadas_valor, 2)) + '</td></tr>'
+                '<tr><td style="padding:7px 8px;color:#FAC318;border-top:1px solid #163062;">Sankhya comparável ao banco</td>'
+                '<td ' + _td_bco + '>' + fmt_brl(cred_s) + '</td>'
+                '<td ' + _td_bco + '>' + fmt_brl(deb_s) + '</td>'
+                '<td ' + _td_bco + '>' + fmt_brl(tot_s) + '</td></tr>'
+                if tarifas_lancadas_valor > 0.005 else ''
+            ) +
             '<tr><td style="padding:7px 8px;color:#cdd9f2;border-top:1px solid #163062;">Extrato do banco</td>'
             '<td ' + _td_bco + '>' + fmt_brl(cred_b) + '</td>'
             '<td ' + _td_bco + '>' + fmt_brl(deb_b) + '</td>'
@@ -5752,8 +5891,15 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
         card_kpi_html("Movimentação Operacional · Sankhya", fmt_brl(_tot_s),
                       sub_sankhya_c),
         _card_investimentos_da_conta(resultado, conta),
-        card_kpi("Índice de Conciliação", fmt_pct(k["percentual_conciliado"]),
-                 "conferido em pares", classe="destaque-amarelo"),
+        # v7.1: o índice passa a ser o % do banco EXPLICADO pelo ERP (pares +
+        # regras), o mesmo número do resumo. Antes mostrava só pares 1-a-1
+        # (38%) enquanto o resumo dizia 98,7%, e parecia que não batia.
+        card_kpi("Índice de Conciliação",
+                 fmt_pct(k.get("percentual_explicado", k["percentual_conciliado"])),
+                 fmt_pct(k["percentual_conciliado"]) + " em pares 1-a-1 &middot; "
+                 + fmt_pct(max(0.0, k.get("percentual_explicado", 0.0) - k["percentual_conciliado"]))
+                 + " por regras de agrupamento",
+                 classe="destaque-amarelo"),
     ]
     render_cards(cards)
 
@@ -5807,6 +5953,14 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
     _qtd_par = int(k.get("qtd_conciliados", 0))
     _conf_grp = float(k.get("valor_grupos_casados", 0.0))
     _qtd_grp = int(k.get("qtd_linhas_grupos_casados", 0))
+    # v7.1: quando o pipeline informa as linhas do BANCO por regra, usa elas
+    # (todas as regras, não só cartão/boleto, e sempre do lado do banco, na
+    # mesma base dos pares). Antes folha, salários, depósitos abertos,
+    # histórico agregado e tarifas repetidas não apareciam neste card.
+    _regras_res = k.get("regras_banco_resumo") or []
+    if _regras_res:
+        _conf_grp = float(k.get("valor_banco_regras", 0.0))
+        _qtd_grp = int(k.get("qtd_banco_regras", 0))
     _conf_total = round(_conf_par + _conf_grp, 2)
 
     # Monta o subtítulo em HTML (2 linhas com valores alinhados à direita)
@@ -5819,7 +5973,14 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
             f'<span>{_rot_par}</span>'
             f'<b style="color:#cdd9f2;font-weight:600;">{fmt_brl(_conf_par)}</b></div>'
         )
-    if _qtd_grp > 0 or _conf_grp >= 0.005:
+    for _rr in _regras_res:
+        _sub_linhas.append(
+            '<div style="display:flex;justify-content:space-between;'
+            'padding:2px 0;font-size:12px;color:#8BA3C7;">'
+            f'<span>{_esc(_rr["regra"])} &middot; {fmt_int(_rr["qtd"])} linha(s)</span>'
+            f'<b style="color:#cdd9f2;font-weight:600;">{fmt_brl(_rr["valor"])}</b></div>'
+        )
+    if not _regras_res and (_qtd_grp > 0 or _conf_grp >= 0.005):
         _rot_grp = "1 grupo" if _qtd_grp == 1 else f"{fmt_int(_qtd_grp)} linhas em grupos"
         _sub_linhas.append(
             '<div style="display:flex;justify-content:space-between;'
@@ -5852,7 +6013,10 @@ def tela_detalhamento_banco(resultado: ResultadoConciliacao, conta: str):
     # cards acima (líquido + anulados = banco − sankhya).
     dif_bruta = round(float(k["total_movimentado_banco"]) - float(k["total_extrato_sistema"]), 2)
     _vol_anulados = round(sum(_volume_estornos_anulados_por_dia(resultado, conta).values()), 2)
-    dif_bs = round(dif_bruta - _vol_anulados, 2)
+    # v7.1: tarifa da adquirente já lançada e usada para fechar o cartão não é
+    # diferença (era ela que gerava o "−R$ 993,88 Sankhya a mais").
+    _vol_tarifas = round(sum(_volume_tarifas_casadas_por_dia(resultado, conta).values()), 2)
+    dif_bs = round(dif_bruta - _vol_anulados + _vol_tarifas, 2)
     # v5.49: o alerta também dispara quando a diferença LÍQUIDA é zero mas há
     # lançamentos sem par dos dois lados (ex.: 1 PIX de R$ 306 no banco aberto
     # em 4 notas no Sankhya — os totais se compensam e o banner ficava mudo).
