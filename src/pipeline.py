@@ -81,33 +81,63 @@ class ResultadoConciliacao:
     contas_processadas: list[str] = field(default_factory=list)
     tolerancia_dias: int = 2
     usa_conciliado_sankhya: bool = False
+    # v7.1: linhas do BANCO consumidas por cada regra de agrupamento (cartão,
+    # boleto, folha, salários, depósitos abertos, histórico agregado, tarifas
+    # repetidas), com a coluna 'regra'. Alimenta o card "Conciliação", que antes
+    # só enxergava pares 1-a-1 + cartão/boleto.
+    linhas_banco_regras: pd.DataFrame = field(default_factory=pd.DataFrame)
+
+    def _restrito_as_contas(self, df: pd.DataFrame, col: str = "conta") -> pd.DataFrame:
+        """v7.1: mantém só as linhas das contas processadas (as que aparecem nos
+        cards). Linhas do Sankhya sem conta identificada ('—') ou de contas sem
+        extrato bancário não podem inflar o resumo geral."""
+        contas = set(self.contas_processadas or [])
+        if df is None or getattr(df, "empty", True) or not contas or col not in df.columns:
+            return df if df is not None else pd.DataFrame()
+        return df[df[col].isin(contas)].copy()
+
+    def sistema_fora_das_contas(self) -> pd.DataFrame:
+        """v7.1: linhas do Sankhya (movimentação) que NÃO pertencem a nenhuma
+        conta processada. Se houver, o resumo geral avisa em vez de somar."""
+        sis = self.sistema_completo
+        contas = set(self.contas_processadas or [])
+        if sis is None or sis.empty or "conta" not in sis.columns or not contas:
+            return pd.DataFrame()
+        fora = sis[~sis["conta"].isin(contas)]
+        return _eh_movimentado(fora)
 
     def kpis_globais(self) -> dict[str, Any]:
         # v5.1: getattr defensivo — objetos em session_state de versões antigas
         # podem não ter os campos novos (estornos_*, top1722_*).
+        # v7.1: tudo restrito às contas processadas. Antes, uma cópia do
+        # relatório do Sankhya sem a coluna de conta entrava inteira no total
+        # geral (Movimentado no Sankhya em dobro, 907 itens "a analisar")
+        # sem aparecer em nenhum card de conta.
+        _r = self._restrito_as_contas
         return _calcular_kpis(
-            self.conciliados,
-            self.pendentes_banco,
-            self.pendentes_sistema,
-            self.divergencias,
-            self.banco_completo,
-            self.sistema_completo,
-            self.falta_lancar_sankhya,
+            _r(self.conciliados, "banco_conta"),
+            _r(self.pendentes_banco),
+            _r(self.pendentes_sistema),
+            _r(self.divergencias),
+            _r(self.banco_completo),
+            _r(self.sistema_completo),
+            _r(self.falta_lancar_sankhya),
             self.usa_conciliado_sankhya,
-            self.excesso_sankhya,
-            getattr(self, "estornos_anulados", pd.DataFrame()),
-            getattr(self, "estornos_parciais", pd.DataFrame()),
-            getattr(self, "top1722_grupos", pd.DataFrame()),
+            _r(self.excesso_sankhya),
+            _r(getattr(self, "estornos_anulados", pd.DataFrame())),
+            _r(getattr(self, "estornos_parciais", pd.DataFrame())),
+            _r(getattr(self, "top1722_grupos", pd.DataFrame())),
             pd.concat(
-                [getattr(self, "top1702_grupos", pd.DataFrame()),
-                 getattr(self, "top1702_diferencas", pd.DataFrame())],
+                [_r(getattr(self, "top1702_grupos", pd.DataFrame())),
+                 _r(getattr(self, "top1702_diferencas", pd.DataFrame()))],
                 ignore_index=True,
             ),
             pd.concat(
-                [getattr(self, "top1722_linhas", pd.DataFrame()),
-                 getattr(self, "top1702_linhas", pd.DataFrame())],
+                [_r(getattr(self, "top1722_linhas", pd.DataFrame())),
+                 _r(getattr(self, "top1702_linhas", pd.DataFrame()))],
                 ignore_index=True,
             ),
+            _r(getattr(self, "linhas_banco_regras", pd.DataFrame())),
         )
 
     def kpis_por_banco(self) -> dict[str, dict[str, Any]]:
@@ -142,6 +172,7 @@ class ResultadoConciliacao:
                 [_filtra("top1722_linhas"), _filtra("top1702_linhas")],
                 ignore_index=True,
             ),
+            _filtra("linhas_banco_regras"),
         )
 
     def divergencias_sankhya_banco(self, conta: str | None = None) -> pd.DataFrame:
@@ -235,7 +266,9 @@ class ResultadoConciliacao:
         um teste de leitura do extrato e não depende da conciliação.
         """
         kpis = self.kpis_da_conta(conta)
-        if exigir_conciliado and kpis["percentual_conciliado"] < 99.99:
+        # v7.1: conta fechada = banco 100% explicado (pares + regras). Antes
+        # exigia 100% em pares 1-a-1, o que nunca acontece em conta com cartão.
+        if exigir_conciliado and kpis.get("percentual_explicado", kpis["percentual_conciliado"]) < 99.99:
             return None
 
         banco = _filtrar_conta(self.banco_completo, conta)
@@ -338,6 +371,7 @@ def _calcular_kpis(
     top1722_grupos: pd.DataFrame | None = None,
     top1702_grupos: pd.DataFrame | None = None,
     linhas_casadas_grupos_sis: pd.DataFrame | None = None,
+    linhas_banco_regras: pd.DataFrame | None = None,
 ) -> dict[str, Any]:
     banco_mov = _eh_movimentado(banco_completo)
     sistema_mov = _eh_movimentado(sistema_completo)
@@ -564,7 +598,30 @@ def _calcular_kpis(
     despesas_sistema_liq = max(0.0, despesas_sistema - _val_tarifas_adq)
     total_sistema_liq = receitas_sistema_liq + despesas_sistema_liq
 
+    # v7.1: % do banco EXPLICADO pelo ERP (pares 1-a-1 + todas as regras de
+    # agrupamento). É o número que responde "o banco está todo explicado?".
+    # O percentual_conciliado continua existindo, mas mede só pares 1-a-1.
+    percentual_explicado = (
+        max(0.0, min(100.0, 100.0 * (total_banco - falta_conciliar) / total_banco))
+        if total_banco > 0 else 0.0
+    )
+    regras_resumo: list[dict[str, Any]] = []
+    if linhas_banco_regras is not None and not getattr(linhas_banco_regras, "empty", True) \
+            and "regra" in linhas_banco_regras.columns and "valor" in linhas_banco_regras.columns:
+        _lbr = linhas_banco_regras.copy()
+        _lbr["_abs"] = pd.to_numeric(_lbr["valor"], errors="coerce").abs().fillna(0.0)
+        for _regra, _g in _lbr.groupby("regra", sort=False):
+            regras_resumo.append({
+                "regra": str(_regra), "qtd": int(len(_g)),
+                "valor": round(float(_g["_abs"].sum()), 2),
+            })
+        regras_resumo.sort(key=lambda x: x["valor"], reverse=True)
+
     return {
+        "percentual_explicado": percentual_explicado,
+        "regras_banco_resumo": regras_resumo,
+        "valor_banco_regras": round(sum(x["valor"] for x in regras_resumo), 2),
+        "qtd_banco_regras": int(sum(x["qtd"] for x in regras_resumo)),
         # v3: renomeado de "Total Extrato Bancário" → "Total Movimentado no Banco".
         # Mantém o nome antigo como alias por retrocompatibilidade.
         "total_movimentado_banco": total_banco,
@@ -1050,6 +1107,28 @@ def executar_pipeline(
     else:
         falta_lancar_df = pd.DataFrame()
 
+    # v7.1: linhas do banco consumidas por regra (para o card Conciliação).
+    _frames_regra = []
+    for _nome_regra, _res in (
+        ("Cartão (TOP 1722)", res_top1722),
+        ("Boleto (TOP 1702)", res_top1702),
+        ("Folha de pagamento", res_folha),
+        ("Salários avulsos", res_salarios_nm),
+        ("Depósitos abertos no Sankhya", res_depositos),
+        ("Histórico agregado", res_hist),
+        ("Tarifas repetidas", res_tarifas),
+    ):
+        _lb = getattr(_res, "linhas_banco_casadas", None)
+        if _lb is None or getattr(_lb, "empty", True) or "valor" not in _lb.columns:
+            continue
+        _cols = [c for c in ("data", "conta", "historico", "valor") if c in _lb.columns]
+        _f = _lb[_cols].copy()
+        _f["regra"] = _nome_regra
+        _frames_regra.append(_f)
+    linhas_banco_regras = (
+        pd.concat(_frames_regra, ignore_index=True) if _frames_regra else pd.DataFrame()
+    )
+
     contas = sorted(set(banco["conta"].unique()) | set(sistema["conta"].unique()))
     contas = [c for c in contas if c and c != "—"]
 
@@ -1081,4 +1160,5 @@ def executar_pipeline(
         contas_processadas=contas,
         tolerancia_dias=tolerancia_dias,
         usa_conciliado_sankhya=usa_conciliado,
+        linhas_banco_regras=linhas_banco_regras,
     )
