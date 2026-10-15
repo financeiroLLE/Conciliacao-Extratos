@@ -3728,11 +3728,11 @@ def render_resumo_termometros(resultado: ResultadoConciliacao, kpis: dict):
     if _fora is not None and not _fora.empty:
         _contas_fora = sorted({str(c) for c in _fora["conta"].unique()})
         st.warning(
-            f"⚠️ O relatório do Sankhya trouxe {fmt_int(len(_fora))} lançamento(s) "
-            f"({fmt_brl(float(_fora['valor'].abs().sum()))}) fora das contas processadas "
-            f"(conta: {', '.join(_contas_fora)}). Eles ficaram FORA deste resumo. "
-            "Se a conta veio como '—', o relatório foi enviado sem a coluna de conta "
-            "ou enviado duas vezes; confira os arquivos do Sankhya."
+            f"⚠️ {fmt_int(len(_fora))} lançamento(s) do Sankhya "
+            f"({fmt_brl(float(_fora['valor'].abs().sum()))}) não têm conta identificada "
+            f"(conta: {', '.join(_contas_fora)}) e por isso não entraram na conciliação "
+            "nem nos números desta tela. Eles não são cópia de lançamentos já conciliados. "
+            "Confira se algum arquivo do Sankhya foi exportado sem a coluna Descrição/Conta."
         )
 
     # v5.35: nomeia a regra que DE FATO explicou (boleto/cartão), em vez de cravar
@@ -4609,6 +4609,15 @@ def tela_upload():
                     if _dfs_sistema else pd.DataFrame()
                 )
 
+                # v7.2: descarta a cópia do relatório que entrou sem conta.
+                sistema, _qtd_copias = _remover_copias_sem_conta(sistema)
+                if _qtd_copias:
+                    st.info(
+                        f"ℹ️ {_qtd_copias} lançamento(s) do Sankhya estavam repetidos "
+                        "(o mesmo relatório entrou duas vezes, uma delas sem a coluna de conta). "
+                        "A cópia foi descartada e não entra na conciliação."
+                    )
+
                 # v3.6: mesmo tratamento para o sistema
                 if not sistema.empty:
                     if "data" in sistema.columns:
@@ -4802,6 +4811,42 @@ def tela_upload():
 # ============================================================
 # Tela de RESULTADO (única, pós-upload)
 # ============================================================
+def _remover_copias_sem_conta(sistema: pd.DataFrame) -> tuple[pd.DataFrame, int]:
+    """v7.2: remove do Sankhya as linhas SEM conta ('—') que são cópia exata de
+    uma linha COM conta (mesma data, valor, histórico e documento).
+
+    Caso real ITAU PISA out/2026: o relatório entrou duas vezes na rodada, uma
+    delas sem a coluna de conta. As 767 linhas da cópia ficavam como '—' e
+    apareciam no aviso "fora das contas processadas". Agora a cópia é
+    descartada linha a linha (respeitando repetições legítimas: se a linha
+    existe 3x com conta, só até 3 cópias sem conta são removidas). O que
+    sobrar sem conta continua no aviso, porque aí não é cópia.
+    """
+    if sistema is None or sistema.empty or "conta" not in sistema.columns:
+        return sistema, 0
+    sem = sistema["conta"].astype(str) == "—"
+    if not sem.any() or sem.all():
+        return sistema, 0
+
+    def _chave(df: pd.DataFrame) -> pd.Series:
+        doc = df["documento"] if "documento" in df.columns else pd.Series("", index=df.index)
+        k = (
+            pd.to_datetime(df["data"], errors="coerce").dt.strftime("%Y-%m-%d").fillna("")
+            + "|" + pd.to_numeric(df["valor"], errors="coerce").round(2).astype(str)
+            + "|" + df["historico"].fillna("").astype(str).str.strip().str.upper()
+            + "|" + doc.fillna("").astype(str).str.strip()
+        )
+        return k + "#" + k.groupby(k).cumcount().astype(str)
+
+    chaves_com = set(_chave(sistema[~sem]))
+    k_sem = _chave(sistema[sem])
+    copia = k_sem.isin(chaves_com)
+    idx_drop = k_sem[copia].index
+    if len(idx_drop) == 0:
+        return sistema, 0
+    return sistema.drop(index=idx_drop).reset_index(drop=True), int(len(idx_drop))
+
+
 def _checar_periodo(banco: pd.DataFrame, sistema: pd.DataFrame) -> str | None:
     """Compara o intervalo de datas do banco e do Sankhya; retorna um aviso se
     cobrirem períodos diferentes (causa comum de 'Falta Conciliar' inflada)."""
