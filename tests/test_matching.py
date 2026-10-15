@@ -990,6 +990,30 @@ def teste_kpis_globais_ignoram_sankhya_sem_conta():
     print("✓ teste_kpis_globais_ignoram_sankhya_sem_conta")
 
 
+def teste_top1722_fecha_mesmo_com_outro_credito_de_cartao_no_dia():
+    """v7.2: crédito com cara de cartão que tem par 1-a-1 (ex.: TED CIELO) no
+    mesmo dia não pode impedir o dia de cartão de fechar líquido da tarifa."""
+    banco = _df_banco([
+        (_dt("05/10/2026"), "GETNET CREDITO VENDAS", "", 60000.00, "ITAU PISA"),
+        (_dt("05/10/2026"), "GETNET CREDITO VENDAS", "", 34941.15, "ITAU PISA"),
+        (_dt("05/10/2026"), "TED RECEBIDA CIELO SA", "", 1234.00, "ITAU PISA"),
+    ])
+    sistema = pd.DataFrame([
+        {"data": _dt("05/10/2026"), "historico": "CLIENTE A", "documento": "1",
+         "valor": 50000.00, "conta": "ITAU PISA", "top_baixa": "1722"},
+        {"data": _dt("05/10/2026"), "historico": "CLIENTE B", "documento": "2",
+         "valor": 45438.09, "conta": "ITAU PISA", "top_baixa": "1722"},
+        {"data": _dt("05/10/2026"), "historico": "TARIFA ALUGUEL GETNET", "documento": "3",
+         "valor": -496.94, "conta": "ITAU PISA", "top_baixa": ""},
+        {"data": _dt("05/10/2026"), "historico": "CIELO S.A.", "documento": "4",
+         "valor": 1234.00, "conta": "ITAU PISA", "top_baixa": "1704"},
+    ])
+    res = executar_pipeline(banco, sistema, rodar_fuzzy=False)
+    assert len(res.pendentes_banco) == 0, f"banco pendente: {len(res.pendentes_banco)}"
+    assert len(res.pendentes_sistema) == 0, f"sankhya pendente: {len(res.pendentes_sistema)}"
+    print("✓ teste_top1722_fecha_mesmo_com_outro_credito_de_cartao_no_dia")
+
+
 def main():
     testes = [v for k, v in globals().items() if k.startswith("teste_")]
     falhas = []
